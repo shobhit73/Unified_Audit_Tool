@@ -11,11 +11,15 @@ from datetime import datetime, date
 
 APP_TITLE = "Paycom vs Uzio – Payment Audit Tool"
 
-# --- Constants for Status ---
+# --- Constants for Status (8 statuses, matching census_audit_app.py) ---
 STATUS_MATCH = "Data Match"
 STATUS_MISMATCH = "Data Mismatch"
-STATUS_MISSING_UZIO = "Employee ID not found in the Uzio"
-STATUS_MISSING_PAYCOM = "Employee ID not found in Paycom"
+STATUS_VAL_MISSING_UZIO = "Value missing in Uzio (Paycom has value)"
+STATUS_VAL_MISSING_PAYCOM = "Value missing in Paycom (Uzio has value)"
+STATUS_MISSING_UZIO = "Employee ID Not Found in Uzio"
+STATUS_MISSING_PAYCOM = "Employee ID Not Found in Paycom"
+STATUS_COL_MISSING_PAYCOM = "Column Missing in Paycom Sheet"
+STATUS_COL_MISSING_UZIO = "Column Missing in Uzio Sheet"
 
 def norm_str(x):
     if x is None:
@@ -287,10 +291,12 @@ def run_audit(file_obj):
     status_cols = [
         STATUS_MATCH,
         STATUS_MISMATCH,
-        "Value missing in Uzio (Paycom has value)",
-        "Value missing in Paycom (Uzio has value)",
+        STATUS_VAL_MISSING_UZIO,
+        STATUS_VAL_MISSING_PAYCOM,
         STATUS_MISSING_UZIO,
         STATUS_MISSING_PAYCOM,
+        STATUS_COL_MISSING_PAYCOM,
+        STATUS_COL_MISSING_UZIO,
     ]
 
     pivot = comparison_detail.pivot_table(
@@ -311,9 +317,10 @@ def run_audit(file_obj):
     field_summary_by_status = pivot.reset_index()[[
         "Field", "Total",
         STATUS_MATCH, STATUS_MISMATCH,
-        "Value missing in Uzio (Paycom has value)",
-        "Value missing in Paycom (Uzio has value)",
+        STATUS_VAL_MISSING_UZIO,
+        STATUS_VAL_MISSING_PAYCOM,
         STATUS_MISSING_UZIO, STATUS_MISSING_PAYCOM,
+        STATUS_COL_MISSING_PAYCOM, STATUS_COL_MISSING_UZIO,
     ]]
 
     # ---------- Summary metrics ----------
@@ -374,9 +381,9 @@ def _compare_field(field, u_val, p_val, u_acc, p_acc):
         return STATUS_MATCH
     # One blank
     if u_n == "" and p_n != "":
-        return "Value missing in Uzio (Paycom has value)"
+        return STATUS_VAL_MISSING_UZIO
     if u_n != "" and p_n == "":
-        return "Value missing in Paycom (Uzio has value)"
+        return STATUS_VAL_MISSING_PAYCOM
 
     # Field-specific comparison
     if field == "Account Type":

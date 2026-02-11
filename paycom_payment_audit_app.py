@@ -55,6 +55,7 @@ _TYPE_CODE_MAP = {
     "22": "checking",
     "32": "savings",
     "1": "checking",   # Net_Type_Code sometimes uses 1 for checking
+    "2": "checking",   # Sometimes Paycom uses 2 or 2.0 for checking
 }
 
 def strip_type(t):
@@ -333,8 +334,38 @@ def run_audit(file_obj):
             else:
                 still_unmatched.append(u)
 
-        # Uzio accounts that couldn't match at all
+        # Pass 3: Fallback match on Routing Number ONLY (Last Resort)
+        # (For cases like A00Z: Routing matches, but Account# precision lost AND Type code mismatch/unknown)
+        final_unmatched = []
         for u in still_unmatched:
+            match = None
+            u_rout = u["Routing"]
+            for p in p_remaining:
+                # If routing matches, we assume it's the same account bank-wise
+                # This prioritizes Routing Number as the primary key if all else fails
+                if u_rout and u_rout == p["Routing"]:
+                    match = p
+                    break
+            
+            if match:
+                p_remaining.remove(match)
+                for field in FIELDS:
+                    u_val = _get_field_val(u, field)
+                    p_val = _get_field_val(match, field)
+                    status = _compare_field(field, u_val, p_val, u, match)
+                    rows.append({
+                        "Employee ID": emp_id,
+                        "Employee Name": u["Name"],
+                        "Field": field,
+                        "UZIO_Value": u_val,
+                        "Paycom_Value": p_val,
+                        "Paycom_SourceOfTruth_Status": status
+                    })
+            else:
+                final_unmatched.append(u)
+
+        # Uzio accounts that couldn't match at all
+        for u in final_unmatched:
             for field in FIELDS:
                 u_val = _get_field_val(u, field)
                 rows.append({

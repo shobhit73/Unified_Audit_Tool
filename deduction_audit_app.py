@@ -185,14 +185,14 @@ def _run_deduction_audit(df_uzio, df_adp, df_map):
                 status = "Data Mismatch"
         elif has_adp and not has_uzio:
             if emp_id in uzio_emps:
-                status = "Value Missing in Uzio (ADP has Value)"
+                status = "Value missing in Uzio (ADP has value)"
             else:
-                status = "Employee Missing in Uzio"
+                status = "Employee ID Not Found in Uzio"
         elif has_uzio and not has_adp:
             if emp_id in adp_emps:
-                status = "Value Missing in ADP (Uzio has Value)"
+                status = "Value missing in ADP (Uzio has value)"
             else:
-                status = "Employee Missing in ADP"
+                status = "Employee ID Not Found in ADP"
         
         results.append({
             "Employee ID": emp_id,
@@ -223,8 +223,9 @@ def _generate_output(results):
     # Pivot Summary
     expected_statuses = [
         "Data Match", "Data Mismatch", 
-        "Value Missing in Uzio (ADP has Value)", "Value Missing in ADP (Uzio has Value)", 
-        "Employee Missing in Uzio", "Employee Missing in ADP"
+        "Value missing in Uzio (ADP has value)", "Value missing in ADP (Uzio has value)", 
+        "Employee ID Not Found in Uzio", "Employee ID Not Found in ADP",
+        "Column Missing in ADP Sheet", "Column Missing in Uzio Sheet"
     ]
     
     if not df_res.empty:
@@ -248,13 +249,13 @@ def _generate_output(results):
             "Total Records": [len(df_res)],
             "Matches": [len(df_res[df_res["Status"] == "Data Match"])] if not df_res.empty else [0],
             "Mismatches": [len(df_res[df_res["Status"] == "Data Mismatch"])] if not df_res.empty else [0],
-            "Value Missing in Uzio": [len(df_res[df_res["Status"] == "Value Missing in Uzio (ADP has Value)"])] if not df_res.empty else [0],
-            "Emp Missing in Uzio": [len(df_res[df_res["Status"] == "Employee Missing in Uzio"])] if not df_res.empty else [0],
-             "Value Missing in ADP": [len(df_res[df_res["Status"] == "Value Missing in ADP (Uzio has Value)"])] if not df_res.empty else [0],
-            "Emp Missing in ADP": [len(df_res[df_res["Status"] == "Employee Missing in ADP"])] if not df_res.empty else [0]
+            "Value Missing in Uzio": [len(df_res[df_res["Status"] == "Value missing in Uzio (ADP has value)"])] if not df_res.empty else [0],
+            "Emp Missing in Uzio": [len(df_res[df_res["Status"] == "Employee ID Not Found in Uzio"])] if not df_res.empty else [0],
+             "Value Missing in ADP": [len(df_res[df_res["Status"] == "Value missing in ADP (Uzio has value)"])] if not df_res.empty else [0],
+            "Emp Missing in ADP": [len(df_res[df_res["Status"] == "Employee ID Not Found in ADP"])] if not df_res.empty else [0]
         }
         pd.DataFrame(summary_data).transpose().reset_index().rename(columns={"index": "Metric", 0: "Count"}).to_excel(writer, sheet_name="Summary", index=False)
-        field_summary.to_excel(writer, sheet_name="field_summary_by_status")
+        field_summary.to_excel(writer, sheet_name="Field_Summary_By_Status")
         df_res.drop(columns=["Field"], inplace=True)
         df_res.to_excel(writer, sheet_name="Audit Details", index=False)
     

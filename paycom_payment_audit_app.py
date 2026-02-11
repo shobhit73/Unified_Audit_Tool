@@ -326,24 +326,36 @@ def run_audit(file_obj):
             if len(candidates) == 1:
                 match = candidates[0]
             else:
-                # Try to break tie via Percent or Amount specific match
-                best_c = candidates[0] # Default to first
-                found_perfect = False
+                # UPDATED: Scoring System to handle ties (e.g. 50% Checking vs 50% Savings)
+                best_c = candidates[0]
+                max_score = -1
                 
                 u_pct = u.get("Percent", 0.0)
                 u_amt = u.get("Amount", 0.0)
-                
+                u_type = strip_type(u["Type"]) # Normalize Uzio type
+
                 for c in candidates:
-                    # Check Percent match (approximate float equality)
-                    if abs(u_pct - c.get("Percent", 0.0)) < 0.01 and u_pct > 0:
+                    score = 0
+                    c_pct = c.get("Percent", 0.0)
+                    c_amt = c.get("Amount", 0.0)
+                    c_type = strip_type(c["Type"]) # Normalize Paycom type
+
+                    # Score Criteria
+                    # 1. Percent Match (+10)
+                    if u_pct > 0 and abs(u_pct - c_pct) < 0.01:
+                        score += 10
+                    
+                    # 2. Amount Match (+10)
+                    if u_amt > 0 and abs(u_amt - c_amt) < 0.01:
+                        score += 10
+
+                    # 3. Type Match (+5) - Key tiebreaker for duplicate accounts
+                    if u_type and c_type and u_type == c_type:
+                        score += 5
+                    
+                    if score > max_score:
+                        max_score = score
                         best_c = c
-                        found_perfect = True
-                        break
-                    # Check Amount match
-                    if abs(u_amt - c.get("Amount", 0.0)) < 0.01 and u_amt > 0:
-                        best_c = c
-                        found_perfect = True
-                        break
                 
                 match = best_c
 

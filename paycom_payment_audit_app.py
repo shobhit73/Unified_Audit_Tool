@@ -133,7 +133,7 @@ def run_audit(file_obj):
         
         acc = {
             "Routing": norm_digits(row.get(col_map["Routing"])),
-            "Account": norm_digits(row.get(col_map["Account"])),
+            "Account": norm_digits(row.get(col_map["Account"])).lstrip("0"),
             "Type": norm_str(row.get(col_map["Type"])),
             "Percent": norm_money(row.get(col_map["Percent"])),
             "Amount": norm_money(row.get(col_map["Amount"])),
@@ -165,7 +165,7 @@ def run_audit(file_obj):
 
         for i in range(1, 9):
             prefix = f"Dist_{i}_"
-            d_acc = norm_digits(row.get(f"{prefix}Acct_Code"))
+            d_acc = norm_digits(row.get(f"{prefix}Acct_Code")).lstrip("0")
             d_rout = norm_digits(row.get(f"{prefix}Rout_Code"))
             
             if d_acc or d_rout:
@@ -212,7 +212,7 @@ def run_audit(file_obj):
         paycom_accounts.extend(dist_entries)
 
         # --- Extract NET Pay Account (remainder after distributions) ---
-        net_acc = norm_digits(row.get("Net_Acct_Code"))
+        net_acc = norm_digits(row.get("Net_Acct_Code")).lstrip("0")
         net_rout = norm_digits(row.get("Net_Rout_Code"))
         if net_acc or net_rout:
              p_type = row.get("Net_Type_Code")

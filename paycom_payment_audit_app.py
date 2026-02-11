@@ -47,7 +47,7 @@ def norm_money(x):
         return 0.0
 
 def strip_type(t):
-    """Normalize account type string for comparison (Checking vs Checking Account)."""
+    """Normalize account type string for comparison."""
     if not t: return ""
     return str(t).lower().replace("account", "").replace("Code: ", "").strip()
 
@@ -92,7 +92,7 @@ def run_audit(file_obj):
     df_uzio = pd.read_excel(xl, "Uzio Data")
     df_paycom = pd.read_excel(xl, "Paycom Data")
 
-    # 2. Process Uzio Data (Long Format -> List of accounts per Emp)
+    # 2. Process Uzio Data
     df_uzio.columns = [str(c).strip() for c in df_uzio.columns]
     
     col_map = {
@@ -117,7 +117,6 @@ def run_audit(file_obj):
             "Type": norm_str(row.get(col_map["Type"])),
             "Percent": norm_money(row.get(col_map["Percent"])),
             "Amount": norm_money(row.get(col_map["Amount"])),
-            "Source": "Uzio",
             "Name": norm_str(row.get(col_map["Name"]))
         }
         
@@ -145,7 +144,7 @@ def run_audit(file_obj):
                  "EmpID": emp_id,
                  "Routing": net_rout,
                  "Account": net_acc,
-                 "Type": str(p_type),
+                 "Type": str(p_type) if p_type is not None else "",
                  "Percent": 100.0,
                  "Amount": 0.0,
                  "IsNet": True
@@ -166,7 +165,7 @@ def run_audit(file_obj):
                     "EmpID": emp_id,
                     "Routing": d_rout,
                     "Account": d_acc,
-                    "Type": str(d_type),
+                    "Type": str(d_type) if d_type is not None else "",
                     "Percent": d_pct,
                     "Amount": d_amt,
                     "IsNet": False
@@ -180,46 +179,51 @@ def run_audit(file_obj):
             paycom_map[eid] = []
         paycom_map[eid].append(item)
 
-    # 4. Comparison Logic
-    report_rows = []
+    # 4. Comparison Logic — Long Format (one row per field per account)
+    # Fields to compare: Routing Number, Account Number, Account Type, Amount, Percent
+    FIELDS = ["Routing Number", "Account Number", "Account Type", "Amount", "Percent"]
+
+    rows = []
     all_emps = set(uzio_map.keys()) | set(paycom_map.keys())
 
-    for emp_id in all_emps:
+    for emp_id in sorted(all_emps):
         u_accs = uzio_map.get(emp_id, [])
         p_accs = paycom_map.get(emp_id, [])
         
-        emp_name = u_accs[0]["Name"] if u_accs else "Unknown (Paycom Only)"
+        emp_name = u_accs[0]["Name"] if u_accs else ""
 
+        # --- Case: Missing in Uzio ---
         if not u_accs and p_accs:
             for p in p_accs:
-                 report_rows.append({
-                     "Employee ID": emp_id, "Employee Name": emp_name,
-                     "Status": STATUS_MISSING_UZIO,
-                     "Comparison Note": "",
-                     "Uzio Routing": "", "Paycom Routing": p["Routing"],
-                     "Uzio Account": "", "Paycom Account": p["Account"],
-                     "Uzio Type": "", "Paycom Type": p["Type"],
-                     "Uzio Amount": "", "Paycom Amount": p["Amount"],
-                     "Uzio Percent": "", "Paycom Percent": p["Percent"]
-                 })
+                for field in FIELDS:
+                    p_val = _get_field_val(p, field)
+                    rows.append({
+                        "Employee ID": emp_id,
+                        "Employee Name": emp_name,
+                        "Field": field,
+                        "UZIO_Value": "",
+                        "Paycom_Value": p_val,
+                        "Paycom_SourceOfTruth_Status": STATUS_MISSING_UZIO
+                    })
             continue
 
+        # --- Case: Missing in Paycom ---
         if u_accs and not p_accs:
             for u in u_accs:
-                report_rows.append({
-                     "Employee ID": emp_id, "Employee Name": u["Name"],
-                     "Status": STATUS_MISSING_PAYCOM,
-                     "Comparison Note": "",
-                     "Uzio Routing": u["Routing"], "Paycom Routing": "",
-                     "Uzio Account": u["Account"], "Paycom Account": "",
-                     "Uzio Type": u["Type"], "Paycom Type": "",
-                     "Uzio Amount": u["Amount"], "Paycom Amount": "",
-                     "Uzio Percent": u["Percent"], "Paycom Percent": ""
-                 })
+                for field in FIELDS:
+                    u_val = _get_field_val(u, field)
+                    rows.append({
+                        "Employee ID": emp_id,
+                        "Employee Name": u["Name"],
+                        "Field": field,
+                        "UZIO_Value": u_val,
+                        "Paycom_Value": "",
+                        "Paycom_SourceOfTruth_Status": STATUS_MISSING_PAYCOM
+                    })
             continue
 
-        # Both exist - Compare Account sets
-        p_remaining = p_accs.copy()
+        # --- Case: Both exist — Match accounts by Routing+Account ---
+        p_remaining = list(p_accs)
         
         for u in u_accs:
             match = None
@@ -230,67 +234,92 @@ def run_audit(file_obj):
             
             if match:
                 p_remaining.remove(match)
-                issues = []
-                if strip_type(u["Type"]) != strip_type(match["Type"]):
-                     issues.append(f"Type Mismatch ({u['Type']} vs {match['Type']})")
-                if u["Amount"] > 0:
-                    if abs(u["Amount"] - match["Amount"]) > 0.01:
-                         issues.append(f"Amount Mismatch ({u['Amount']} vs {match['Amount']})")
-                elif u["Percent"] > 0:
-                    if abs(u["Percent"] - match["Percent"]) > 0.1:
-                         issues.append(f"Percent Mismatch ({u['Percent']} vs {match['Percent']})")
-
-                status = STATUS_MISMATCH if issues else STATUS_MATCH
-                note = "; ".join(issues)
-
-                report_rows.append({
-                     "Employee ID": emp_id, "Employee Name": u["Name"],
-                     "Status": status, "Comparison Note": note,
-                     "Uzio Routing": u["Routing"], "Paycom Routing": match["Routing"],
-                     "Uzio Account": u["Account"], "Paycom Account": match["Account"],
-                     "Uzio Type": u["Type"], "Paycom Type": match["Type"],
-                     "Uzio Amount": u["Amount"], "Paycom Amount": match["Amount"],
-                     "Uzio Percent": u["Percent"], "Paycom Percent": match["Percent"]
-                 })
+                # Compare each field
+                for field in FIELDS:
+                    u_val = _get_field_val(u, field)
+                    p_val = _get_field_val(match, field)
+                    status = _compare_field(field, u_val, p_val, u, match)
+                    rows.append({
+                        "Employee ID": emp_id,
+                        "Employee Name": u["Name"],
+                        "Field": field,
+                        "UZIO_Value": u_val,
+                        "Paycom_Value": p_val,
+                        "Paycom_SourceOfTruth_Status": status
+                    })
             else:
-                report_rows.append({
-                     "Employee ID": emp_id, "Employee Name": u["Name"],
-                     "Status": STATUS_MISMATCH,
-                     "Comparison Note": "Account in Uzio not found in Paycom",
-                     "Uzio Routing": u["Routing"], "Paycom Routing": "Not Found",
-                     "Uzio Account": u["Account"], "Paycom Account": "Not Found",
-                     "Uzio Type": u["Type"], "Paycom Type": "",
-                     "Uzio Amount": u["Amount"], "Paycom Amount": "",
-                     "Uzio Percent": u["Percent"], "Paycom Percent": ""
-                 })
+                # Uzio account not found in Paycom
+                for field in FIELDS:
+                    u_val = _get_field_val(u, field)
+                    rows.append({
+                        "Employee ID": emp_id,
+                        "Employee Name": u["Name"],
+                        "Field": field,
+                        "UZIO_Value": u_val,
+                        "Paycom_Value": "Not Found",
+                        "Paycom_SourceOfTruth_Status": STATUS_MISMATCH
+                    })
 
+        # Paycom accounts unmatched
         for p in p_remaining:
-             report_rows.append({
-                 "Employee ID": emp_id, "Employee Name": emp_name,
-                 "Status": STATUS_MISMATCH,
-                 "Comparison Note": "Account in Paycom not found in Uzio",
-                 "Uzio Routing": "Not Found", "Paycom Routing": p["Routing"],
-                 "Uzio Account": "Not Found", "Paycom Account": p["Account"],
-                 "Uzio Type": "", "Paycom Type": p["Type"],
-                 "Uzio Amount": "", "Paycom Amount": p["Amount"],
-                 "Uzio Percent": "", "Paycom Percent": p["Percent"]
-             })
+            for field in FIELDS:
+                p_val = _get_field_val(p, field)
+                rows.append({
+                    "Employee ID": emp_id,
+                    "Employee Name": emp_name,
+                    "Field": field,
+                    "UZIO_Value": "Not Found",
+                    "Paycom_Value": p_val,
+                    "Paycom_SourceOfTruth_Status": STATUS_MISMATCH
+                })
 
-    # 5. Generate Output (Consistent with census_audit_app.py)
-    df_report = pd.DataFrame(report_rows)
-    
-    cols_order = [
-        "Employee ID", "Employee Name", "Status", "Comparison Note",
-        "Uzio Routing", "Paycom Routing",
-        "Uzio Account", "Paycom Account",
-        "Uzio Amount", "Paycom Amount",
-        "Uzio Percent", "Paycom Percent",
-        "Uzio Type", "Paycom Type"
+    # ---------- Build Output DataFrames ----------
+    comparison_detail = pd.DataFrame(rows)[[
+        "Employee ID", "Employee Name", "Field",
+        "UZIO_Value", "Paycom_Value", "Paycom_SourceOfTruth_Status"
+    ]]
+
+    mismatches_only = comparison_detail[
+        comparison_detail["Paycom_SourceOfTruth_Status"] != STATUS_MATCH
+    ].copy()
+
+    # ---------- Field Summary By Status ----------
+    status_cols = [
+        STATUS_MATCH,
+        STATUS_MISMATCH,
+        "Value missing in Uzio (Paycom has value)",
+        "Value missing in Paycom (Uzio has value)",
+        STATUS_MISSING_UZIO,
+        STATUS_MISSING_PAYCOM,
     ]
-    final_cols = [c for c in cols_order if c in df_report.columns]
-    comparison_detail = df_report[final_cols]
+
+    pivot = comparison_detail.pivot_table(
+        index="Field",
+        columns="Paycom_SourceOfTruth_Status",
+        values="Employee ID",
+        aggfunc="count",
+        fill_value=0
+    )
+
+    for c in status_cols:
+        if c not in pivot.columns:
+            pivot[c] = 0
+
+    pivot["Total"] = pivot.sum(axis=1)
+    pivot[STATUS_MATCH] = pivot[STATUS_MATCH].astype(int)
+
+    field_summary_by_status = pivot.reset_index()[[
+        "Field", "Total",
+        STATUS_MATCH, STATUS_MISMATCH,
+        "Value missing in Uzio (Paycom has value)",
+        "Value missing in Paycom (Uzio has value)",
+        STATUS_MISSING_UZIO, STATUS_MISSING_PAYCOM,
+    ]]
 
     # ---------- Summary metrics ----------
+    uzio_keys = set(uzio_map.keys())
+    paycom_keys = set(paycom_map.keys())
+
     summary = pd.DataFrame({
         "Metric": [
             "Employees in Uzio sheet",
@@ -302,20 +331,72 @@ def run_audit(file_obj):
             "Total NOT OK rows"
         ],
         "Value": [
-            len(uzio_map),
-            len(paycom_map),
-            len(set(uzio_map.keys()) & set(paycom_map.keys())),
-            len(set(uzio_map.keys()) - set(paycom_map.keys())),
-            len(set(paycom_map.keys()) - set(uzio_map.keys())),
+            len(uzio_keys),
+            len(paycom_keys),
+            len(uzio_keys & paycom_keys),
+            len(uzio_keys - paycom_keys),
+            len(paycom_keys - uzio_keys),
             comparison_detail.shape[0],
-            comparison_detail[comparison_detail["Status"] != STATUS_MATCH].shape[0]
+            mismatches_only.shape[0]
         ]
     })
 
-    # ---------- Export report ----------
+    # ---------- Export report (3 sheets like census_audit_app.py) ----------
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
         summary.to_excel(writer, sheet_name="Summary", index=False)
+        field_summary_by_status.to_excel(writer, sheet_name="Field_Summary_By_Status", index=False)
         comparison_detail.to_excel(writer, sheet_name="Comparison_Detail_AllFields", index=False)
 
     return out.getvalue()
+
+
+# ---------- Helper: Extract field value from account dict ----------
+def _get_field_val(acc, field):
+    mapping = {
+        "Routing Number": "Routing",
+        "Account Number": "Account",
+        "Account Type": "Type",
+        "Amount": "Amount",
+        "Percent": "Percent"
+    }
+    val = acc.get(mapping.get(field, ""), "")
+    return str(val) if val != "" else ""
+
+
+# ---------- Helper: Compare a single field ----------
+def _compare_field(field, u_val, p_val, u_acc, p_acc):
+    u_n = str(u_val).strip() if u_val else ""
+    p_n = str(p_val).strip() if p_val else ""
+
+    # Both blank
+    if u_n == "" and p_n == "":
+        return STATUS_MATCH
+    # One blank
+    if u_n == "" and p_n != "":
+        return "Value missing in Uzio (Paycom has value)"
+    if u_n != "" and p_n == "":
+        return "Value missing in Paycom (Uzio has value)"
+
+    # Field-specific comparison
+    if field == "Account Type":
+        if strip_type(u_n) == strip_type(p_n):
+            return STATUS_MATCH
+        return STATUS_MISMATCH
+    
+    if field in ("Amount", "Percent"):
+        try:
+            diff = abs(float(u_n) - float(p_n))
+            if diff < 0.01:
+                return STATUS_MATCH
+            # Special: both are 0, match
+            if float(u_n) == 0.0 and float(p_n) == 0.0:
+                return STATUS_MATCH
+        except ValueError:
+            pass
+        return STATUS_MISMATCH
+
+    # Default: exact string match (Routing, Account)
+    if u_n == p_n:
+        return STATUS_MATCH
+    return STATUS_MISMATCH

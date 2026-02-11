@@ -283,6 +283,7 @@ def run_audit(file_obj):
                     rows.append({
                         "Employee ID": emp_id,
                         "Employee Name": u["Name"],
+                        "Paycom_Account_Class": "Not Found",
                         "Field": field,
                         "UZIO_Value": u_val,
                         "Paycom_Value": "",
@@ -307,9 +308,11 @@ def run_audit(file_obj):
                     u_val = _get_field_val(u, field)
                     p_val = _get_field_val(match, field)
                     status = _compare_field(field, u_val, p_val, u, match)
+                    acc_class = "Net Account" if match.get("IsNet") else "Distribution Account"
                     rows.append({
                         "Employee ID": emp_id,
                         "Employee Name": u["Name"],
+                        "Paycom_Account_Class": acc_class,
                         "Field": field,
                         "UZIO_Value": u_val,
                         "Paycom_Value": p_val,
@@ -334,9 +337,11 @@ def run_audit(file_obj):
                     u_val = _get_field_val(u, field)
                     p_val = _get_field_val(match, field)
                     status = _compare_field(field, u_val, p_val, u, match)
+                    acc_class = "Net Account" if match.get("IsNet") else "Distribution Account"
                     rows.append({
                         "Employee ID": emp_id,
                         "Employee Name": u["Name"],
+                        "Paycom_Account_Class": acc_class,
                         "Field": field,
                         "UZIO_Value": u_val,
                         "Paycom_Value": p_val,
@@ -364,9 +369,11 @@ def run_audit(file_obj):
                     u_val = _get_field_val(u, field)
                     p_val = _get_field_val(match, field)
                     status = _compare_field(field, u_val, p_val, u, match)
+                    acc_class = "Net Account" if match.get("IsNet") else "Distribution Account"
                     rows.append({
                         "Employee ID": emp_id,
                         "Employee Name": u["Name"],
+                        "Paycom_Account_Class": acc_class,
                         "Field": field,
                         "UZIO_Value": u_val,
                         "Paycom_Value": p_val,
@@ -382,6 +389,7 @@ def run_audit(file_obj):
                 rows.append({
                     "Employee ID": emp_id,
                     "Employee Name": u["Name"],
+                    "Paycom_Account_Class": "Not Found",
                     "Field": field,
                     "UZIO_Value": u_val,
                     "Paycom_Value": "Not Found",
@@ -390,11 +398,13 @@ def run_audit(file_obj):
 
         # Paycom accounts unmatched
         for p in p_remaining:
+            acc_class = "Net Account" if p.get("IsNet") else "Distribution Account"
             for field in FIELDS:
                 p_val = _get_field_val(p, field)
                 rows.append({
                     "Employee ID": emp_id,
                     "Employee Name": emp_name,
+                    "Paycom_Account_Class": acc_class,
                     "Field": field,
                     "UZIO_Value": "Not Found",
                     "Paycom_Value": p_val,
@@ -403,7 +413,7 @@ def run_audit(file_obj):
 
     # ---------- Build Output DataFrames ----------
     comparison_detail = pd.DataFrame(rows)[[
-        "Employee ID", "Employee Name", "Field",
+        "Employee ID", "Employee Name", "Paycom_Account_Class", "Field",
         "UZIO_Value", "Paycom_Value", "Paycom_SourceOfTruth_Status"
     ]]
 

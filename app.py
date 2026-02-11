@@ -118,7 +118,8 @@ with st.sidebar:
         st.markdown('<div class="provider-header">Paycom Tools</div>', unsafe_allow_html=True)
         tool_option = st.radio("Select Paycom Tool", [
             "Paycom Census Audit",
-            "Paycom Withholding Audit"
+            "Paycom Withholding Audit",
+            "Paycom Payment Audit"
         ], index=0, label_visibility="collapsed")
 
     # Footer
@@ -159,6 +160,11 @@ elif tool_option == "Paycom Withholding Audit":
     import paycom_withholding_audit_app
     importlib.reload(paycom_withholding_audit_app)
     paycom_withholding_audit_app.render_ui()
+
+elif tool_option == "Paycom Payment Audit":
+    import paycom_payment_audit_app
+    importlib.reload(paycom_payment_audit_app)
+    paycom_payment_audit_app.render_ui()
 
 elif tool_option == "ADP Withholding Audit":
     import adp_withholding_audit_app

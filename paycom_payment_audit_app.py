@@ -272,19 +272,19 @@ def run_audit(file_obj):
                     })
             continue
 
-        # --- Case: Both exist — Match accounts by Routing+Account ---
+        # --- Case: Both exist — Match accounts (two-pass strategy) ---
         p_remaining = list(p_accs)
-        
+        u_unmatched = []
+
+        # Pass 1: Exact match on Routing + Account
         for u in u_accs:
             match = None
             for p in p_remaining:
                 if u["Routing"] == p["Routing"] and u["Account"] == p["Account"]:
                     match = p
                     break
-            
             if match:
                 p_remaining.remove(match)
-                # Compare each field
                 for field in FIELDS:
                     u_val = _get_field_val(u, field)
                     p_val = _get_field_val(match, field)
@@ -298,17 +298,47 @@ def run_audit(file_obj):
                         "Paycom_SourceOfTruth_Status": status
                     })
             else:
-                # Uzio account not found in Paycom
+                u_unmatched.append(u)
+
+        # Pass 2: Fallback match on Routing + Account Type
+        # (handles Paycom exports where account numbers lost precision)
+        still_unmatched = []
+        for u in u_unmatched:
+            match = None
+            u_type = strip_type(u["Type"])
+            for p in p_remaining:
+                if u["Routing"] == p["Routing"] and u_type and u_type == strip_type(p["Type"]):
+                    match = p
+                    break
+            if match:
+                p_remaining.remove(match)
                 for field in FIELDS:
                     u_val = _get_field_val(u, field)
+                    p_val = _get_field_val(match, field)
+                    status = _compare_field(field, u_val, p_val, u, match)
                     rows.append({
                         "Employee ID": emp_id,
                         "Employee Name": u["Name"],
                         "Field": field,
                         "UZIO_Value": u_val,
-                        "Paycom_Value": "Not Found",
-                        "Paycom_SourceOfTruth_Status": STATUS_MISMATCH
+                        "Paycom_Value": p_val,
+                        "Paycom_SourceOfTruth_Status": status
                     })
+            else:
+                still_unmatched.append(u)
+
+        # Uzio accounts that couldn't match at all
+        for u in still_unmatched:
+            for field in FIELDS:
+                u_val = _get_field_val(u, field)
+                rows.append({
+                    "Employee ID": emp_id,
+                    "Employee Name": u["Name"],
+                    "Field": field,
+                    "UZIO_Value": u_val,
+                    "Paycom_Value": "Not Found",
+                    "Paycom_SourceOfTruth_Status": STATUS_MISMATCH
+                })
 
         # Paycom accounts unmatched
         for p in p_remaining:

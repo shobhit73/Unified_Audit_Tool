@@ -192,11 +192,9 @@ def run_audit(file_obj):
                         d_pct = 0.0
                     d_amt = 0.0
                 
-                # Case B: Excel percentage format (0 < value <= 1.0 stored as decimal)
-                # Only if d_amt (norm_money result) is valid and small
-                elif d_amt != 0.0 and 0 < abs(d_amt) <= 1.0:
-                    d_pct = round(d_amt * 100, 4)
-                    d_amt = 0.0
+                # Removed "Case B" (implicit decimal scaling) based on user confirmation:
+                # "percentage you will always get as % symbol in the suffix"
+                # This prevents $0.50 from being misinterpreted as 50%.
 
             total_dist_pct += d_pct
             total_dist_amt += d_amt

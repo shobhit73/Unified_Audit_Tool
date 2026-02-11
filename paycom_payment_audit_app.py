@@ -142,7 +142,10 @@ def run_audit(file_obj):
         if acc["Routing"] or acc["Account"]:
             if emp_id not in uzio_map:
                 uzio_map[emp_id] = []
-            uzio_map[emp_id].append(acc)
+            
+            # Deduplicate: Only add if this exact account isn't already listed for this employee
+            if acc not in uzio_map[emp_id]:
+                uzio_map[emp_id].append(acc)
 
     # 3. Process Paycom Data (Wide Format -> Unpivot)
     paycom_accounts = []
@@ -227,7 +230,10 @@ def run_audit(file_obj):
         eid = item["EmpID"]
         if eid not in paycom_map:
             paycom_map[eid] = []
-        paycom_map[eid].append(item)
+        
+        # Deduplicate: Only add if unique
+        if item not in paycom_map[eid]:
+            paycom_map[eid].append(item)
 
     # 4. Comparison Logic — Long Format (one row per field per account)
     # Fields to compare: Routing Number, Account Number, Account Type, Amount, Percent

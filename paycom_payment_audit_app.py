@@ -161,6 +161,7 @@ def run_audit(file_obj):
         # --- Extract Distributions (1 to 8) FIRST, so we can sum percents ---
         dist_entries = []
         total_dist_pct = 0.0
+        total_dist_amt = 0.0
 
         for i in range(1, 9):
             prefix = f"Dist_{i}_"
@@ -196,6 +197,7 @@ def run_audit(file_obj):
                         d_amt = 0.0
 
                 total_dist_pct += d_pct
+                total_dist_amt += d_amt
 
                 dist_entries.append({
                     "EmpID": emp_id,
@@ -214,7 +216,18 @@ def run_audit(file_obj):
         net_rout = norm_digits(row.get("Net_Rout_Code"))
         if net_acc or net_rout:
              p_type = row.get("Net_Type_Code")
-             net_pct = round(100.0 - total_dist_pct, 4) if total_dist_pct > 0 else 100.0
+             
+             # Calculate Net Percent:
+             # Case 1: Partial Percentage Dists -> Net is remainder (100 - total)
+             if total_dist_pct > 0:
+                 net_pct = round(100.0 - total_dist_pct, 4)
+             # Case 2: Flat Dollar Dists (no %) -> Net is just "Remainder" (usually 0% or handled as amount)
+             elif total_dist_amt > 0:
+                 net_pct = 0.0
+             # Case 3: No distributions -> 100% Net Pay
+             else:
+                 net_pct = 100.0
+
              paycom_accounts.append({
                  "EmpID": emp_id,
                  "Routing": net_rout,

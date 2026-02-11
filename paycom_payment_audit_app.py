@@ -50,10 +50,25 @@ def norm_money(x):
     except:
         return 0.0
 
+# Paycom uses numeric type codes; map them to human-readable names
+_TYPE_CODE_MAP = {
+    "22": "checking",
+    "32": "savings",
+    "1": "checking",   # Net_Type_Code sometimes uses 1 for checking
+}
+
 def strip_type(t):
-    """Normalize account type string for comparison."""
+    """Normalize account type string for comparison.
+    Handles Paycom numeric codes: 22=Checking, 32=Savings."""
     if not t: return ""
-    return str(t).lower().replace("account", "").replace("Code: ", "").strip()
+    s = str(t).strip()
+    # Remove trailing ".0" from float-read values like "22.0"
+    if s.endswith(".0"):
+        s = s[:-2]
+    # Check if it's a known Paycom type code
+    if s in _TYPE_CODE_MAP:
+        return _TYPE_CODE_MAP[s]
+    return s.lower().replace("account", "").replace("code: ", "").strip()
 
 # ---------- Minimal UI (Consistent with census_audit_app.py) ----------
 def render_ui():
@@ -139,22 +154,10 @@ def run_audit(file_obj):
         emp_id = norm_str(row.get(pc_empid_col))
         if not emp_id: continue
 
-        # --- Extract NET Pay Account ---
-        net_acc = norm_digits(row.get("Net_Acct_Code"))
-        net_rout = norm_digits(row.get("Net_Rout_Code"))
-        if net_acc or net_rout:
-             p_type = row.get("Net_Type_Code")
-             paycom_accounts.append({
-                 "EmpID": emp_id,
-                 "Routing": net_rout,
-                 "Account": net_acc,
-                 "Type": str(p_type) if p_type is not None else "",
-                 "Percent": 100.0,
-                 "Amount": 0.0,
-                 "IsNet": True
-             })
+        # --- Extract Distributions (1 to 8) FIRST, so we can sum percents ---
+        dist_entries = []
+        total_dist_pct = 0.0
 
-        # --- Extract Distributions (1 to 8) ---
         for i in range(1, 9):
             prefix = f"Dist_{i}_"
             d_acc = norm_digits(row.get(f"{prefix}Acct_Code"))
@@ -162,10 +165,35 @@ def run_audit(file_obj):
             
             if d_acc or d_rout:
                 d_type = row.get(f"{prefix}Type_Code")
-                d_amt = norm_money(row.get(f"{prefix}Amount"))
-                d_pct = norm_money(row.get(f"{prefix}Percent"))
-                
-                paycom_accounts.append({
+                raw_amt = row.get(f"{prefix}Amount")
+                d_amt = norm_money(raw_amt)
+                d_pct = 0.0
+
+                # Check for a dedicated Percent column first
+                pct_col = f"{prefix}Percent"
+                if pct_col in df_paycom.columns:
+                    d_pct = norm_money(row.get(pct_col))
+
+                # Detect percentage in Amount field:
+                #   - String contains "%" (e.g. "25%")
+                #   - Excel percentage format (0 < value <= 1.0 stored as decimal)
+                if d_pct == 0.0 and d_amt != 0.0:
+                    raw_str = str(raw_amt).strip() if raw_amt is not None else ""
+                    if "%" in raw_str:
+                        # Explicit "%" in the string, e.g. "25%" or "99%"
+                        try:
+                            d_pct = float(raw_str.replace("%", "").replace(",", "").strip())
+                        except:
+                            d_pct = 0.0
+                        d_amt = 0.0
+                    elif 0 < abs(d_amt) <= 1.0:
+                        # Excel reads 25% as 0.25 — scale up to percentage
+                        d_pct = round(d_amt * 100, 4)
+                        d_amt = 0.0
+
+                total_dist_pct += d_pct
+
+                dist_entries.append({
                     "EmpID": emp_id,
                     "Routing": d_rout,
                     "Account": d_acc,
@@ -174,6 +202,24 @@ def run_audit(file_obj):
                     "Amount": d_amt,
                     "IsNet": False
                 })
+
+        paycom_accounts.extend(dist_entries)
+
+        # --- Extract NET Pay Account (remainder after distributions) ---
+        net_acc = norm_digits(row.get("Net_Acct_Code"))
+        net_rout = norm_digits(row.get("Net_Rout_Code"))
+        if net_acc or net_rout:
+             p_type = row.get("Net_Type_Code")
+             net_pct = round(100.0 - total_dist_pct, 4) if total_dist_pct > 0 else 100.0
+             paycom_accounts.append({
+                 "EmpID": emp_id,
+                 "Routing": net_rout,
+                 "Account": net_acc,
+                 "Type": str(p_type) if p_type is not None else "",
+                 "Percent": net_pct,
+                 "Amount": 0.0,
+                 "IsNet": True
+             })
 
     # Group Paycom by EmpID
     paycom_map = {}

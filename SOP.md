@@ -177,6 +177,26 @@ You need **3 files** (CSV or Excel):
 *   **Unique Feature:** Allows filtering by "Active Status" to exclude terminated employees from the audit.
 
 ---
+### H. Paycom Payment Audit
+**Purpose:** Audits Paycom payment (bank) data against Uzio to ensure direct deposit accuracy.
+
+**Input File Preparation:**
+You need a single Excel file with **2 Sheets**:
+1.  **`Uzio Data`**: Standard Uzio export containing Employee ID, Routing Number, Account Number, Amount/Percent.
+2.  **`Paycom Data`**: Wide format export from Paycom (Net Pay + Distributions 1-8).
+*   **No Mapping Sheet Needed:** The tool automatically detects relevant columns.
+
+**Understanding the Report:**
+*   **Logic:**
+    *   **Auto-Unpivot:** The tool converts Paycom's wide format (Net + Dist_1...Dist_8) into a list of accounts per employee.
+    *   **Matching:** Accounts are matched based on **Routing Number + Account Number**.
+*   **Status Messages:**
+    *   `Data Match`: Account details (Type, Amount, Percent) match.
+    *   `Data Mismatch`: Account found but details differ (e.g., Checking vs Savings, or 100% vs Flat Amount).
+    *   `Employee ID not found...`: Employee exists in one file but not the other.
+    *   `Account in [System] not found in [Other]`: An account exists in one system (e.g., Paycom) but has no matching Routing/Account pair in the other (e.g., Uzio).
+
+---
 
 ## 4. Troubleshooting common issues
 *   **"Missing Tabs" Error:** Check that your Excel sheet names match the requirements exactly.

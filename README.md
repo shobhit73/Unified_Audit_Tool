@@ -36,6 +36,11 @@ A unified platform for auditing and reconciling data across **Uzio**, **ADP**, a
     *   Audits Paycom withholding setups against Uzio.
     *   Standardizes differences in amount formatting (cents vs dollars).
 
+8.  **💳 Paycom Payment Audit** (*New*)
+    *   Audits Paycom payment (bank) data against Uzio records.
+    *   **Auto-Unpivot**: Automatically converts Paycom's wide format (Net + Dist_1-8) to comparable accounts.
+    *   Identifies missing accounts, type mismatches, and amount/percentage discrepancies.
+
 ## 🚀 Getting Started
 
 ### Prerequisites
@@ -74,6 +79,7 @@ The application will open in your default browser (usually at `http://localhost:
 *   `payment_emergency_audit_app.py`: Logic for Payment & Emergency Audit.
 *   `paycom_census_audit_app.py`: Logic for Paycom Census Audit.
 *   `paycom_withholding_audit_app.py`: Logic for Paycom Withholding Audit.
+*   `paycom_payment_audit_app.py`: Logic for Paycom Payment Audit.
 *   `adp_withholding_audit_app.py`: Logic for ADP Withholding Audit.
 *   `withholding_audit_core.py`: Shared logic for Withholding audits.
 

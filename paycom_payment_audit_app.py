@@ -315,7 +315,7 @@ def run_audit(file_obj):
     df_report = df_report[final_cols]
 
     buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         df_report.to_excel(writer, sheet_name='Payment_Comparison', index=False)
         
         # Summary Sheet

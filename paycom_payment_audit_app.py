@@ -184,7 +184,6 @@ def run_audit(file_obj):
                 raw_str = str(raw_amt).strip() if raw_amt is not None else ""
                 
                 # Case A: String contains explicit "%" (e.g. "25%" or "99%")
-                # This must be checked BEFORE d_amt check because norm_money("99%") returns 0.0
                 if "%" in raw_str:
                     try:
                         d_pct = float(raw_str.replace("%", "").replace(",", "").strip())
@@ -192,9 +191,16 @@ def run_audit(file_obj):
                         d_pct = 0.0
                     d_amt = 0.0
                 
-                # Removed "Case B" (implicit decimal scaling) based on user confirmation:
-                # "percentage you will always get as % symbol in the suffix"
-                # This prevents $0.50 from being misinterpreted as 50%.
+                # Case B: String contains explicit "$" -> DEFINITELY AMOUNT. Do nothing.
+                elif "$" in raw_str:
+                    pass
+
+                # Case C: No symbols (e.g. 0.5 float)
+                # If it looks like a decimal percentage (0 < x <= 1.0), assume Percent.
+                # User says: "Amount always has $". So lack of $ implies non-Amount?
+                elif d_amt != 0.0 and 0 < abs(d_amt) <= 1.0:
+                    d_pct = round(d_amt * 100, 4)
+                    d_amt = 0.0
 
             total_dist_pct += d_pct
             total_dist_amt += d_amt

@@ -179,15 +179,22 @@ def run_audit(file_obj):
                 d_pct = norm_money(row.get(pct_col))
 
             # Detect percentage in Amount field:
-            if d_pct == 0.0 and d_amt != 0.0:
+            # logic: if existing d_pct is 0, check raw_amt for '%' symbol
+            if d_pct == 0.0:
                 raw_str = str(raw_amt).strip() if raw_amt is not None else ""
+                
+                # Case A: String contains explicit "%" (e.g. "25%" or "99%")
+                # This must be checked BEFORE d_amt check because norm_money("99%") returns 0.0
                 if "%" in raw_str:
                     try:
                         d_pct = float(raw_str.replace("%", "").replace(",", "").strip())
                     except:
                         d_pct = 0.0
                     d_amt = 0.0
-                elif 0 < abs(d_amt) <= 1.0:
+                
+                # Case B: Excel percentage format (0 < value <= 1.0 stored as decimal)
+                # Only if d_amt (norm_money result) is valid and small
+                elif d_amt != 0.0 and 0 < abs(d_amt) <= 1.0:
                     d_pct = round(d_amt * 100, 4)
                     d_amt = 0.0
 

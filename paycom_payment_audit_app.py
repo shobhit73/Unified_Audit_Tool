@@ -168,37 +168,35 @@ def run_audit(file_obj):
             d_acc = norm_digits(row.get(f"{prefix}Acct_Code")).lstrip("0")
             d_rout = norm_digits(row.get(f"{prefix}Rout_Code"))
             
+            # Extract Amount/Percent always (even if no account, e.g. Check/Cash)
+            raw_amt = row.get(f"{prefix}Amount")
+            d_amt = norm_money(raw_amt)
+            d_pct = 0.0
+
+            # Check for a dedicated Percent column first
+            pct_col = f"{prefix}Percent"
+            if pct_col in df_paycom.columns:
+                d_pct = norm_money(row.get(pct_col))
+
+            # Detect percentage in Amount field:
+            if d_pct == 0.0 and d_amt != 0.0:
+                raw_str = str(raw_amt).strip() if raw_amt is not None else ""
+                if "%" in raw_str:
+                    try:
+                        d_pct = float(raw_str.replace("%", "").replace(",", "").strip())
+                    except:
+                        d_pct = 0.0
+                    d_amt = 0.0
+                elif 0 < abs(d_amt) <= 1.0:
+                    d_pct = round(d_amt * 100, 4)
+                    d_amt = 0.0
+
+            total_dist_pct += d_pct
+            total_dist_amt += d_amt
+
             if d_acc or d_rout:
                 d_type = row.get(f"{prefix}Type_Code")
-                raw_amt = row.get(f"{prefix}Amount")
-                d_amt = norm_money(raw_amt)
-                d_pct = 0.0
-
-                # Check for a dedicated Percent column first
-                pct_col = f"{prefix}Percent"
-                if pct_col in df_paycom.columns:
-                    d_pct = norm_money(row.get(pct_col))
-
-                # Detect percentage in Amount field:
-                #   - String contains "%" (e.g. "25%")
-                #   - Excel percentage format (0 < value <= 1.0 stored as decimal)
-                if d_pct == 0.0 and d_amt != 0.0:
-                    raw_str = str(raw_amt).strip() if raw_amt is not None else ""
-                    if "%" in raw_str:
-                        # Explicit "%" in the string, e.g. "25%" or "99%"
-                        try:
-                            d_pct = float(raw_str.replace("%", "").replace(",", "").strip())
-                        except:
-                            d_pct = 0.0
-                        d_amt = 0.0
-                    elif 0 < abs(d_amt) <= 1.0:
-                        # Excel reads 25% as 0.25 — scale up to percentage
-                        d_pct = round(d_amt * 100, 4)
-                        d_amt = 0.0
-
-                total_dist_pct += d_pct
-                total_dist_amt += d_amt
-
+                
                 dist_entries.append({
                     "EmpID": emp_id,
                     "Routing": d_rout,

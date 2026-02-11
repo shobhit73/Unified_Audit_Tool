@@ -196,9 +196,10 @@ def run_audit(file_obj):
                     pass
 
                 # Case C: No symbols (e.g. 0.5 float)
-                # If it looks like a decimal percentage (0 < x <= 1.0), assume Percent.
+                # If it looks like a decimal percentage (0.01 < x <= 1.0), assume Percent.
                 # User says: "Amount always has $". So lack of $ implies non-Amount?
-                elif d_amt != 0.0 and 0 < abs(d_amt) <= 1.0:
+                # UPDATED: Exclude 0.01 (and below) to prevents $0.01 (Penny) from becoming 1%.
+                elif d_amt != 0.0 and 0.01 < abs(d_amt) <= 1.0:
                     d_pct = round(d_amt * 100, 4)
                     d_amt = 0.0
 

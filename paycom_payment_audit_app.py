@@ -301,12 +301,45 @@ def run_audit(file_obj):
         u_unmatched = []
 
         # Pass 1: Exact match on Routing + Account
+        # UPDATED: Use "Best Fit" strategy to handle multiple identical accounts
+        # (e.g. A0BZ has 2 Checking accts with same numbers, formatted as 1% and 99%)
         for u in u_accs:
             match = None
+            # Find ALL candidates that match Routing+Account
+            candidates = []
             for p in p_remaining:
                 if u["Routing"] == p["Routing"] and u["Account"] == p["Account"]:
-                    match = p
-                    break
+                    candidates.append(p)
+            
+            if not candidates:
+                u_unmatched.append(u)
+                continue
+            
+            # Select Best Fit among candidates
+            if len(candidates) == 1:
+                match = candidates[0]
+            else:
+                # Try to break tie via Percent or Amount specific match
+                best_c = candidates[0] # Default to first
+                found_perfect = False
+                
+                u_pct = u.get("Percent", 0.0)
+                u_amt = u.get("Amount", 0.0)
+                
+                for c in candidates:
+                    # Check Percent match (approximate float equality)
+                    if abs(u_pct - c.get("Percent", 0.0)) < 0.01 and u_pct > 0:
+                        best_c = c
+                        found_perfect = True
+                        break
+                    # Check Amount match
+                    if abs(u_amt - c.get("Amount", 0.0)) < 0.01 and u_amt > 0:
+                        best_c = c
+                        found_perfect = True
+                        break
+                
+                match = best_c
+
             if match:
                 p_remaining.remove(match)
                 for field in FIELDS:
@@ -324,6 +357,7 @@ def run_audit(file_obj):
                         "Paycom_SourceOfTruth_Status": status
                     })
             else:
+                # Should not happen given logic above, but safety fallback
                 u_unmatched.append(u)
 
         # Pass 2: Fallback match on Routing + Account Type

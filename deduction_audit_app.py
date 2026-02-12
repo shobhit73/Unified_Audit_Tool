@@ -56,9 +56,9 @@ def run_audit(file_bytes):
         return None, f"Missing Tabs: {', '.join(missing)}", []
 
     # 2. Read Data
-    df_uzio = pd.read_excel(xls, sheet_name=uzio_sheet)
-    df_adp = pd.read_excel(xls, sheet_name=adp_sheet)
-    df_map = pd.read_excel(xls, sheet_name=map_sheet)
+    df_uzio = pd.read_excel(xls, sheet_name=uzio_sheet, dtype=str)
+    df_adp = pd.read_excel(xls, sheet_name=adp_sheet, dtype=str)
+    df_map = pd.read_excel(xls, sheet_name=map_sheet, dtype=str)
 
     return _run_deduction_audit(df_uzio, df_adp, df_map)
 

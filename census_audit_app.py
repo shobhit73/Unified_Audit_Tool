@@ -313,9 +313,9 @@ def normalize_paytype_for_compare(x) -> str:
 def run_comparison(file_bytes: bytes) -> bytes:
     xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
 
-    uzio = pd.read_excel(xls, sheet_name=UZIO_SHEET, dtype=object)
-    adp = pd.read_excel(xls, sheet_name=ADP_SHEET, dtype=object)
-    mapping = pd.read_excel(xls, sheet_name=MAP_SHEET, dtype=object)
+    uzio = pd.read_excel(xls, sheet_name=UZIO_SHEET, dtype=str)
+    adp = pd.read_excel(xls, sheet_name=ADP_SHEET, dtype=str)
+    mapping = pd.read_excel(xls, sheet_name=MAP_SHEET, dtype=str)
 
     uzio.columns = [norm_colname(c) for c in uzio.columns]
     adp.columns = [norm_colname(c) for c in adp.columns]

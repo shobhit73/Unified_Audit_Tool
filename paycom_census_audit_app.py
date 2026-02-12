@@ -371,8 +371,8 @@ def run_comparison(file_bytes: bytes) -> bytes:
     if map_sheet is None:
         raise ValueError("Mapping sheet not found. Expected a tab like 'Mapping Sheet' or 'Mapping'.")
 
-    uzio = pd.read_excel(xls, sheet_name=uzio_sheet, dtype=object)
-    paycom = pd.read_excel(xls, sheet_name=paycom_sheet, dtype=object)
+    uzio = pd.read_excel(xls, sheet_name=uzio_sheet, dtype=str)
+    paycom = pd.read_excel(xls, sheet_name=paycom_sheet, dtype=str)
 
     uzio.columns = [norm_colname(c) for c in uzio.columns]
     paycom.columns = [norm_colname(c) for c in paycom.columns]

@@ -813,9 +813,9 @@ def drop_unwanted_field_summary_columns(field_summary_df: pd.DataFrame) -> pd.Da
 def run_comparison(file_bytes: bytes) -> dict:
     xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
 
-    uzio = pd.read_excel(xls, sheet_name=UZIO_SHEET, dtype=object)
-    adp_pay_raw = pd.read_excel(xls, sheet_name=ADP_PAY_SHEET, dtype=object)
-    adp_ec = pd.read_excel(xls, sheet_name=ADP_EC_SHEET, dtype=object)
+    uzio = pd.read_excel(xls, sheet_name=UZIO_SHEET, dtype=str)
+    adp_pay_raw = pd.read_excel(xls, sheet_name=ADP_PAY_SHEET, dtype=str)
+    adp_ec = pd.read_excel(xls, sheet_name=ADP_EC_SHEET, dtype=str)
 
     uzio.columns = [norm_colname(c) for c in uzio.columns]
     adp_pay_raw.columns = [norm_colname(c) for c in adp_pay_raw.columns]

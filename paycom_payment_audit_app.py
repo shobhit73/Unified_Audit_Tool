@@ -109,8 +109,8 @@ def run_audit(file_obj):
         if s not in xl.sheet_names:
             raise ValueError(f"Missing sheet: {s}")
 
-    df_uzio = pd.read_excel(xl, "Uzio Data")
-    df_paycom = pd.read_excel(xl, "Paycom Data")
+    df_uzio = pd.read_excel(xl, "Uzio Data", dtype=str)
+    df_paycom = pd.read_excel(xl, "Paycom Data", dtype=str)
 
     # 2. Process Uzio Data
     df_uzio.columns = [str(c).strip() for c in df_uzio.columns]

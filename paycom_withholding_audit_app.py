@@ -100,7 +100,7 @@ def _autodetect_paycom_cols(df):
 
 
 def _read_mapping_xlsx(uploaded_mapping):
-    df = pd.read_excel(uploaded_mapping)
+    df = pd.read_excel(uploaded_mapping, dtype=str)
 
     # Support a few variants, but default to strict keys.
     cols = {c.lower(): c for c in df.columns}

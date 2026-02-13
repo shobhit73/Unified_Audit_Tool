@@ -79,6 +79,10 @@ def norm_key_series(s: pd.Series) -> pd.Series:
         v = v.replace("\u00A0", " ")
         if re.fullmatch(r"\d+\.0+", v):
             v = v.split(".")[0]
+        # Strip leading zeros from purely numeric IDs for matching
+        # e.g. "0006" -> "6", "006" -> "6", "0" -> "0"
+        if re.fullmatch(r"0+\d+", v):
+            v = v.lstrip("0") or "0"
         return v
     return s2.map(_fix)
 
@@ -394,9 +398,28 @@ def run_comparison(file_bytes: bytes) -> bytes:
     if PAYCOM_KEY is None:
         raise ValueError("Paycom key column not found (expected 'Employee_Code'/'Employee ID'/'Employee').")
 
-    # normalize keys
+    # --- DISPLAY ID: preserve original leading-zero IDs for output ---
+    # Before normalizing, save original keys to build a display map
+    uzio_orig_keys = uzio[UZIO_KEY].astype(str).str.strip()
+    paycom_orig_keys = paycom[PAYCOM_KEY].astype(str).str.strip()
+
+    # normalize keys (strips leading zeros for matching)
     uzio[UZIO_KEY] = norm_key_series(uzio[UZIO_KEY])
     paycom[PAYCOM_KEY] = norm_key_series(paycom[PAYCOM_KEY])
+
+    # Build display_id_map: normalized_key -> longest original form
+    # Prefers Uzio originals (source of truth), then Paycom if longer
+    display_id_map = {}
+    for norm_val, orig_val in zip(uzio[UZIO_KEY], uzio_orig_keys):
+        n = str(norm_val).strip()
+        o = str(orig_val).strip()
+        if n and (n not in display_id_map or len(o) > len(display_id_map[n])):
+            display_id_map[n] = o
+    for norm_val, orig_val in zip(paycom[PAYCOM_KEY], paycom_orig_keys):
+        n = str(norm_val).strip()
+        o = str(orig_val).strip()
+        if n and (n not in display_id_map or len(o) > len(display_id_map[n])):
+            display_id_map[n] = o
 
     # mapping sheet
     mapping = read_mapping_sheet(xls, map_sheet, list(paycom.columns))
@@ -530,7 +553,7 @@ def run_comparison(file_bytes: bytes) -> bytes:
 
             rows.append(
                 {
-                    "Employee": eid,
+                    "Employee": display_id_map.get(eid, eid),  # Use original leading-zero form
                     "Field": uz_field,
                     "Employment Status": emp_status_context,  # extra context column
                     "UZIO_Value": uz_val,

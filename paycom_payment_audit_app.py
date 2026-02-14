@@ -166,7 +166,8 @@ def run_audit(uzio_file, paycom_file):
     uzio_map = {}
     
     for idx, row in df_uzio.iterrows():
-        emp_id = norm_id(row.get(col_map["EmpID"]))
+        # UZIO ID: Keep AS IS (do not pad/normalize) to avoid colliding "001" and "0001"
+        emp_id = norm_str(row.get(col_map["EmpID"]))
         if not emp_id: continue
         
         acc = {
@@ -192,8 +193,33 @@ def run_audit(uzio_file, paycom_file):
     
     pc_empid_col = next((c for c in df_paycom.columns if "Employee_Code" in c or "Emp Code" in c), "Employee_Code")
 
+    # Helper to resolve Paycom ID (int/str) to Uzio ID (str)
+    # Tries: Exact -> Pad 3 -> Pad 4 -> Pad 5
+    def resolve_paycom_id(raw_val, candidates):
+        if pd.isna(raw_val): return None
+        s = str(raw_val).strip()
+        if s.endswith(".0"): s = s[:-2]
+        
+        # 1. Exact Match
+        if s in candidates: return s
+        
+        # 2. Pad with zeros (up to 5 digits coverage)
+        for width in [3, 4, 5]:
+            padded = s.zfill(width)
+            if padded in candidates:
+                return padded
+                
+        # 3. If no match found, default to padded 4 (standard convention) or raw?
+        # User requested 4-digit padding context.
+        return s.zfill(4)
+
+    uzio_keys = set(uzio_map.keys())
+
     for idx, row in df_paycom.iterrows():
-        emp_id = norm_id(row.get(pc_empid_col))
+        raw_id = row.get(pc_empid_col)
+        # Smart Resolve
+        emp_id = resolve_paycom_id(raw_id, uzio_keys)
+        
         if not emp_id: continue
 
         # --- Extract Distributions (1 to 8) FIRST, so we can sum percents ---

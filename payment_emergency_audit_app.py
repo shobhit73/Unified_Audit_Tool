@@ -1098,8 +1098,10 @@ def render_ui():
     1. Upload **Payment & Emergency Input** File.
     2. Must contain:
         - `Uzio Data`
-        - `ADP Data`
-        - `Mapping Sheet`
+        - `ADP Payment Data`
+        - `ADP Emergency Contact Data`
+        - `Payment_Mapping`
+        - `Emergency_Mapping`
 
     **Output Reports (Generated independently)**:
     1. **Payment Report**: Variances in Net/Gross Pay.

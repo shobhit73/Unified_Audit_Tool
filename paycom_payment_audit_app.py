@@ -80,7 +80,6 @@ def render_ui():
     2. Must contain:
         - `Uzio Data`
         - `Paycom Data`
-        - `Mapping Sheet`
 
     **Output Report**:
     - **Summary**: Total records and discrepancy counts.

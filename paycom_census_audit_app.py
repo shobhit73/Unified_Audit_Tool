@@ -783,7 +783,21 @@ def run_comparison(file_bytes: bytes) -> bytes:
 # ---------- UI ----------
 def render_ui():
     st.title(APP_TITLE)
-    st.write("Upload the Excel workbook (.xlsx) with 3 tabs: Uzio Data, Paycom Data, and Mapping Sheet.")
+    st.markdown("""
+    **Instructions**:
+    1. Upload **Census Input** File.
+    2. Must contain:
+        - `Uzio Data`
+        - `Paycom Data`
+        - `Mapping Sheet`
+
+    **Output Report**:
+    - **Summary**: High-level metrics.
+    - **Field_Summary_By_Status**: Match/Mismatch counts per field.
+    - **Comparison_Detail_AllFields**: Detailed row-by-row comparison.
+    - **FLSA_Compliance_Issues**: Invalid Pay Type/FLSA combos.
+    - **Active_Missing_In_Uzio**: Active Paycom employees missing in Uzio.
+    """)
 
     uploaded_file = st.file_uploader("Upload Excel workbook", type=["xlsx"])
     run_btn = st.button("Run Audit", type="primary", disabled=(uploaded_file is None))

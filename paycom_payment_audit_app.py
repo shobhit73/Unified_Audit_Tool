@@ -74,7 +74,19 @@ def strip_type(t):
 # ---------- Minimal UI (Consistent with census_audit_app.py) ----------
 def render_ui():
     st.title(APP_TITLE)
-    st.write("Upload the Excel workbook (.xlsx). The tool will generate the audit report and provide a download button.")
+    st.markdown("""
+    **Instructions**:
+    1. Upload **Payment Input** File.
+    2. Must contain:
+        - `Uzio Data`
+        - `Paycom Data`
+        - `Mapping Sheet`
+
+    **Output Report**:
+    - **Summary**: Total records and discrepancy counts.
+    - **Comparison_Detail**: Variance analysis for Net Pay and Gross Pay.
+    - **Missing_Employees**: Employees present in one file but not the other.
+    """)
 
     uploaded_file = st.file_uploader("Upload Excel workbook", type=["xlsx"])
     run_btn = st.button("Run Audit", type="primary", disabled=(uploaded_file is None))

@@ -893,7 +893,21 @@ def run_comparison(file_bytes: bytes) -> bytes:
 # ---------- Minimal UI ----------
 def render_ui():
     st.title(APP_TITLE)
-    st.write("Upload the Excel workbook (.xlsx). The tool will generate the audit report and provide a download button.")
+    st.markdown("""
+    **Instructions**:
+    1. Upload **Census Input** File.
+    2. Must contain:
+        - `Uzio Data`
+        - `ADP Data`
+        - `Mapping Sheet`
+
+    **Output Report**:
+    - **Summary**: High-level metrics.
+    - **Field_Summary_By_Status**: Match/Mismatch counts per field.
+    - **Comparison_Detail_AllFields**: Detailed row-by-row comparison.
+    - **FLSA_Compliance_Issues**: Invalid Pay Type/FLSA combos.
+    - **Active_Missing_In_Uzio**: Active ADP employees missing in Uzio.
+    """)
 
     uploaded_file = st.file_uploader("Upload Excel workbook", type=["xlsx"])
     run_btn = st.button("Run Audit", type="primary", disabled=(uploaded_file is None))

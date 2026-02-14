@@ -1093,7 +1093,18 @@ def run_comparison(file_bytes: bytes) -> dict:
 
 def render_ui():
     st.title(APP_TITLE)
-    st.write("Upload the Excel workbook (.xlsx). The tool will generate two independent reports (Payment + Emergency Contact).")
+    st.markdown("""
+    **Instructions**:
+    1. Upload **Payment & Emergency Input** File.
+    2. Must contain:
+        - `Uzio Data`
+        - `ADP Data`
+        - `Mapping Sheet`
+
+    **Output Reports (Generated independently)**:
+    1. **Payment Report**: Variances in Net/Gross Pay.
+    2. **Emergency Contact Report**: Mismatches in emergency contact details.
+    """)
 
     uploaded_file = st.file_uploader("Upload Excel workbook", type=["xlsx"])
     run_btn = st.button("Run Audit", type="primary", disabled=(uploaded_file is None))

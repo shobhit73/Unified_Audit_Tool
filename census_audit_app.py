@@ -526,6 +526,19 @@ def run_comparison(file_bytes: bytes) -> bytes:
             uzio_fname_col = c
         elif cl in {"last name", "lastname", "last_name"}:
             uzio_lname_col = c
+    # Fallback: search for any column containing 'first' + 'name' / 'last' + 'name'
+    if uzio_fname_col is None:
+        for c in uzio.columns:
+            cl = norm_colname(c).casefold()
+            if "first" in cl and "name" in cl:
+                uzio_fname_col = c
+                break
+    if uzio_lname_col is None:
+        for c in uzio.columns:
+            cl = norm_colname(c).casefold()
+            if "last" in cl and "name" in cl:
+                uzio_lname_col = c
+                break
 
     # ---------- Build FULL comparison ----------
     rows = []

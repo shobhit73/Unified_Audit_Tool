@@ -71,29 +71,32 @@ def strip_type(t):
         return _TYPE_CODE_MAP[s]
     return s.lower().replace("account", "").replace("code: ", "").strip()
 
-# ---------- Minimal UI (Consistent with census_audit_app.py) ----------
+# ---------- UI ----------
 def render_ui():
     st.title(APP_TITLE)
     st.markdown("""
     **Instructions**:
-    1. Upload **Payment Input** File.
-    2. Must contain:
-        - `Uzio Data`
-        - `Paycom Data`
-
+    1. Upload **Uzio Payment Export** (`HR Report_...xlsx`).
+    2. Upload **Paycom Payment Export** (`.csv` or `.xlsx`).
+    
     **Output Report**:
     - **Summary**: Total records and discrepancy counts.
     - **Comparison_Detail**: Variance analysis for Net Pay and Gross Pay.
     - **Missing_Employees**: Employees present in one file but not the other.
     """)
 
-    uploaded_file = st.file_uploader("Upload Excel workbook", type=["xlsx"])
-    run_btn = st.button("Run Audit", type="primary", disabled=(uploaded_file is None))
+    col1, col2 = st.columns(2)
+    with col1:
+        uzio_file = st.file_uploader("Allowed Uzio Export (.xlsx)", type=["xlsx", "xlsm"])
+    with col2:
+        paycom_file = st.file_uploader("Allowed Paycom Export (.csv, .xlsx)", type=["csv", "xlsx"])
+
+    run_btn = st.button("Run Audit", type="primary", disabled=(not uzio_file or not paycom_file))
 
     if run_btn:
         try:
             with st.spinner("Running audit..."):
-                report_bytes = run_audit(uploaded_file)
+                report_bytes = run_audit(uzio_file, paycom_file)
 
             st.success("Report generated.")
 
@@ -111,29 +114,48 @@ def render_ui():
             st.error(f"Failed: {e}")
 
 # ---------- Core Audit Logic ----------
-def run_audit(file_obj):
+def run_audit(uzio_file, paycom_file):
     # 1. Load Data
-    xl = pd.ExcelFile(file_obj)
+    # Uzio Raw: Skip first row (header=1)
+    df_uzio = pd.read_excel(uzio_file, header=1, dtype=str)
     
-    req_sheets = ["Uzio Data", "Paycom Data"]
-    for s in req_sheets:
-        if s not in xl.sheet_names:
-            raise ValueError(f"Missing sheet: {s}")
-
-    df_uzio = pd.read_excel(xl, "Uzio Data", dtype=str)
-    df_paycom = pd.read_excel(xl, "Paycom Data", dtype=str)
+    # Paycom: CSV or Excel
+    try:
+        if paycom_file.name.endswith('.csv'):
+             try:
+                df_paycom = pd.read_csv(paycom_file, dtype=str)
+             except:
+                df_paycom = pd.read_csv(paycom_file, dtype=str, encoding='latin1')
+        else:
+            df_paycom = pd.read_excel(paycom_file, dtype=str)
+    except Exception as e:
+        raise ValueError(f"Error reading Paycom file: {e}")
 
     # 2. Process Uzio Data
     df_uzio.columns = [str(c).strip() for c in df_uzio.columns]
     
+    # Mapping for Raw Uzio Export
+    # Raw Columns: 'Company Name', 'Full Name', 'Employee ID', 'Payment Method', 
+    # 'Paycheck Distribution', 'Routing Number', 'Account Type', 'Account Number', 
+    # 'Paycheck Percentage', 'Paycheck Amount', 'Priority'
+    
+    # Map to internal keys expected by logic:
+    # EmpID -> 'Employee ID'
+    # Routing -> 'Routing Number'
+    # Account -> 'Account Number'
+    # Type -> 'Account Type'
+    # Percent -> 'Paycheck Percentage'
+    # Amount -> 'Paycheck Amount'
+    # Name -> 'Full Name'
+    
     col_map = {
-        "EmpID": next((c for c in df_uzio.columns if "Employee ID" in c), "Employee ID"),
-        "Routing": next((c for c in df_uzio.columns if "Routing" in c), "Routing Number"),
-        "Account": next((c for c in df_uzio.columns if "Account Nu" in c), "Account Number"),
-        "Type": next((c for c in df_uzio.columns if "Account Type" in c), "Account Type"),
-        "Percent": next((c for c in df_uzio.columns if "Percent" in c), "Paycheck Percentage"),
-        "Amount": next((c for c in df_uzio.columns if "Amount" in c), "Paycheck Amount"),
-        "Name": next((c for c in df_uzio.columns if "Full Name" in c), "Full Name")
+        "EmpID": "Employee ID",
+        "Routing": "Routing Number",
+        "Account": "Account Number",
+        "Type": "Account Type",
+        "Percent": "Paycheck Percentage",
+        "Amount": "Paycheck Amount",
+        "Name": "Full Name"
     }
 
     uzio_map = {}

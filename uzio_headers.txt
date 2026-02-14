@@ -1,0 +1,114 @@
+Employer Identification Number
+Employee Prefix
+Employee First Name*
+Employee Middle Initial
+Employee Last Name*
+Employee Suffix
+Employee Date of Birth*
+ Employee Gender*
+Employee SSN
+Employee Tobacco usage in last 12 months
+ Employee ID*
+Employment
+Status*
+Date of Hire*
+Termination Date
+Termination Reason
+Employment Type*
+Others (Employment Type)*
+Pay Type*
+Pay Group*
+Work Schedule
+Annual Salary(Digits)**
+Salary Effective Date
+Working Hours per Week(Digits)**
+Hourly Pay Rate**
+Bonus
+Salary Commissions
+Benefits Class
+Job Title
+Department
+Employee Type
+Union Classification
+FLSA Classification
+Work Location
+Division
+Personal Email
+Official Email*
+Phone Number(Digits)
+Employee Address Line 1
+Employee Address Line 2
+City*
+Zipcode*
+State(Abbreviation)*
+COUNTY
+Mailing Address Line 1
+Mailing Address Line 2
+Mailing City
+Mailing Zipcode
+Mailing State(Abbreviation)
+Mailing County
+Protected Veteran Status
+Disability Status
+EEO Job Category
+Race/Ethnicity
+Original DOH
+Adjusted Service Date
+Reporting Manager ID
+License Number
+License Type
+License State
+License Expiration Date
+On Leave
+Dependent 1 Prefix
+Dependent 1 First Name*
+Dependent 1 Middle Initial
+Dependent 1 Last Name*
+Dependent 1 Suffix
+Dependent 1 DOB*
+Dependent 1 Gender*
+Dependent 1 Tobacco usage in last 12 months
+Dependent 1 Relationship*
+Dependent 1 is Disabled
+Dependent 2 Prefix
+Dependent 2 First Name*
+Dependent 2 Middle Initial
+Dependent 2 Last Name*
+Dependent 2 Suffix
+Dependent 2 DOB*
+Dependent 2 Gender*
+Dependent 2 Tobacco usage in last 12 months
+Dependent 2 Relationship*
+Dependent 2 is Disabled
+Dependent 3 Prefix
+Dependent 3 First Name*
+Dependent 3 Middle Initial
+Dependent 3 Last Name*
+Dependent 3 Suffix
+Dependent 3 DOB*
+Dependent 3 Gender*
+Dependent 3 Tobacco usage in last 12 months
+Dependent 3 Relationship*
+Dependent 3 is Disabled
+Dependent 4 Prefix
+Dependent 4 First Name*
+Dependent 4 Middle Initial
+Dependent 4 Last Name*
+Dependent 4 Suffix
+Dependent 4 DOB*
+Dependent 4 Gender*
+Dependent 4 Tobacco usage in last 12 months
+Dependent 4 Relationship*
+Dependent 4 is Disabled
+
+--- Status Columns ---
+
+Column: 'Employment
+Status*'
+['TERMINATED', 'TERMINATED', 'ACTIVE', 'TERMINATED', 'TERMINATED']
+
+Column: 'Protected Veteran Status'
+[nan, nan, nan, nan, nan]
+
+Column: 'Disability Status'
+[nan, nan, nan, nan, nan]

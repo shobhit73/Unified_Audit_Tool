@@ -37,9 +37,9 @@ UZIO_RAW_MAPPING = {
     'State(Abbreviation)*': 'State',
     'Mailing Address Line 1': 'Mailing Address Line 1',
     'Mailing Address Line 2': 'Mailing Address Line 2',
-    'Mailing City*': 'Mailing City',
-    'Mailing Zipcode*': 'Mailing Zip',
-    'Mailing State(Abbreviation)*': 'Mailing State',
+    'Mailing City': 'Mailing City',
+    'Mailing Zipcode': 'Mailing Zip',
+    'Mailing State(Abbreviation)': 'Mailing State',
     'Reporting Manager ID': 'Reports To ID'
 }
 

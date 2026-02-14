@@ -26,7 +26,7 @@ PAYCOM_FIELD_MAP = {
     'Hire Date': 'Most_Recent_Hire_Date',
     'Original Hire Date': 'Most_Recent_Hire_Date', # Fallback to Most Recent if Original not found? Mapping said Original DOH -> Hire_Date but we found none.
     'Termination Date': 'Termination_Date',
-    'Termination Reason': 'Termination_Reason', # Verify if this column exists? Inspection didn't show it explicitly in 0-238? Wait.
+    # 'Termination Reason': 'Termination_Reason', # Not in sample file
     'Pay Type': 'Pay_Type',
     'Annual Salary': 'Rate_1',
     'Hourly Pay Rate': 'Rate_1',

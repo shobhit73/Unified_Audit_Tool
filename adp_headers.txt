@@ -1,0 +1,76 @@
+Legal First Name
+Associate ID
+Legal Last Name
+Legal Middle Name
+Salutation
+Generation Suffix Code
+Generation Suffix Description
+Position ID
+Birth Date
+Tax ID (SSN)
+Hire Date
+Hire/Rehire Date
+Termination Date
+Termination Reason Code
+Termination Reason Description
+Tobacco User
+Gender (Self-ID)
+Marital Status Code
+Marital Status Description
+FLSA Description
+FLSA Code
+NAICS Workers' Comp Code
+NAICS Workers' Comp Description
+Worker Category Code
+Worker Category Code.1
+Worker Category Description
+Worker Category Description.1
+Union Code
+Union Code Description
+Annual Salary
+Job Title Code
+Reports To Legal Name
+Reports To Position ID
+EEOC Job Classification
+Ethnic Group
+Ethnicity
+Primary Address: Address Line 1
+Primary Address: Address Line 2
+Primary Address: City
+Primary Address: State / Territory Code
+Primary Address: Zip / Postal Code
+Personal Contact: Personal Email
+Protected Veteran Status
+Disabled Veteran
+Location Address Line 1
+Location Address Line 2
+Location City
+Location Description
+Location Postal Code
+Location State/Territory
+SOC Code
+SOC Code Description
+Home Department Code
+Pay Frequency
+Pay Grade Code
+Regular Pay Rate Amount
+Standard Hours
+Payroll Name
+Regular Hours Total
+Regular Hours Detail
+Regular Hours
+Regular Hours.1
+# of Dependents
+Regular Pay Rate Code
+Department Description
+Department Number
+Job Title Description
+Position Status
+Regular Pay Rate Description
+Rehire Date
+Legal / Preferred Address: Address Line 1
+Legal / Preferred Address: Address Line 2
+Legal / Preferred Address: City
+Legal / Preferred Address: State / Territory Code
+Legal / Preferred Address: Zip / Postal Code
+Reports To Associate ID

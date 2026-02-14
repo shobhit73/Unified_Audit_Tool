@@ -22,29 +22,29 @@ ADP_FIELD_MAP = {
     'Last Name': 'Legal Last Name',
     'Middle Initial': 'Legal Middle Name',
     'Employment Status': 'Position Status',
-    'Hire Date': 'Hire/Rehire Date',  # Mapping says Hire/Rehire Date
+    'Hire Date': 'Hire/Rehire Date',
     'Original Hire Date': 'Hire Date',
     'Termination Date': 'Termination Date',
     'Termination Reason': 'Termination Reason Description',
     'Pay Type': 'Regular Pay Rate Description',
     'Annual Salary': 'Annual Salary',
     'Hourly Pay Rate': 'Regular Pay Rate Amount',
-    'Working Hours': 'Working Hours Per Week',
+    'Working Hours': 'Regular Hours', # Was 'Working Hours Per Week'
     'Job Title': 'Job Title Description',
     'Department': 'Department Description',
-    'Work Email': 'Work Contact: Work Email',
+    'Work Email': 'Work Contact: Work Email', # Not found in sample, keep as optional/missing?
     'Personal Email': 'Personal Contact: Personal Email',
-    'Phone Number': 'Personal Contact: Personal Mobile',
+    'Phone Number': '', # 'Personal Contact: Personal Mobile' NOT FOUND. Leave blank to avoid key error?
     'SSN': 'Tax ID (SSN)',
     'DOB': 'Birth Date',
     'Gender': 'Gender (Self-ID)',
     'Tobacco User': 'Tobacco User',
-    'FLSA Classification': 'FLSA Classification',
+    'FLSA Classification': 'FLSA Description', # Was 'FLSA Classification'. Header has 'FLSA Description' and 'FLSA Code'
     'Address Line 1': 'Primary Address: Address Line 1',
     'Address Line 2': 'Primary Address: Address Line 2',
     'City': 'Primary Address: City',
     'Zip': 'Legal / Preferred Address: Zip / Postal Code',
-    'State': 'Primary Address: State / Province / Territory Code',
+    'State': 'Primary Address: State / Territory Code', # Was '.../ Province / ...'
     'Mailing Address Line 1': 'Legal / Preferred Address: Address Line 1',
     'Mailing Address Line 2': 'Legal / Preferred Address: Address Line 2',
     'Mailing City': 'Legal / Preferred Address: City',
@@ -53,7 +53,7 @@ ADP_FIELD_MAP = {
     # Additional
     'Reports To ID': 'Reports To Associate ID',
     'Protected Veteran Status': 'Protected Veteran Status',
-    'EEO Job Category': 'EEO Job Category EEO Job Classifcation',
+    'EEO Job Category': 'EEOC Job Classification', # Was 'EEO Job Category EEO Job Classifcation'
     'Ethnicity': 'Ethnicity', # Mapping says Race/Ethnicity -> Ethnicity
     'SOC Code': 'SOC Code'
 }
@@ -480,13 +480,6 @@ def run_comparison(uzio_file, adp_file) -> bytes:
 
     # Apply the new deduplication
     adp = deduplicate_adp(adp, ADP_KEY)
-    
-    # DEBUG: Show user what we read for Status
-    if 'Position Status' in adp.columns:
-        st.write("DEBUG: ADP Data Head (Position Status):")
-        st.write(adp[['Associate ID', 'Position Status']].head())
-    else:
-        st.error("DEBUG: 'Position Status' column NOT FOUND in ADP data!")
     
     # Old simple drop (keep unique) - technically redundant but safe as backup for Uzio
     uzio = uzio.drop_duplicates(subset=[UZIO_KEY], keep="first").copy()

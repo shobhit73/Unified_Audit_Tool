@@ -720,6 +720,95 @@ def run_comparison(file_bytes: bytes) -> bytes:
         "FLSA Classification (Uzio)", "Issue"
     ])
 
+    # ---------- Active Employees Missing in Uzio (5th sheet) ----------
+    # Find employees in ADP but NOT in Uzio who are Active
+    adp_only_keys = adp_keys - uzio_keys
+
+    # Locate ADP columns for status, name, hire date
+    adp_status_col = None
+    for c in adp.columns:
+        cl = norm_colname(c).casefold()
+        if cl in {"position status", "employment status", "employee status"}:
+            adp_status_col = c
+            break
+    if adp_status_col is None:
+        for c in adp.columns:
+            cl = norm_colname(c).casefold()
+            if "status" in cl and ("position" in cl or "employment" in cl):
+                adp_status_col = c
+                break
+
+    adp_fname_col = None
+    for c in adp.columns:
+        cl = norm_colname(c).casefold()
+        if cl in {"legal first name", "first name", "firstname"}:
+            adp_fname_col = c
+            break
+    if adp_fname_col is None:
+        for c in adp.columns:
+            cl = norm_colname(c).casefold()
+            if "first" in cl and "name" in cl:
+                adp_fname_col = c
+                break
+
+    adp_lname_col = None
+    for c in adp.columns:
+        cl = norm_colname(c).casefold()
+        if cl in {"legal last name", "last name", "lastname"}:
+            adp_lname_col = c
+            break
+    if adp_lname_col is None:
+        for c in adp.columns:
+            cl = norm_colname(c).casefold()
+            if "last" in cl and "name" in cl:
+                adp_lname_col = c
+                break
+
+    adp_hire_col = None
+    for c in adp.columns:
+        cl = norm_colname(c).casefold()
+        if "hire" in cl and "date" in cl:
+            adp_hire_col = c
+            break
+
+    active_missing_rows = []
+    for emp_id in sorted(adp_only_keys):
+        if emp_id not in adp_idx.index:
+            continue
+        # Check employment status in ADP
+        status_val = ""
+        if adp_status_col and adp_status_col in adp_idx.columns:
+            status_val = str(norm_blank(adp_idx.at[emp_id, adp_status_col]) or "")
+        status_lower = status_val.strip().lower()
+
+        # Only include Active / Leave employees
+        if "active" not in status_lower and "leave" not in status_lower:
+            continue
+
+        fname = ""
+        lname = ""
+        if adp_fname_col and adp_fname_col in adp_idx.columns:
+            fname = str(norm_blank(adp_idx.at[emp_id, adp_fname_col]) or "")
+        if adp_lname_col and adp_lname_col in adp_idx.columns:
+            lname = str(norm_blank(adp_idx.at[emp_id, adp_lname_col]) or "")
+        emp_name = f"{fname} {lname}".strip()
+
+        hire_date = ""
+        if adp_hire_col and adp_hire_col in adp_idx.columns:
+            hire_date = str(norm_blank(adp_idx.at[emp_id, adp_hire_col]) or "")
+
+        active_missing_rows.append({
+            "Employee ID": emp_id,
+            "Employee Name": emp_name,
+            "Employment Status (ADP)": status_val,
+            "Date of Hire (ADP)": hire_date,
+        })
+
+    active_missing_in_uzio = pd.DataFrame(active_missing_rows, columns=[
+        "Employee ID", "Employee Name",
+        "Employment Status (ADP)", "Date of Hire (ADP)"
+    ])
+
     # ---------- Field Summary By Status ----------
     cols_needed = [
         "Data Match",
@@ -772,7 +861,8 @@ def run_comparison(file_bytes: bytes) -> bytes:
             "Mapped fields with ADP column missing",
             "Total comparison rows (employees x mapped fields)",
             "Total NOT OK rows",
-            "FLSA Compliance Issues"
+            "FLSA Compliance Issues",
+            "Active in ADP but Missing in Uzio"
         ],
         "Value": [
             len(uzio_keys),
@@ -784,7 +874,8 @@ def run_comparison(file_bytes: bytes) -> bytes:
             mapping_missing_adp_col.shape[0],
             comparison_detail.shape[0],
             mismatches_only.shape[0],
-            len(flsa_rows)
+            len(flsa_rows),
+            len(active_missing_rows)
         ]
     })
 
@@ -795,6 +886,7 @@ def run_comparison(file_bytes: bytes) -> bytes:
         field_summary_by_status.to_excel(writer, sheet_name="Field_Summary_By_Status", index=False)
         comparison_detail.to_excel(writer, sheet_name="Comparison_Detail_AllFields", index=False)
         flsa_issues.to_excel(writer, sheet_name="FLSA_Compliance_Issues", index=False)
+        active_missing_in_uzio.to_excel(writer, sheet_name="Active_Missing_In_Uzio", index=False)
 
     return out.getvalue()
 

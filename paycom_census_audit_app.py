@@ -642,6 +642,71 @@ def run_comparison(file_bytes: bytes) -> bytes:
         "FLSA Classification (Uzio)", "Issue"
     ])
 
+    # ---------- Active Employees Missing in Uzio (5th sheet) ----------
+    # Find employees in Paycom but NOT in Uzio who are Active / On Leave
+    paycom_only_emps = set(paycom_idx.keys()) - set(uzio_idx.keys())
+
+    # Locate Paycom columns for name, status, hire date
+    pc_fname_col = find_col(paycom.columns, "Legal_Firstname", "Legal Firstname", "First Name", "FirstName")
+    if pc_fname_col is None:
+        for c in paycom.columns:
+            cl = norm_colname(c).casefold()
+            if "first" in cl and "name" in cl:
+                pc_fname_col = c
+                break
+    pc_lname_col = find_col(paycom.columns, "Legal_Lastname", "Legal Lastname", "Last Name", "LastName")
+    if pc_lname_col is None:
+        for c in paycom.columns:
+            cl = norm_colname(c).casefold()
+            if "last" in cl and "name" in cl:
+                pc_lname_col = c
+                break
+    pc_hire_col = find_col(paycom.columns, "Most_Recent_Hire_Date", "Most Recent Hire Date",
+                           "Hire_Date", "Hire Date")
+    if pc_hire_col is None:
+        for c in paycom.columns:
+            cl = norm_colname(c).casefold()
+            if "hire" in cl and "date" in cl:
+                pc_hire_col = c
+                break
+
+    active_missing_rows = []
+    for eid in sorted(paycom_only_emps):
+        p_i = paycom_idx[eid]
+        # Check employment status
+        status_val = ""
+        if paycom_emp_status_col and paycom_emp_status_col in paycom.columns:
+            status_val = str(norm_blank(paycom.loc[p_i, paycom_emp_status_col]) or "")
+        status_lower = status_val.strip().lower()
+
+        # Only include Active / On Leave employees
+        if status_lower not in {"active", "on leave", "leave", "activated"}:
+            continue
+
+        fname = ""
+        lname = ""
+        if pc_fname_col and pc_fname_col in paycom.columns:
+            fname = str(norm_blank(paycom.loc[p_i, pc_fname_col]) or "")
+        if pc_lname_col and pc_lname_col in paycom.columns:
+            lname = str(norm_blank(paycom.loc[p_i, pc_lname_col]) or "")
+        emp_name = f"{fname} {lname}".strip()
+
+        hire_date = ""
+        if pc_hire_col and pc_hire_col in paycom.columns:
+            hire_date = str(norm_blank(paycom.loc[p_i, pc_hire_col]) or "")
+
+        active_missing_rows.append({
+            "Employee ID": display_id_map.get(eid, eid),
+            "Employee Name": emp_name,
+            "Employment Status (Paycom)": status_val,
+            "Date of Hire (Paycom)": hire_date,
+        })
+
+    active_missing_in_uzio = pd.DataFrame(active_missing_rows, columns=[
+        "Employee ID", "Employee Name",
+        "Employment Status (Paycom)", "Date of Hire (Paycom)"
+    ])
+
     # Field summary
     statuses = [
         "Data Match",
@@ -687,6 +752,7 @@ def run_comparison(file_bytes: bytes) -> bytes:
                 "Fields Compared",
                 "Total Comparisons (field-level rows)",
                 "FLSA Compliance Issues",
+                "Active in Paycom but Missing in Uzio",
             ],
             "Value": [
                 len(uzio_emps),
@@ -699,6 +765,7 @@ def run_comparison(file_bytes: bytes) -> bytes:
                 int(mapping.shape[0]),
                 int(comparison_detail.shape[0]),
                 len(flsa_rows),
+                len(active_missing_rows),
             ],
         }
     )
@@ -709,6 +776,7 @@ def run_comparison(file_bytes: bytes) -> bytes:
         field_summary_by_status.to_excel(writer, sheet_name="Field_Summary_By_Status", index=False)
         comparison_detail.to_excel(writer, sheet_name="Comparison_Detail_AllFields", index=False)
         flsa_issues.to_excel(writer, sheet_name="FLSA_Compliance_Issues", index=False)
+        active_missing_in_uzio.to_excel(writer, sheet_name="Active_Missing_In_Uzio", index=False)
 
     return out.getvalue()
 

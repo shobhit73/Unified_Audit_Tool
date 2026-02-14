@@ -781,47 +781,6 @@ def render_ui():
     st.title(APP_TITLE)
     st.markdown("""
     **Instructions**:
-    1. Upload **Census Input** File.
-    2. Must contain:
-        - `Uzio Data`
-        - `Paycom Data`
-        - `Mapping Sheet`
-
-    **Output Report**:
-    - **Summary**: High-level metrics.
-    - **Field_Summary_By_Status**: Match/Mismatch counts per field.
-    - **Comparison_Detail_AllFields**: Detailed row-by-row comparison.
-    - **FLSA_Compliance_Issues**: Invalid Pay Type/FLSA combos.
-    - **Active_Missing_In_Uzio**: Active Paycom employees missing in Uzio.
-    """)
-
-    uploaded_file = st.file_uploader("Upload Excel workbook", type=["xlsx"])
-    run_btn = st.button("Run Audit", type="primary", disabled=(uploaded_file is None))
-
-    if run_btn:
-        try:
-            with st.spinner("Running audit..."):
-                report_bytes = run_comparison(uploaded_file.getvalue())
-
-            st.success("Report generated.")
-            # requested format: Client_Name_Paycom_Census_Data_Audit_<Current Date>
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            out_name = f"Client_Name_Paycom_Census_Data_Audit_{today_str}.xlsx"
-
-            st.download_button(
-                label="Download Report (.xlsx)",
-                data=report_bytes,
-                file_name=out_name,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-            )
-        except Exception as e:
-            st.error(f"Failed: {e}")
-
-def render_ui_v2():
-    st.title(APP_TITLE)
-    st.markdown("""
-    **Instructions**:
     1. Upload **Uzio Census Export** (.xlsm).
     2. Upload **Paycom Census Export** (.csv or .xlsx).
     
@@ -852,4 +811,4 @@ def render_ui_v2():
 
 if __name__ == "__main__":
     st.set_page_config(page_title=APP_TITLE, layout="centered", initial_sidebar_state="collapsed")
-    render_ui_v2()
+    render_ui()

@@ -50,6 +50,17 @@ def norm_money(x):
     except:
         return 0.0
 
+def norm_id(x):
+    """Normalize Employee ID: strip float .0 and pad to 4 digits if numeric."""
+    if x is None: return ""
+    s = str(x).strip()
+    if s.endswith(".0"): 
+        s = s[:-2]
+    # Pad to 4 digits if it's a number and < 4 length (e.g. '1' -> '0001')
+    if s.isdigit() and len(s) < 4:
+        return s.zfill(4)
+    return s
+
 # Paycom uses numeric type codes; map them to human-readable names
 _TYPE_CODE_MAP = {
     "22": "checking",
@@ -155,7 +166,7 @@ def run_audit(uzio_file, paycom_file):
     uzio_map = {}
     
     for idx, row in df_uzio.iterrows():
-        emp_id = norm_str(row.get(col_map["EmpID"]))
+        emp_id = norm_id(row.get(col_map["EmpID"]))
         if not emp_id: continue
         
         acc = {
@@ -182,7 +193,7 @@ def run_audit(uzio_file, paycom_file):
     pc_empid_col = next((c for c in df_paycom.columns if "Employee_Code" in c or "Emp Code" in c), "Employee_Code")
 
     for idx, row in df_paycom.iterrows():
-        emp_id = norm_str(row.get(pc_empid_col))
+        emp_id = norm_id(row.get(pc_empid_col))
         if not emp_id: continue
 
         # --- Extract Distributions (1 to 8) FIRST, so we can sum percents ---

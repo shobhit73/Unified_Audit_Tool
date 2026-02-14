@@ -89,7 +89,7 @@ def render_ui():
     with col1:
         uzio_file = st.file_uploader("Allowed Uzio Export (.xlsx)", type=["xlsx", "xlsm"])
     with col2:
-        paycom_file = st.file_uploader("Allowed Paycom Export (.csv, .xlsx)", type=["csv", "xlsx"])
+        paycom_file = st.file_uploader("Allowed Paycom Census Export (.xlsx)", type=["xlsx"])
 
     run_btn = st.button("Run Audit", type="primary", disabled=(not uzio_file or not paycom_file))
 
@@ -119,15 +119,9 @@ def run_audit(uzio_file, paycom_file):
     # Uzio Raw: Skip first row (header=1)
     df_uzio = pd.read_excel(uzio_file, header=1, dtype=str)
     
-    # Paycom: CSV or Excel
+    # Paycom: Census Export (.xlsx)
     try:
-        if paycom_file.name.endswith('.csv'):
-             try:
-                df_paycom = pd.read_csv(paycom_file, dtype=str)
-             except:
-                df_paycom = pd.read_csv(paycom_file, dtype=str, encoding='latin1')
-        else:
-            df_paycom = pd.read_excel(paycom_file, dtype=str)
+        df_paycom = pd.read_excel(paycom_file, dtype=str)
     except Exception as e:
         raise ValueError(f"Error reading Paycom file: {e}")
 

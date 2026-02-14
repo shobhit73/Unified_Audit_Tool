@@ -171,7 +171,7 @@ def run_audit(uzio_file, paycom_file):
         if not emp_id: continue
         
         acc = {
-            "Routing": norm_digits(row.get(col_map["Routing"])),
+            "Routing": norm_digits(row.get(col_map["Routing"])).lstrip("0"),
             "Account": norm_digits(row.get(col_map["Account"])).lstrip("0"),
             "Type": norm_str(row.get(col_map["Type"])),
             "Percent": norm_money(row.get(col_map["Percent"])),
@@ -192,33 +192,78 @@ def run_audit(uzio_file, paycom_file):
     df_paycom.columns = [str(c).strip() for c in df_paycom.columns]
     
     pc_empid_col = next((c for c in df_paycom.columns if "Employee_Code" in c or "Emp Code" in c), "Employee_Code")
-
-    # Helper to resolve Paycom ID (int/str) to Uzio ID (str)
-    # Tries: Exact -> Pad 3 -> Pad 4 -> Pad 5
-    def resolve_paycom_id(raw_val, candidates):
-        if pd.isna(raw_val): return None
-        s = str(raw_val).strip()
-        if s.endswith(".0"): s = s[:-2]
+    
+    # Identify Name Columns in Paycom for validation
+    # Pria Paycom Cenus.xlsx has: Legal_Firstname, Legal_Lastname, Legal_Middle_Name
+    # HR Report (Uzio) has: Full Name
+    
+    pc_first_col = next((c for c in df_paycom.columns if "Firstname" in c or "First Name" in c), "")
+    pc_last_col = next((c for c in df_paycom.columns if "Lastname" in c or "Last Name" in c), "")
+    
+    # Helper to resolve Paycom ID with Name Validation
+    def resolve_paycom_id(raw_id, raw_name_parts, uzio_data):
+        if pd.isna(raw_id): return None
+        s_id = str(raw_id).strip()
+        if s_id.endswith(".0"): s_id = s_id[:-2]
         
-        # 1. Exact Match
-        if s in candidates: return s
+        candidates_to_try = []
+        # 1. Exact
+        candidates_to_try.append(s_id)
+        # 2. Padded (3, 4, 5)
+        for w in [3, 4, 5]:
+            padded = s_id.zfill(w)
+            if padded not in candidates_to_try:
+                candidates_to_try.append(padded)
         
-        # 2. Pad with zeros (up to 5 digits coverage)
-        for width in [3, 4, 5]:
-            padded = s.zfill(width)
-            if padded in candidates:
-                return padded
+        # Filter to only existing Uzio keys
+        valid_candidates = [c for c in candidates_to_try if c in uzio_data]
+        
+        if not valid_candidates:
+            return s_id.zfill(4) # Fallback if absolutely no match found
+            
+        # If only 1 candidate, return it (simple case)
+        if len(valid_candidates) == 1:
+            return valid_candidates[0]
+            
+        # COLLISION: Multiple candidates found (e.g. '001' and '0001')
+        # Use Name Matching to decide
+        # Paycom Name Parts
+        pc_lowers = [str(p).lower().strip() for p in raw_name_parts if p and not pd.isna(p)]
+        
+        best_match = valid_candidates[0] # Default to first if name match fails
+        best_score = -1
+        
+        for cand in valid_candidates:
+            # Get Uzio Name
+            # uzio_data[cand] is a list of account dicts. All should have same name.
+            u_entries = uzio_data[cand]
+            if not u_entries: continue
+            u_name = u_entries[0]["Name"].lower()
+            
+            score = 0
+            # Check if Paycom parts (First, Last) appear in Uzio Full Name
+            for part in pc_lowers:
+                if part in u_name:
+                    score += 1
+            
+            if score > best_score:
+                best_score = score
+                best_match = cand
                 
-        # 3. If no match found, default to padded 4 (standard convention) or raw?
-        # User requested 4-digit padding context.
-        return s.zfill(4)
+        return best_match
 
     uzio_keys = set(uzio_map.keys())
 
     for idx, row in df_paycom.iterrows():
         raw_id = row.get(pc_empid_col)
-        # Smart Resolve
-        emp_id = resolve_paycom_id(raw_id, uzio_keys)
+        
+        # Get Name parts for validation
+        name_parts = []
+        if pc_first_col: name_parts.append(row.get(pc_first_col))
+        if pc_last_col: name_parts.append(row.get(pc_last_col))
+        
+        # Smart Resolve with Name
+        emp_id = resolve_paycom_id(raw_id, name_parts, uzio_map)
         
         if not emp_id: continue
 
@@ -230,7 +275,7 @@ def run_audit(uzio_file, paycom_file):
         for i in range(1, 9):
             prefix = f"Dist_{i}_"
             d_acc = norm_digits(row.get(f"{prefix}Acct_Code")).lstrip("0")
-            d_rout = norm_digits(row.get(f"{prefix}Rout_Code"))
+            d_rout = norm_digits(row.get(f"{prefix}Rout_Code")).lstrip("0")
             
             # Extract Amount/Percent always (even if no account, e.g. Check/Cash)
             raw_amt = row.get(f"{prefix}Amount")
@@ -287,7 +332,8 @@ def run_audit(uzio_file, paycom_file):
 
         # --- Extract NET Pay Account (remainder after distributions) ---
         net_acc = norm_digits(row.get("Net_Acct_Code")).lstrip("0")
-        net_rout = norm_digits(row.get("Net_Rout_Code"))
+        net_rout = norm_digits(row.get("Net_Rout_Code")).lstrip("0")
+        
         if net_acc or net_rout:
              p_type = row.get("Net_Type_Code")
              

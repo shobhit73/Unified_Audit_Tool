@@ -54,8 +54,8 @@ def read_uzio_raw_file(uploaded_file):
         # Read Excel - header=3 means 4th row is header
         df = pd.read_excel(uploaded_file, sheet_name='Employee Details', header=3)
         
-        # Strip whitespace from columns
-        df.columns = df.columns.str.strip()
+        # Strip whitespace and replace newlines/multiple spaces with single space
+        df.columns = df.columns.astype(str).str.replace(r'\s+', ' ', regex=True).str.strip()
         
         # Rename columns based on mapping
         # Only rename columns that exist in the mapping

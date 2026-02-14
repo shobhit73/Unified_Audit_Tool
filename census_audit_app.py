@@ -862,7 +862,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             len(uzio_keys - adp_keys),
             len(adp_keys - uzio_keys),
             len(mapped_fields),
-            mapping_missing_adp_col.shape[0],
+            len(mapping_missing_adp_col),
             comparison_detail.shape[0],
             mismatches_only.shape[0],
             len(flsa_rows),

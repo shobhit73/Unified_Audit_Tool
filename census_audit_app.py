@@ -1,4 +1,3 @@
-# app.py
 import io
 import re
 from datetime import datetime, date
@@ -6,30 +5,58 @@ from datetime import datetime, date
 import numpy as np
 import pandas as pd
 import streamlit as st
+from audit_utils import read_uzio_raw_file
 
 # =========================================================
 # Data_Audit_Tool (Streamlit)
-# - User uploads Excel workbook (.xlsx)
-# - No table previews on UI
-# - No sidebar / left panel
-# - Generates Excel report and provides download button
-#
-# OUTPUT TABS:
-#   - Summary
-#   - Field_Summary_By_Status   (Columns G,H,I removed)
-#   - Comparison_Detail_AllFields
-#
-# Removed sheets from output report:
-#   - Mismatches_Only
-#   - Mapping_ADP_Col_Missing
+# - User uploads Raw Uzio Export (.xlsm) and Raw ADP Export (.xlsx)
+# - Hardcoded column mappings
 # =========================================================
 
 APP_TITLE = "Census ADP and Uzio Data Review Tool"
-# OUTPUT_FILENAME will be generated dynamically
 
-UZIO_SHEET = "Uzio Data"
-ADP_SHEET = "ADP Data"
-MAP_SHEET = "Mapping Sheet"
+# Hardcoded Mapping: Internal Standard Name -> ADP Column Name
+ADP_FIELD_MAP = {
+    'Employee ID': 'Associate ID',
+    'First Name': 'Legal First Name',
+    'Last Name': 'Legal Last Name',
+    'Middle Initial': 'Legal Middle Name',
+    'Employment Status': 'Position Status',
+    'Hire Date': 'Hire/Rehire Date',  # Mapping says Hire/Rehire Date
+    'Original Hire Date': 'Hire Date',
+    'Termination Date': 'Termination Date',
+    'Termination Reason': 'Termination Reason Description',
+    'Pay Type': 'Regular Pay Rate Description',
+    'Annual Salary': 'Annual Salary',
+    'Hourly Pay Rate': 'Regular Pay Rate Amount',
+    'Working Hours': 'Working Hours Per Week',
+    'Job Title': 'Job Title Description',
+    'Department': 'Department Description',
+    'Work Email': 'Work Contact: Work Email',
+    'Personal Email': 'Personal Contact: Personal Email',
+    'Phone Number': 'Personal Contact: Personal Mobile',
+    'SSN': 'Tax ID (SSN)',
+    'DOB': 'Birth Date',
+    'Gender': 'Gender (Self-ID)',
+    'Tobacco User': 'Tobacco User',
+    'FLSA Classification': 'FLSA Classification',
+    'Address Line 1': 'Primary Address: Address Line 1',
+    'Address Line 2': 'Primary Address: Address Line 2',
+    'City': 'Primary Address: City',
+    'Zip': 'Legal / Preferred Address: Zip / Postal Code',
+    'State': 'Primary Address: State / Province / Territory Code',
+    'Mailing Address Line 1': 'Legal / Preferred Address: Address Line 1',
+    'Mailing Address Line 2': 'Legal / Preferred Address: Address Line 2',
+    'Mailing City': 'Legal / Preferred Address: City',
+    'Mailing Zip': 'Legal / Preferred Address: Zip / Postal Code',
+    'Mailing State': 'Legal / Preferred Address: State / Territory Code',
+    # Additional
+    'Reports To ID': 'Reports To Associate ID',
+    'Protected Veteran Status': 'Protected Veteran Status',
+    'EEO Job Category': 'EEO Job Category EEO Job Classifcation',
+    'Ethnicity': 'Ethnicity', # Mapping says Race/Ethnicity -> Ethnicity
+    'SOC Code': 'SOC Code'
+}
 
 # ---------- Helpers ----------
 def norm_colname(c: str) -> str:
@@ -310,44 +337,41 @@ def normalize_paytype_for_compare(x) -> str:
     return s
 
 # ---------- Core compare ----------
-def run_comparison(file_bytes: bytes) -> bytes:
-    xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
+def run_comparison(uzio_file, adp_file) -> bytes:
+    # 1. Read UZIO Raw
+    uzio = read_uzio_raw_file(uzio_file)
+    if uzio is None:
+        raise ValueError("Failed to read Uzio file.")
 
-    uzio = pd.read_excel(xls, sheet_name=UZIO_SHEET, dtype=str)
-    adp = pd.read_excel(xls, sheet_name=ADP_SHEET, dtype=str)
-    mapping = pd.read_excel(xls, sheet_name=MAP_SHEET, dtype=str)
+    # 2. Read ADP Raw
+    try:
+        if adp_file.name.lower().endswith('.csv'):
+             adp = pd.read_csv(adp_file, dtype=str)
+        else:
+             adp = pd.read_excel(adp_file, dtype=str)
+    except Exception as e:
+        raise ValueError(f"Failed to read ADP file: {e}")
 
-    uzio.columns = [norm_colname(c) for c in uzio.columns]
+    # Normalize ADP columns
     adp.columns = [norm_colname(c) for c in adp.columns]
-    mapping.columns = [norm_colname(c) for c in mapping.columns]
 
-    if "Uzio Coloumn" not in mapping.columns or "ADP Coloumn" not in mapping.columns:
-        raise ValueError("Mapping sheet must contain columns: 'Uzio Coloumn' and 'ADP Coloumn'")
-
-    mapping["Uzio Coloumn"] = mapping["Uzio Coloumn"].map(norm_colname)
-    mapping["ADP Coloumn"] = mapping["ADP Coloumn"].map(norm_colname)
-
-    mapping_valid = mapping.dropna(subset=["Uzio Coloumn", "ADP Coloumn"]).copy()
-    mapping_valid = mapping_valid[(mapping_valid["Uzio Coloumn"] != "") & (mapping_valid["ADP Coloumn"] != "")]
-    mapping_valid = mapping_valid.drop_duplicates(subset=["Uzio Coloumn"], keep="first").copy()
-
-    key_row = mapping_valid[mapping_valid["Uzio Coloumn"].str.contains("Employee ID", case=False, na=False)]
-    if len(key_row) == 0:
-        raise ValueError("Mapping sheet must include UZIO 'Employee ID' mapped to ADP key (usually 'Associate ID').")
-
-    UZIO_KEY = key_row.iloc[0]["Uzio Coloumn"]
-    ADP_KEY = key_row.iloc[0]["ADP Coloumn"]
-
+    # 3. Apply Mapping Strategy
+    # UZIO columns are already standard (e.g. 'First Name')
+    # ADP columns need to be looked up via ADP_FIELD_MAP
+    
+    # Verify Keys exist
+    UZIO_KEY = 'Employee ID'
     if UZIO_KEY not in uzio.columns:
-        raise ValueError(f"UZIO key column '{UZIO_KEY}' not found in Uzio Data tab.")
+         raise ValueError(f"Required column '{UZIO_KEY}' not found in Uzio file.")
+    
+    ADP_KEY = norm_colname(ADP_FIELD_MAP.get('Employee ID', 'Associate ID'))
     if ADP_KEY not in adp.columns:
-        raise ValueError(f"ADP key column '{ADP_KEY}' not found in ADP Data tab.")
+         raise ValueError(f"Required column '{ADP_KEY}' not found in ADP file.")
 
+    # Normalize Keys
     uzio[UZIO_KEY] = norm_emp_key_series(uzio[UZIO_KEY])
     adp[ADP_KEY] = norm_emp_key_series(adp[ADP_KEY])
 
-    uzio[UZIO_KEY] = norm_emp_key_series(uzio[UZIO_KEY])
-    adp[ADP_KEY] = norm_emp_key_series(adp[ADP_KEY])
 
     # NEW: Deduplicate ADP Data based on user logic
     def deduplicate_adp(df: pd.DataFrame, key_col: str) -> pd.DataFrame:
@@ -468,36 +492,27 @@ def run_comparison(file_bytes: bytes) -> bytes:
     uzio_idx = uzio.set_index(UZIO_KEY, drop=False)
     adp_idx = adp.set_index(ADP_KEY, drop=False)
 
-    uz_to_adp = dict(zip(mapping_valid["Uzio Coloumn"], mapping_valid["ADP Coloumn"]))
-    mapped_fields = [f for f in mapping_valid["Uzio Coloumn"].tolist() if f != UZIO_KEY]
+    uz_to_adp = {k: norm_colname(v) for k, v in ADP_FIELD_MAP.items()}
+    mapped_fields = [f for f in ADP_FIELD_MAP.keys() if f != UZIO_KEY] # Internal Standard Keys
 
-    mapping_missing_adp_col = mapping_valid[~mapping_valid["ADP Coloumn"].isin(adp.columns)].copy()
+    # Identify fields missing in ADP
+    # We check if the mapped ADP column exists in adp df
+    mapping_missing_adp_col = [] # List of fields
 
-    # Employment Status column (UZIO)
-    uzio_employment_status_col = None
-    for c in uzio.columns:
-        if norm_colname(c).casefold() == "employment status":
-            uzio_employment_status_col = c
-            break
-    if uzio_employment_status_col is None:
-        for c in uzio.columns:
-            cc = norm_colname(c).casefold()
-            if "employment" in cc and "status" in cc:
-                uzio_employment_status_col = c
-                break
-
+    # Employment Status column (UZIO) - It is 'Employment Status' standard
+    uzio_employment_status_col = 'Employment Status'
+    
     def get_uzio_employment_status(emp_id: str) -> str:
-        if uzio_employment_status_col is None:
-            return ""
-        if emp_id in uzio_idx.index and uzio_employment_status_col in uzio_idx.columns:
+        if uzio_employment_status_col not in uzio_idx.columns:
+             return ""
+        if emp_id in uzio_idx.index:
             v = uzio_idx.at[emp_id, uzio_employment_status_col]
             return "" if norm_blank(v) == "" else str(v)
         return ""
 
     # Pay Type mapping (prefer ADP)
-    paytype_row = mapping_valid[mapping_valid["Uzio Coloumn"].str.contains(r"\bpay\s*type\b", case=False, na=False)]
-    UZIO_PAYTYPE_COL = paytype_row.iloc[0]["Uzio Coloumn"] if len(paytype_row) else None
-    ADP_PAYTYPE_COL  = paytype_row.iloc[0]["ADP Coloumn"]  if len(paytype_row) else None
+    UZIO_PAYTYPE_COL = 'Pay Type'
+    ADP_PAYTYPE_COL = norm_colname(ADP_FIELD_MAP.get('Pay Type', ''))
 
     def get_employee_pay_type(emp_id: str, adp_exists: bool, uz_exists: bool) -> str:
         if ADP_PAYTYPE_COL and adp_exists and (ADP_PAYTYPE_COL in adp_idx.columns):
@@ -511,36 +526,12 @@ def run_comparison(file_bytes: bytes) -> bytes:
         return ""
 
     # ---------- FLSA Classification column (Uzio) ----------
-    uzio_flsa_col = None
-    for c in uzio.columns:
-        if "flsa" in norm_colname(c).casefold():
-            uzio_flsa_col = c
-            break
+    # Standard name is 'FLSA Classification'
+    uzio_flsa_col = 'FLSA Classification'
 
     # Also locate employee name columns in Uzio for context in FLSA report
-    uzio_fname_col = None
-    uzio_lname_col = None
-    for c in uzio.columns:
-        cl = norm_colname(c).casefold()
-        if cl in {"first name", "firstname", "first_name"}:
-            uzio_fname_col = c
-        elif cl in {"last name", "lastname", "last_name"}:
-            uzio_lname_col = c
-    # Fallback: search for any column containing 'first' + 'name' / 'last' + 'name'
-    if uzio_fname_col is None:
-        for c in uzio.columns:
-            cl = norm_colname(c).casefold()
-            if "first" in cl and "name" in cl:
-                uzio_fname_col = c
-                break
-    if uzio_lname_col is None:
-        for c in uzio.columns:
-            cl = norm_colname(c).casefold()
-            if "last" in cl and "name" in cl:
-                uzio_lname_col = c
-                break
-
-    # ---------- Build FULL comparison ----------
+    uzio_fname_col = 'First Name'
+    uzio_lname_col = 'Last Name'
     rows = []
     for emp_id in all_keys:
         uz_exists = emp_id in uzio_idx.index

@@ -6,42 +6,52 @@ from datetime import datetime, date
 import numpy as np
 import pandas as pd
 import streamlit as st
+from audit_utils import read_uzio_raw_file
 
 # =========================================================
 # Paycom vs UZIO – Census Audit Tool
-# INPUT workbook tabs (single file):
-#   - Uzio Data
-#   - Paycom Data
-#   - Mapping Sheet   (UZIO Column -> Paycom Column)
-#
-# OUTPUT workbook tabs:
-#   - Summary
-#   - Field_Summary_By_Status
-#   - Comparison_Detail_AllFields
-#
-# Key rules included:
-#   ✅ Dates compare as DATE (ignore time part)
-#   ✅ Termination Reason: voluntary/involuntary keyword logic + UZIO=Other => OK
-#   ✅ Pay Type: UZIO "Salaried" == Paycom "Salary" => OK
-#   ✅ Suffix: Jr. == JR => OK
-#   ✅ Employment Type: Full Time == Full-Time => OK
-#   ✅ Middle initial: UZIO first letter matches Paycom full middle name => OK
-#   ✅ Employment Status: Paycom "On Leave" treated as "Active" => OK
-#   ✅ Numerics: 150000.00 == 150000, 80.0 == 80 => OK (tolerance compare)
-#
-# Pay Type driven ignores (IMPORTANT):
-#   ✅ If employee is HOURLY: ignore Annual Salary fields (UZIO blank is OK)
-#   ✅ If employee is SALARIED: ignore Hourly Pay Rate AND Working Hours per Week
-#      (UZIO leaves these blank => should be OK, not UZIO_MISSING_VALUE)
-#
-# Adds extra output column: "Employment Status" right after "Field"
+# - User uploads Raw Uzio Export (.xlsm) and Raw Paycom Export (.csv)
+# - Hardcoded mappings
 # =========================================================
 
 APP_TITLE = "Paycom Uzio Census Audit Tool"
 
-UZIO_SHEET_CANDIDATES = ["Uzio Data", "UZIO Data", "Uzio", "UZIO"]
-PAYCOM_SHEET_CANDIDATES = ["Paycom Data", "PAYCOM Data", "Paycom", "PAYCOM"]
-MAP_SHEET_CANDIDATES = ["Mapping Sheet", "Mapping", "Mapping_Sheet", "MappingSheet"]
+# Hardcoded Mapping: Internal Standard Name -> Paycom Column Name
+PAYCOM_FIELD_MAP = {
+    'Employee ID': 'Employee_Code',
+    'First Name': 'Legal_Firstname',
+    'Last Name': 'Legal_Lastname',
+    'Middle Initial': 'Legal_Middle_Name',
+    'Employment Status': 'Employee_Status',
+    'Hire Date': 'Most_Recent_Hire_Date',
+    'Original Hire Date': 'Most_Recent_Hire_Date', # Fallback to Most Recent if Original not found? Mapping said Original DOH -> Hire_Date but we found none.
+    'Termination Date': 'Termination_Date',
+    'Termination Reason': 'Termination_Reason', # Verify if this column exists? Inspection didn't show it explicitly in 0-238? Wait.
+    'Pay Type': 'Pay_Type',
+    'Annual Salary': 'Rate_1',
+    'Hourly Pay Rate': 'Rate_1',
+    'Working Hours': 'Scheduled_Pay_Period_Hours',
+    'Job Title': 'Position',
+    'Department': 'Department',
+    'Work Email': 'Work_Email',
+    'Personal Email': 'Personal_Email',
+    'Phone Number': 'Primary_Phone',
+    'SSN': 'SS_Number',
+    'DOB': 'Birth_Date_(MM/DD/YYYY)',
+    'Gender': 'Gender',
+    'Tobacco User': 'Tobacco_User',
+    'FLSA Classification': 'Exempt_Status',
+    'Address Line 1': 'Primary_Address_Line_1',
+    'Address Line 2': 'Primary_Address_Line_2',
+    'City': 'Primary_City/Municipality',
+    'Zip': 'Primary_Zip/Postal_Code',
+    'State': 'Primary_State/Province',
+    'Mailing Address Line 1': 'Mailing_Address_Line_1',
+    'Mailing Address Line 2': 'Mailing_Address_Line_2',
+    'Mailing City': 'Mailing_City/Municipality',
+    'Mailing Zip': 'Mailing_Zip/Postal_Code',
+    'Mailing State': 'Mailing_State/Province'
+}
 
 # ---------- Helpers ----------
 def norm_colname(c: str) -> str:
@@ -361,42 +371,37 @@ def normalized_compare(field_name: str, uzio_val, paycom_val) -> bool:
     return normalize_space_and_case(uzio_val) == normalize_space_and_case(paycom_val)
 
 # ---------- Core comparison ----------
-def run_comparison(file_bytes: bytes) -> bytes:
-    xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
+def run_comparison(uzio_file, paycom_file) -> bytes:
+    # 1. Read UZIO Raw
+    uzio = read_uzio_raw_file(uzio_file)
+    if uzio is None:
+        raise ValueError("Failed to read Uzio file.")
 
-    uzio_sheet = resolve_sheet_name(xls, UZIO_SHEET_CANDIDATES)
-    paycom_sheet = resolve_sheet_name(xls, PAYCOM_SHEET_CANDIDATES)
-    map_sheet = resolve_sheet_name(xls, MAP_SHEET_CANDIDATES)
+    # 2. Read Paycom Raw
+    try:
+        # Determine encoding or engine
+        if paycom_file.name.lower().endswith('.csv'):
+             try:
+                 paycom = pd.read_csv(paycom_file, dtype=str)
+             except UnicodeDecodeError:
+                 paycom_file.seek(0)
+                 paycom = pd.read_csv(paycom_file, dtype=str, encoding='latin1')
+        else:
+             paycom = pd.read_excel(paycom_file, dtype=str)
+    except Exception as e:
+        raise ValueError(f"Failed to read Paycom file: {e}")
 
-    if uzio_sheet is None:
-        raise ValueError("UZIO sheet not found. Expected a tab like 'Uzio Data'.")
-    if paycom_sheet is None:
-        raise ValueError("Paycom sheet not found. Expected a tab like 'Paycom Data'.")
-    if map_sheet is None:
-        raise ValueError("Mapping sheet not found. Expected a tab like 'Mapping Sheet' or 'Mapping'.")
-
-    uzio = pd.read_excel(xls, sheet_name=uzio_sheet, dtype=str)
-    paycom = pd.read_excel(xls, sheet_name=paycom_sheet, dtype=str)
-
-    uzio.columns = [norm_colname(c) for c in uzio.columns]
+    # Normalize Paycom columns
     paycom.columns = [norm_colname(c) for c in paycom.columns]
 
-    # keys (robust)
-    UZIO_KEY = find_col(
-        uzio.columns,
-        "Employee ID", "EmployeeID", "Employee Id", "Employee",
-        "Employee_Code", "Employee Code"
-    )
-    if UZIO_KEY is None:
-        raise ValueError("UZIO key column not found (expected 'Employee ID'/'Employee'/'Employee_Code').")
+    # Verify Keys
+    UZIO_KEY = 'Employee ID'
+    if UZIO_KEY not in uzio.columns:
+        raise ValueError(f"Required column '{UZIO_KEY}' not found in Uzio file.")
 
-    PAYCOM_KEY = find_col(
-        paycom.columns,
-        "Employee_Code", "Employee Code",
-        "Employee ID", "EmployeeID", "Employee Id", "Employee"
-    )
-    if PAYCOM_KEY is None:
-        raise ValueError("Paycom key column not found (expected 'Employee_Code'/'Employee ID'/'Employee').")
+    PAYCOM_KEY = norm_colname(PAYCOM_FIELD_MAP.get('Employee ID', 'Employee_Code'))
+    if PAYCOM_KEY not in paycom.columns:
+        raise ValueError(f"Required column '{PAYCOM_KEY}' not found in Paycom file.")
 
     # --- DISPLAY ID: preserve original leading-zero IDs for output ---
     # Before normalizing, save original keys to build a display map
@@ -421,13 +426,14 @@ def run_comparison(file_bytes: bytes) -> bytes:
         if n and (n not in display_id_map or len(o) > len(display_id_map[n])):
             display_id_map[n] = o
 
-    # mapping sheet
-    mapping = read_mapping_sheet(xls, map_sheet, list(paycom.columns))
-    mapping = mapping[mapping["PAYCOM_Resolved_Column"] != ""].copy()
+    # Prepare mapping iteration
+    # Iterate over PAYCOM_FIELD_MAP keys (Internal Standard Names usually match Uzio columns)
+    # Filter out Keys
+    mapped_fields = [f for f in PAYCOM_FIELD_MAP.keys() if f != UZIO_KEY]
 
     # employment status context map (prefer UZIO)
-    uzio_emp_status_col = find_col(uzio.columns, "Employment Status")
-    paycom_emp_status_col = find_col(paycom.columns, "Employment Status")
+    uzio_emp_status_col = 'Employment Status'
+    paycom_emp_status_col = norm_colname(PAYCOM_FIELD_MAP.get('Employment Status', ''))
 
     uzio_status_map = {}
     if uzio_emp_status_col is not None:
@@ -441,7 +447,7 @@ def run_comparison(file_bytes: bytes) -> bytes:
                 uzio_status_map[eid] = str(v)
 
     paycom_status_map = {}
-    if paycom_emp_status_col is not None:
+    if paycom_emp_status_col in paycom.columns:
         tmp = paycom[[PAYCOM_KEY, paycom_emp_status_col]].copy()
         tmp[paycom_emp_status_col] = tmp[paycom_emp_status_col].map(norm_blank)
         tmp = tmp[tmp[PAYCOM_KEY] != ""]
@@ -460,11 +466,11 @@ def run_comparison(file_bytes: bytes) -> bytes:
         return ""
 
     # pay type map (prefer UZIO)
-    uzio_pay_type_col = find_col(uzio.columns, "Pay Type")
-    paycom_pay_type_col = find_col(paycom.columns, "Pay Type")
+    uzio_pay_type_col = 'Pay Type'
+    paycom_pay_type_col = norm_colname(PAYCOM_FIELD_MAP.get('Pay Type', ''))
 
     pay_type_map = {}
-    if uzio_pay_type_col is not None:
+    if uzio_pay_type_col in uzio.columns:
         tmp = uzio[[UZIO_KEY, uzio_pay_type_col]].copy()
         tmp[uzio_pay_type_col] = tmp[uzio_pay_type_col].map(norm_blank)
         tmp = tmp[tmp[UZIO_KEY] != ""]
@@ -474,7 +480,7 @@ def run_comparison(file_bytes: bytes) -> bytes:
             if eid and norm_blank(v) != "" and eid not in pay_type_map:
                 pay_type_map[eid] = canonical_pay_type(v)
 
-    if paycom_pay_type_col is not None:
+    if paycom_pay_type_col in paycom.columns:
         tmp = paycom[[PAYCOM_KEY, paycom_pay_type_col]].copy()
         tmp[paycom_pay_type_col] = tmp[paycom_pay_type_col].map(norm_blank)
         tmp = tmp[tmp[PAYCOM_KEY] != ""]
@@ -498,24 +504,11 @@ def run_comparison(file_bytes: bytes) -> bytes:
             paycom_idx[e] = i
 
     # ---------- FLSA Classification column (Uzio) ----------
-    uzio_flsa_col = find_col(uzio.columns, "FLSA Classification", "FLSA_Classification", "FLSA")
+    uzio_flsa_col = 'FLSA Classification'
 
     # Also locate employee name columns in Uzio for context in FLSA report
-    uzio_fname_col = find_col(uzio.columns, "First Name", "FirstName", "First_Name")
-    uzio_lname_col = find_col(uzio.columns, "Last Name", "LastName", "Last_Name")
-    # Fallback: search for any column containing 'first' + 'name' / 'last' + 'name'
-    if uzio_fname_col is None:
-        for c in uzio.columns:
-            cl = norm_colname(c).casefold()
-            if "first" in cl and "name" in cl:
-                uzio_fname_col = c
-                break
-    if uzio_lname_col is None:
-        for c in uzio.columns:
-            cl = norm_colname(c).casefold()
-            if "last" in cl and "name" in cl:
-                uzio_lname_col = c
-                break
+    uzio_fname_col = 'First Name'
+    uzio_lname_col = 'Last Name'
 
     all_emps = sorted(set(uzio_idx.keys()).union(set(paycom_idx.keys())))
 
@@ -527,9 +520,12 @@ def run_comparison(file_bytes: bytes) -> bytes:
         emp_status_context = get_emp_status(eid)
         emp_pay_type = pay_type_map.get(eid, "")
 
-        for _, mr in mapping.iterrows():
-            uz_field = mr["UZIO_Column"]
-            pc_col = mr["PAYCOM_Resolved_Column"]
+        for field in mapped_fields:
+            uz_field = field # Internal Standard Name
+            pc_col_raw = PAYCOM_FIELD_MAP.get(field)
+            if not pc_col_raw:
+                continue
+            pc_col = norm_colname(pc_col_raw)
 
             uz_missing_row = (u_i is None)
             pc_missing_row = (p_i is None)
@@ -762,7 +758,7 @@ def run_comparison(file_bytes: bytes) -> bytes:
                 len(paycom_emps - uzio_emps),
                 int(len(uzio)),
                 int(len(paycom)),
-                int(mapping.shape[0]),
+                int(len(PAYCOM_FIELD_MAP)),
                 int(comparison_detail.shape[0]),
                 len(flsa_rows),
                 len(active_missing_rows),
@@ -822,6 +818,38 @@ def render_ui():
         except Exception as e:
             st.error(f"Failed: {e}")
 
+def render_ui_v2():
+    st.title(APP_TITLE)
+    st.markdown("""
+    **Instructions**:
+    1. Upload **Uzio Census Export** (.xlsm).
+    2. Upload **Paycom Census Export** (.csv or .xlsx).
+    
+    **Output Reports**:
+    - **Comparison**: Discrepancies between Uzio and Paycom.
+    - **FLSA_Compliance_Issues**: Invalid Pay Type/FLSA Classification.
+    - **Active_Missing_In_Uzio**: Active employees in Paycom not found in Uzio.
+    """)
+
+    uzio_file = st.file_uploader("Upload Uzio Census Export (.xlsm)", type=["xlsm"])
+    paycom_file = st.file_uploader("Upload Paycom Census Export (.csv or .xlsx)", type=["csv", "xlsx"])
+
+    if st.button("Run Audit", type="primary", disabled=(not uzio_file or not paycom_file)):
+        try:
+            with st.spinner("Running audit..."):
+                out_excel = run_comparison(uzio_file, paycom_file)
+            st.success("Audit Complete!")
+            st.download_button(
+                label="Download Audit Report",
+                data=out_excel,
+                file_name=f"Paycom_Census_Audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except Exception as e:
+            st.error(f"Error during audit: {e}")
+            # Add error logging logic here if requested
+            print(f"ERROR: {e}")
+
 if __name__ == "__main__":
     st.set_page_config(page_title=APP_TITLE, layout="centered", initial_sidebar_state="collapsed")
-    render_ui()
+    render_ui_v2()

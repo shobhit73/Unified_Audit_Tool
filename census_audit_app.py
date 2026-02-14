@@ -481,6 +481,13 @@ def run_comparison(uzio_file, adp_file) -> bytes:
     # Apply the new deduplication
     adp = deduplicate_adp(adp, ADP_KEY)
     
+    # DEBUG: Show user what we read for Status
+    if 'Position Status' in adp.columns:
+        st.write("DEBUG: ADP Data Head (Position Status):")
+        st.write(adp[['Associate ID', 'Position Status']].head())
+    else:
+        st.error("DEBUG: 'Position Status' column NOT FOUND in ADP data!")
+    
     # Old simple drop (keep unique) - technically redundant but safe as backup for Uzio
     uzio = uzio.drop_duplicates(subset=[UZIO_KEY], keep="first").copy()
     # adp = adp.drop_duplicates(subset=[ADP_KEY], keep="first").copy() # Replaced by above

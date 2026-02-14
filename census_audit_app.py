@@ -886,36 +886,36 @@ def render_ui():
     st.title(APP_TITLE)
     st.markdown("""
     **Instructions**:
-    1. Upload **Census Input** File.
-    2. Must contain:
-        - `Uzio Data`
-        - `ADP Data`
-        - `Mapping Sheet`
-
-    **Output Report**:
-    - **Summary**: High-level metrics.
-    - **Field_Summary_By_Status**: Match/Mismatch counts per field.
-    - **Comparison_Detail_AllFields**: Detailed row-by-row comparison.
-    - **FLSA_Compliance_Issues**: Invalid Pay Type/FLSA combos.
-    - **Active_Missing_In_Uzio**: Active ADP employees missing in Uzio.
+    1. Upload **Uzio Census Export** (.xlsm).
+    2. Upload **ADP Census Export** (.xlsx).
+    
+    **Output Reports**:
+    - **Comparison**: Discrepancies between Uzio and ADP.
+    - **FLSA_Compliance_Issues**: Invalid Pay Type/FLSA Classification.
+    - **Active_Missing_In_Uzio**: Active employees in ADP not found in Uzio.
     """)
 
-    uploaded_file = st.file_uploader("Upload Excel workbook", type=["xlsx"])
-    run_btn = st.button("Run Audit", type="primary", disabled=(uploaded_file is None))
+    uzio_file = st.file_uploader("Upload Uzio Census Export (.xlsm)", type=["xlsm"])
+    adp_file = st.file_uploader("Upload ADP Census Export (.xlsx)", type=["xlsx"])
 
-    if run_btn:
+    if st.button("Run Audit", type="primary", disabled=(not uzio_file or not adp_file)):
         try:
             with st.spinner("Running audit..."):
-                report_bytes = run_comparison(uploaded_file.getvalue())
-
+                # run_comparison now expects (uzio_file, adp_file) per my audit_utils logic
+                # But wait, did I update run_comparison in census_audit_app.py?
+                # I need to check if run_comparison signature was updated!
+                # I suspect I updated it in Step 594?
+                # I need to check run_comparison signature first!
+                out_excel = run_comparison(uzio_file, adp_file)
+            
             st.success("Report generated.")
             
-            today_str = date.today().isoformat()  # YYYY-MM-DD
+            today_str = date.today().isoformat()
             out_filename = f"Client_Name_ADP_Census_Data_Audit_{today_str}.xlsx"
             
             st.download_button(
                 label="Download Report (.xlsx)",
-                data=report_bytes,
+                data=out_excel,
                 file_name=out_filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary",

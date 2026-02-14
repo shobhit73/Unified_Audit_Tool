@@ -497,6 +497,13 @@ def run_comparison(file_bytes: bytes) -> bytes:
         if e and e not in paycom_idx:
             paycom_idx[e] = i
 
+    # ---------- FLSA Classification column (Uzio) ----------
+    uzio_flsa_col = find_col(uzio.columns, "FLSA Classification", "FLSA_Classification", "FLSA")
+
+    # Also locate employee name columns in Uzio for context in FLSA report
+    uzio_fname_col = find_col(uzio.columns, "First Name", "FirstName", "First_Name")
+    uzio_lname_col = find_col(uzio.columns, "Last Name", "LastName", "Last_Name")
+
     all_emps = sorted(set(uzio_idx.keys()).union(set(paycom_idx.keys())))
 
     rows = []
@@ -574,6 +581,54 @@ def run_comparison(file_bytes: bytes) -> bytes:
         ],
     )
 
+    # ---------- FLSA Compliance Issues (4th sheet) ----------
+    flsa_rows = []
+    if uzio_flsa_col is not None:
+        for eid, u_i in uzio_idx.items():
+            # Get Pay Type from Uzio
+            pay_canon = pay_type_map.get(eid, "")
+
+            # Get FLSA Classification from Uzio
+            flsa_raw = ""
+            if uzio_flsa_col in uzio.columns:
+                flsa_raw = uzio.loc[u_i, uzio_flsa_col]
+            flsa_norm = normalize_space_and_case(flsa_raw)
+
+            # Detect invalid combinations
+            issue = ""
+            if pay_canon == "hourly" and "exempt" in flsa_norm and "non" not in flsa_norm:
+                issue = "Hourly employee classified as Exempt"
+            elif pay_canon == "salaried" and ("non-exempt" in flsa_norm or "non exempt" in flsa_norm or "nonexempt" in flsa_norm):
+                issue = "Salaried employee classified as Non-Exempt"
+
+            if issue:
+                # Get employee name for context
+                fname = ""
+                lname = ""
+                if uzio_fname_col and uzio_fname_col in uzio.columns:
+                    fname = str(norm_blank(uzio.loc[u_i, uzio_fname_col]) or "")
+                if uzio_lname_col and uzio_lname_col in uzio.columns:
+                    lname = str(norm_blank(uzio.loc[u_i, uzio_lname_col]) or "")
+                emp_name = f"{fname} {lname}".strip()
+
+                # Get Pay Type raw value from Uzio for display
+                pay_raw = ""
+                if uzio_pay_type_col and uzio_pay_type_col in uzio.columns:
+                    pay_raw = str(norm_blank(uzio.loc[u_i, uzio_pay_type_col]) or "")
+
+                flsa_rows.append({
+                    "Employee ID": display_id_map.get(eid, eid),
+                    "Employee Name": emp_name,
+                    "Pay Type (Uzio)": pay_raw,
+                    "FLSA Classification (Uzio)": str(norm_blank(flsa_raw) or ""),
+                    "Issue": issue,
+                })
+
+    flsa_issues = pd.DataFrame(flsa_rows, columns=[
+        "Employee ID", "Employee Name", "Pay Type (Uzio)",
+        "FLSA Classification (Uzio)", "Issue"
+    ])
+
     # Field summary
     statuses = [
         "Data Match",
@@ -618,6 +673,7 @@ def run_comparison(file_bytes: bytes) -> bytes:
                 "Total PAYCOM Records",
                 "Fields Compared",
                 "Total Comparisons (field-level rows)",
+                "FLSA Compliance Issues",
             ],
             "Value": [
                 len(uzio_emps),
@@ -629,6 +685,7 @@ def run_comparison(file_bytes: bytes) -> bytes:
                 int(len(paycom)),
                 int(mapping.shape[0]),
                 int(comparison_detail.shape[0]),
+                len(flsa_rows),
             ],
         }
     )
@@ -638,6 +695,7 @@ def run_comparison(file_bytes: bytes) -> bytes:
         summary.to_excel(writer, sheet_name="Summary", index=False)
         field_summary_by_status.to_excel(writer, sheet_name="Field_Summary_By_Status", index=False)
         comparison_detail.to_excel(writer, sheet_name="Comparison_Detail_AllFields", index=False)
+        flsa_issues.to_excel(writer, sheet_name="FLSA_Compliance_Issues", index=False)
 
     return out.getvalue()
 

@@ -510,6 +510,23 @@ def run_comparison(file_bytes: bytes) -> bytes:
                 return str(v)
         return ""
 
+    # ---------- FLSA Classification column (Uzio) ----------
+    uzio_flsa_col = None
+    for c in uzio.columns:
+        if "flsa" in norm_colname(c).casefold():
+            uzio_flsa_col = c
+            break
+
+    # Also locate employee name columns in Uzio for context in FLSA report
+    uzio_fname_col = None
+    uzio_lname_col = None
+    for c in uzio.columns:
+        cl = norm_colname(c).casefold()
+        if cl in {"first name", "firstname", "first_name"}:
+            uzio_fname_col = c
+        elif cl in {"last name", "lastname", "last_name"}:
+            uzio_lname_col = c
+
     # ---------- Build FULL comparison ----------
     rows = []
     for emp_id in all_keys:
@@ -643,6 +660,53 @@ def run_comparison(file_bytes: bytes) -> bytes:
 
     mismatches_only = comparison_detail[comparison_detail["ADP_SourceOfTruth_Status"] != "Data Match"].copy()
 
+    # ---------- FLSA Compliance Issues (4th sheet) ----------
+    flsa_rows = []
+    if uzio_flsa_col is not None:
+        for emp_id in uzio_keys:
+            if emp_id not in uzio_idx.index:
+                continue
+            # Get Pay Type from Uzio
+            uz_pay_raw = ""
+            if UZIO_PAYTYPE_COL and UZIO_PAYTYPE_COL in uzio_idx.columns:
+                uz_pay_raw = uzio_idx.at[emp_id, UZIO_PAYTYPE_COL]
+            pay_type_val = normalize_paytype_text(uz_pay_raw)
+            pay_bucket = paytype_bucket(pay_type_val)
+
+            # Get FLSA Classification from Uzio
+            flsa_raw = uzio_idx.at[emp_id, uzio_flsa_col] if uzio_flsa_col in uzio_idx.columns else ""
+            flsa_norm = normalize_paytype_text(flsa_raw)  # reuse: lowercases & strips
+
+            # Detect invalid combinations
+            issue = ""
+            if pay_bucket == "hourly" and "exempt" in flsa_norm and "non" not in flsa_norm:
+                issue = "Hourly employee classified as Exempt"
+            elif pay_bucket == "salaried" and ("non-exempt" in flsa_norm or "non exempt" in flsa_norm or "nonexempt" in flsa_norm):
+                issue = "Salaried employee classified as Non-Exempt"
+
+            if issue:
+                # Get employee name for context
+                fname = ""
+                lname = ""
+                if uzio_fname_col and uzio_fname_col in uzio_idx.columns:
+                    fname = str(norm_blank(uzio_idx.at[emp_id, uzio_fname_col]) or "")
+                if uzio_lname_col and uzio_lname_col in uzio_idx.columns:
+                    lname = str(norm_blank(uzio_idx.at[emp_id, uzio_lname_col]) or "")
+                emp_name = f"{fname} {lname}".strip()
+
+                flsa_rows.append({
+                    "Employee ID": emp_id,
+                    "Employee Name": emp_name,
+                    "Pay Type (Uzio)": str(norm_blank(uz_pay_raw) or ""),
+                    "FLSA Classification (Uzio)": str(norm_blank(flsa_raw) or ""),
+                    "Issue": issue,
+                })
+
+    flsa_issues = pd.DataFrame(flsa_rows, columns=[
+        "Employee ID", "Employee Name", "Pay Type (Uzio)",
+        "FLSA Classification (Uzio)", "Issue"
+    ])
+
     # ---------- Field Summary By Status ----------
     cols_needed = [
         "Data Match",
@@ -669,7 +733,6 @@ def run_comparison(file_bytes: bytes) -> bytes:
 
     pivot["Total"] = pivot.sum(axis=1)
     pivot["Data Match"] = pivot["Data Match"].astype(int)
-    # Removing NOT_OK aggregate column as per user request to avoid confusion with Data Mismatch
 
     field_summary_by_status = pivot.reset_index()[[
         "Field",
@@ -684,13 +747,6 @@ def run_comparison(file_bytes: bytes) -> bytes:
         "Column Missing in Uzio Sheet",
     ]]
 
-    # Remove columns H,I from Field_Summary_By_Status (keep Value missing in ADP)
-    # H=Employee ID Not Found in Uzio, I=Employee ID Not Found in ADP
-    # field_summary_by_status = field_summary_by_status.drop(
-    #     columns=["Employee ID Not Found in Uzio", "Employee ID Not Found in ADP"],
-    #     errors="ignore"
-    # )
-
     # ---------- Summary metrics ----------
     summary = pd.DataFrame({
         "Metric": [
@@ -702,7 +758,8 @@ def run_comparison(file_bytes: bytes) -> bytes:
             "Mapped fields total (from mapping sheet)",
             "Mapped fields with ADP column missing",
             "Total comparison rows (employees x mapped fields)",
-            "Total NOT OK rows"
+            "Total NOT OK rows",
+            "FLSA Compliance Issues"
         ],
         "Value": [
             len(uzio_keys),
@@ -713,7 +770,8 @@ def run_comparison(file_bytes: bytes) -> bytes:
             len(mapped_fields),
             mapping_missing_adp_col.shape[0],
             comparison_detail.shape[0],
-            mismatches_only.shape[0]
+            mismatches_only.shape[0],
+            len(flsa_rows)
         ]
     })
 
@@ -723,7 +781,7 @@ def run_comparison(file_bytes: bytes) -> bytes:
         summary.to_excel(writer, sheet_name="Summary", index=False)
         field_summary_by_status.to_excel(writer, sheet_name="Field_Summary_By_Status", index=False)
         comparison_detail.to_excel(writer, sheet_name="Comparison_Detail_AllFields", index=False)
-        # Do NOT write Mapping_ADP_Col_Missing and Mismatches_Only
+        flsa_issues.to_excel(writer, sheet_name="FLSA_Compliance_Issues", index=False)
 
     return out.getvalue()
 

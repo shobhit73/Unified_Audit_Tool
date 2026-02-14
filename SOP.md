@@ -46,14 +46,17 @@ Prepare a single Excel file with **3 Sheets**:
     *   **Column B:** Uzio Deduction Name
 
 **Understanding the Report:**
-The report contains a sheet named **`Audit Details`**.
-*   **Key Column:** `Status`
-*   **Values:**
-    *   `Data Match`: Difference is less than $0.01. (Ignore)
-    *   `Data Mismatch`: Amounts differ. **Action:** Check calculating logic or update Uzio/ADP.
-    *   `Value Missing in Uzio (ADP has Value)`: Employee has a deduction in ADP but nothing in Uzio. **Action:** Add deduction to Uzio.
-    *   `Value Missing in ADP (Uzio has Value)`: Employee has a deduction in Uzio but nothing in ADP. **Action:** Verify if deduction should allow skipping.
-    *   `Employee Missing...`: The ID exists in one file but not the other.
+The report contains three main sheets:
+*   **`Summary`**: High-level metrics.
+*   **`Field_Summary_By_Status`**: Counts of matches/mismatches per field.
+*   **`Comparison_Detail_AllFields`** (or *Audit Details*): The core row-by-row comparison.
+    *   **Key Column:** `Status`
+    *   **Values:**
+        *   `Data Match`: Difference is less than $0.01. (Ignore)
+        *   `Data Mismatch`: Amounts differ. **Action:** Check calculating logic or update Uzio/ADP.
+        *   `Value Missing in Uzio (ADP has Value)`: Employee has a deduction in ADP but nothing in Uzio. **Action:** Add deduction to Uzio.
+        *   `Value Missing in ADP (Uzio has Value)`: Employee has a deduction in Uzio but nothing in ADP. **Action:** Verify if deduction should allow skipping.
+        *   `Employee Missing...`: The ID exists in one file but not the other.
 
 ---
 
@@ -87,6 +90,10 @@ Single Excel file with **3 Sheets**:
 
 **Understanding the Report:**
 *   **Sheet:** `Comparison_Detail_AllFields`
+*   **Sheet:** `FLSA_Compliance_Issues` (*New*)
+    *   Identifies invalid combinations like **Hourly** Pay Type with **Exempt** FLSA Classification.
+*   **Sheet:** `Active_Missing_In_Uzio` (*New*)
+    *   Lists employees active in ADP but typically missing from Uzio (useful for catching new hires not yet entered).
 *   **Status Column:** `ADP_SourceOfTruth_Status`
 *   **Status Code Meanings:**
     *   `Data Match`: Values match (handling case, spacing, and date formats automatically).
@@ -109,7 +116,9 @@ Single Excel file with **5 Sheets**:
 5.  **`Emergency_Mapping`**: Maps Uzio Emergency fields to ADP Emergency fields.
 
 **Understanding the Report:**
-This tool generates reports for both Payment and Emergency data.
+This tool generates **two independent reports**:
+1.  **Payment Report**: Variances in Net/Gross Pay.
+2.  **Emergency Contact Report**: Mismatches in emergency contact details.
 *   **Logic:** It intelligently compares "Flat Dollar Amount" vs "Percentage" distributions.
 *   **Status:** `Data Mismatch` here often means a bank account number typo or a distribution priority mismatch.
 
@@ -127,6 +136,9 @@ Single Excel file with **3 Sheets**:
     *   **Column "Paycom Column"**: Header in Paycom sheet.
 
 **Understanding the Report:**
+*   **Sheet:** `Comparison_Detail_AllFields`
+*   **Sheet:** `FLSA_Compliance_Issues`: Checks generally for Pay Type vs FLSA mismatches.
+*   **Sheet:** `Active_Missing_In_Uzio`: Lists active Paycom employees not found in Uzio.
 *   **Key Logic:**
     *   Paycom "On Leave" is treated as "Active".
     *   "Salaried" (Uzio) matches "Salary" (Paycom).

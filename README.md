@@ -18,6 +18,8 @@ A unified platform for auditing and reconciling data across **Uzio**, **ADP**, a
 3.  **👥 Census Audit**
     *   Reconciles employee census data between Uzio and ADP.
     *   Checks for discrepancies in demographics, employment status, and more.
+    *   **New:** Detailed FLSA Compliance Checks (Pay Type vs Classification).
+    *   **New:** Identifies active employees missing in Uzio.
 
 4.  **🚑 Payment & Emergency Audit**
     *   Reviews Payment details and Emergency Contact information.
@@ -31,6 +33,8 @@ A unified platform for auditing and reconciling data across **Uzio**, **ADP**, a
 6.  **🏢 Paycom Census Audit**
     *   Audits Paycom census data against Uzio records.
     *   Includes specific logic for Paycom fields and mapping.
+    *   **New:** Checks for FLSA compliance issues.
+    *   **New:** Identifies active employees missing from Uzio.
 
 7.  **🧾 Paycom Withholding Audit** (*New*)
     *   Audits Paycom withholding setups against Uzio.

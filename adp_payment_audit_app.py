@@ -107,22 +107,36 @@ def run_audit(file_uzio, file_adp):
     df_uzio = pd.read_excel(file_uzio, header=1)
     
     # Map Uzio Columns
-    # Expected: 'Emp Code', 'Routing Number\n(Direct Deposit)', 'Account Number\n(Direct Deposit)', 
-    # 'Account Type\n(Direct Deposit)', 'Paycheck Percentage\n(Direct Deposit)', 'Paycheck Amount\n(Direct Deposit)', 'Full Name'
+    # Clean column names first (remove newlines/extra spaces)
+    df_uzio.columns = [str(c).strip().replace("\n", " ") for c in df_uzio.columns]
+    
+    def get_col(candidates):
+        for cand in candidates:
+            # Exact match
+            if cand in df_uzio.columns: return cand
+            # Partial match
+            match = next((c for c in df_uzio.columns if cand in c), None)
+            if match: return match
+        return candidates[0] # Default
+    
     u_cols = {
-        "EmpID": next((c for c in df_uzio.columns if "Emp Code" in c), "Emp Code"),
-        "Routing": next((c for c in df_uzio.columns if "Routing Number" in c), "Routing Number"),
-        "Account": next((c for c in df_uzio.columns if "Account Number" in c), "Account Number"),
-        "Type": next((c for c in df_uzio.columns if "Account Type" in c), "Account Type"),
-        "Percent": next((c for c in df_uzio.columns if "Paycheck Percentage" in c), "Paycheck Percentage"),
-        "Amount": next((c for c in df_uzio.columns if "Paycheck Amount" in c), "Paycheck Amount"),
-        "Name": next((c for c in df_uzio.columns if "Full Name" in c), "Full Name")
+        "EmpID": get_col(["Employee ID", "Emp Code", "EmpID"]),
+        "Routing": get_col(["Routing Number", "Routing"]),
+        "Account": get_col(["Account Number", "Account"]),
+        "Type": get_col(["Account Type", "Type"]),
+        "Percent": get_col(["Paycheck Percentage", "Deposit Percent"]),
+        "Amount": get_col(["Paycheck Amount", "Deposit Amount"]),
+        "Name": get_col(["Full Name", "Employee Name", "Name"])
     }
     
     uzio_map = {} # EmpID -> List of Accounts
     
     for idx, row in df_uzio.iterrows():
         emp_id = norm_id(row.get(u_cols["EmpID"]))
+        # Also try "Employee ID" if mapped column failed (fallback safety)
+        if not emp_id and "Employee ID" in df_uzio.columns:
+             emp_id = norm_id(row.get("Employee ID"))
+             
         if not emp_id: continue
         
         acc = {

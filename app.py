@@ -110,7 +110,7 @@ with st.sidebar:
             "Deduction Audit", 
             "Prior Payroll Audit",
             "Census Audit",
-            "Payment & Emergency Audit",
+            "Payment Audit",
             "ADP Withholding Audit"
         ], index=0, label_visibility="collapsed")
         
@@ -146,10 +146,10 @@ elif tool_option == "Census Audit":
     # Note: This is practically "ADP Census Audit"
     census_audit_app.render_ui()
 
-elif tool_option == "Payment & Emergency Audit":
-    import payment_emergency_audit_app
-    importlib.reload(payment_emergency_audit_app)
-    payment_emergency_audit_app.render_ui()
+elif tool_option == "Payment Audit":
+    import adp_payment_audit_app
+    importlib.reload(adp_payment_audit_app)
+    adp_payment_audit_app.render_ui()
 
 elif tool_option == "Paycom Census Audit":
     import paycom_census_audit_app

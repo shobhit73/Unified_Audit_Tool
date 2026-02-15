@@ -232,7 +232,6 @@ def run_audit(file_uzio, file_adp):
                     rows.append({
                         "Employee ID": emp_id,
                         "Employee Name": emp_name,
-                        "ADP_Account_Class": "Net" if a.get("IsNet") else "Distribution",
                         "Field": field,
                         "UZIO_Value": "Not Found",
                         "ADP_Value": _get_field_val(a, field),
@@ -247,7 +246,6 @@ def run_audit(file_uzio, file_adp):
                     rows.append({
                         "Employee ID": emp_id,
                         "Employee Name": emp_name,
-                        "ADP_Account_Class": "Not Found",
                         "Field": field,
                         "UZIO_Value": _get_field_val(u, field),
                         "ADP_Value": "Not Found",
@@ -295,7 +293,6 @@ def run_audit(file_uzio, file_adp):
                  rows.append({
                     "Employee ID": emp_id,
                     "Employee Name": emp_name,
-                    "ADP_Account_Class": "Net" if a.get("IsNet") else "Distribution",
                     "Field": field,
                     "UZIO_Value": u_val,
                     "ADP_Value": a_val,
@@ -308,7 +305,6 @@ def run_audit(file_uzio, file_adp):
                 rows.append({
                     "Employee ID": emp_id,
                     "Employee Name": emp_name,
-                    "ADP_Account_Class": "Not Found",
                     "Field": field,
                     "UZIO_Value": _get_field_val(u, field),
                     "ADP_Value": "Not Found",
@@ -321,7 +317,6 @@ def run_audit(file_uzio, file_adp):
                 rows.append({
                     "Employee ID": emp_id,
                     "Employee Name": emp_name,
-                    "ADP_Account_Class": "Net" if a.get("IsNet") else "Distribution",
                     "Field": field,
                     "UZIO_Value": "Not Found",
                     "ADP_Value": _get_field_val(a, field),

@@ -130,6 +130,7 @@ def run_audit(file_uzio, file_adp):
     }
     
     uzio_map = {} # EmpID -> List of Accounts
+    all_names = {} # EmpID -> Name
     
     for idx, row in df_uzio.iterrows():
         emp_id = norm_id(row.get(u_cols["EmpID"]))
@@ -139,19 +140,26 @@ def run_audit(file_uzio, file_adp):
              
         if not emp_id: continue
         
+        # Capture name
+        raw_name = norm_str(row.get(u_cols["Name"]))
+        if emp_id not in all_names and raw_name:
+            all_names[emp_id] = raw_name
+            
+        # Initialize list if new
+        if emp_id not in uzio_map:
+            uzio_map[emp_id] = []
+        
         acc = {
             "Routing": norm_digits(row.get(u_cols["Routing"])).lstrip("0"),
             "Account": norm_digits(row.get(u_cols["Account"])).lstrip("0"),
             "Type": normalize_account_type(row.get(u_cols["Type"])),
             "Percent": norm_money(row.get(u_cols["Percent"])),
             "Amount": norm_money(row.get(u_cols["Amount"])),
-            "Name": norm_str(row.get(u_cols["Name"]))
+            "Name": raw_name
         }
         
         # Only add valid accounts (must have Rout or Acc)
         if acc["Routing"] or acc["Account"]:
-            if emp_id not in uzio_map:
-                uzio_map[emp_id] = []
             if acc not in uzio_map[emp_id]:
                 uzio_map[emp_id].append(acc)
 
@@ -179,6 +187,14 @@ def run_audit(file_uzio, file_adp):
         emp_id = norm_id(raw_id)
         if not emp_id: continue
         
+        # Capture name
+        raw_name = norm_str(row.get(a_cols["Name"]))
+        if emp_id not in all_names and raw_name:
+            all_names[emp_id] = raw_name
+            
+        if emp_id not in adp_map:
+            adp_map[emp_id] = []
+        
         # Analyze Deposit Type
         dep_type = str(row.get(a_cols["DepositType"])).strip()
         raw_pct = row.get(a_cols["Percent"])
@@ -203,13 +219,11 @@ def run_audit(file_uzio, file_adp):
             "Type": normalize_account_type(row.get(a_cols["Deduction"])),
             "Percent": pct,
             "Amount": amt,
-            "Name": norm_str(row.get(a_cols["Name"])),
+            "Name": raw_name,
             "IsNet": is_net
         }
         
         if acc["Routing"] or acc["Account"]:
-            if emp_id not in adp_map:
-                adp_map[emp_id] = []
             if acc not in adp_map[emp_id]:
                 adp_map[emp_id].append(acc)
 
@@ -223,10 +237,16 @@ def run_audit(file_uzio, file_adp):
         u_accs = uzio_map.get(emp_id, [])
         a_accs = adp_map.get(emp_id, [])
         
-        emp_name = u_accs[0]["Name"] if u_accs else (a_accs[0]["Name"] if a_accs else "")
+        emp_name = all_names.get(emp_id, "")
         
-        # Case 1: Missing in Uzio
-        if not u_accs and a_accs:
+        in_uzio = emp_id in uzio_map
+        in_adp = emp_id in adp_map
+        
+        # Case 1: Missing in Uzio (Present in ADP, Not in Uzio map)
+        if in_adp and not in_uzio:
+            if not a_accs:
+                 # In ADP map but no accounts? (Rare, but possible if blank lines)
+                 continue
             for a in a_accs:
                 for field in FIELDS:
                     rows.append({
@@ -239,21 +259,49 @@ def run_audit(file_uzio, file_adp):
                     })
             continue
 
-        # Case 2: Missing in ADP
-        if u_accs and not a_accs:
-            for u in u_accs:
+        # Case 2: Missing in ADP (Present in Uzio, Not in ADP map)
+        if in_uzio and not in_adp:
+            if not u_accs:
+                # Employee valid in Uzio (e.g. Paper Check) but missing in ADP
+                # Still report as Missing in ADP per request
                 for field in FIELDS:
                     rows.append({
                         "Employee ID": emp_id,
                         "Employee Name": emp_name,
                         "Field": field,
-                        "UZIO_Value": _get_field_val(u, field),
+                        "UZIO_Value": "No Account Info",
                         "ADP_Value": "Not Found",
                         "Status": STATUS_MISSING_ADP
                     })
+            else:
+                for u in u_accs:
+                    for field in FIELDS:
+                        rows.append({
+                            "Employee ID": emp_id,
+                            "Employee Name": emp_name,
+                            "Field": field,
+                            "UZIO_Value": _get_field_val(u, field),
+                            "ADP_Value": "Not Found",
+                            "Status": STATUS_MISSING_ADP
+                        })
             continue
 
-        # Case 3: Both Exist - Match Accounts
+        # Case 3: Both Exist (ID is in both maps)
+        if not u_accs and not a_accs:
+            # Both present but neither has accounts. Ignore? 
+            # Or match? User didn't specify. Assuming ignore or "Data Match" on empty state.
+            continue
+            
+        if u_accs and not a_accs:
+             # In both maps, but ADP has empty accounts list.
+             # Treat as mismatch? Or "Value missing in ADP"?
+             # Logic below for "unmatched UZIO" covers this if we don't break early.
+             pass
+
+        if not u_accs and a_accs:
+             # In both maps, but Uzio has empty accounts.
+             pass
+             
         # Strategy: Match by Account Number first (Unique ID usually)
         u_remaining = u_accs[:]
         a_remaining = a_accs[:]
@@ -299,7 +347,7 @@ def run_audit(file_uzio, file_adp):
                     "Status": status
                  })
                  
-        # Unmatched UZIO
+        # Unmatched UZIO (accounts in Uzio not matched to any in ADP)
         for u in u_remaining:
              for field in FIELDS:
                 rows.append({
@@ -311,7 +359,7 @@ def run_audit(file_uzio, file_adp):
                     "Status": STATUS_MISMATCH
                 })
         
-        # Unmatched ADP
+        # Unmatched ADP (accounts in ADP not matched to any in Uzio)
         for a in a_remaining:
             for field in FIELDS:
                 rows.append({

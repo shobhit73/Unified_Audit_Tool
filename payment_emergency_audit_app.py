@@ -591,14 +591,15 @@ def normalize_adp_payment_table(adp_pay: pd.DataFrame, emp_col: str) -> pd.DataF
                     df.at[i, "Paycheck Percentage"] = full_pct
                     df.at[i, "Paycheck Amount"] = ""
                 else:
-                    # Rule: Multiple Accounts BUT only Partial Amounts (no %) -> Leave Blank if source is blank
-                    src_val = norm_blank(df.at[i, dep_pct_col])
-                    if src_val == "":
+                    # Rule: Multiple Accounts BUT only Partial Amounts (no %) -> Leave Blank if source is blank/0
+                    # Use helper to catch "0", "0.00" as blank
+                    val_to_check = df.at[i, dep_pct_col]
+                    if _is_blank_money_or_percent(val_to_check):
                         df.at[i, "Paycheck Distribution"] = ""
                         df.at[i, "Paycheck Percentage"] = ""
                         df.at[i, "Paycheck Amount"] = ""
                     else:
-                        # Fallback if there's a value (e.g. they typed 100)
+                        # Fallback if there's a non-zero value
                         df.at[i, "Paycheck Distribution"] = "percentage"
                         df.at[i, "Paycheck Percentage"] = full_pct
                         df.at[i, "Paycheck Amount"] = ""

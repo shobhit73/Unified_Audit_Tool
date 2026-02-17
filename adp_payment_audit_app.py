@@ -205,7 +205,9 @@ def run_audit(file_uzio, file_adp):
         is_net = False
         
         if "Full" in dep_type or "Balance" in dep_type:
-            pct = 100.0
+            # Do NOT default to 100.0 immediately. Respect the source value.
+            # We will handle the "Remainder" or "Single Account = 100%" logic in post-processing.
+            pct = norm_money(raw_pct)
             is_net = True
         elif "Partial %" in dep_type:
              pct = norm_money(raw_pct)
@@ -228,19 +230,30 @@ def run_audit(file_uzio, file_adp):
                 adp_map[emp_id].append(acc)
 
     # 2b. Post-Process ADP "Full" / Net Pay
-    # If an employee has "Partial %" accounts and one "Full" account, 
-    # the "Full" account's percent is effectively 100 - sum(partials).
+    # Logic:
+    # 1. Single Account -> Always 100%
+    # 2. Multi-Account + Partial % -> Remainder (100 - sum)
+    # 3. Multi-Account + No Partial % -> Keep parsed value (Blank/0 stays Blank/0)
     for emp_id, accs in adp_map.items():
+        if not accs: continue
+        
+        # Rule 1: Single Account
+        if len(accs) == 1:
+            accs[0]["Percent"] = 100.0
+            continue
+
+        # Rule 2/3: Check for Net Pay / Full accounts logic
         net_accs = [a for a in accs if a.get("IsNet")]
         partial_accs = [a for a in accs if not a.get("IsNet") and a.get("Percent") > 0]
         
         if len(net_accs) == 1 and partial_accs:
             # Calculate sum of partials
             total_partial = sum(a["Percent"] for a in partial_accs)
+            
+            # If we have partial percentages, the Net account IS the remainder.
+            # Even if the source was 0 or blank.
             if total_partial < 100.0:
                 remainder = 100.0 - total_partial
-                # Update the Net account's percent to match Uzio's logic
-                # Only if it seems reasonable (e.g. > 0)
                 if remainder > 0:
                      net_accs[0]["Percent"] = round(remainder, 2)
 

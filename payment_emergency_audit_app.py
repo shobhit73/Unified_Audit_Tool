@@ -455,7 +455,14 @@ def _is_blank_money_or_percent(v) -> bool:
     if s == "":
         return True
     s2 = s.replace("$", "").replace(",", "").replace("%", "").strip()
-    return s2 == ""
+    if s2 == "":
+        return True
+    try:
+        if float(s2) == 0.0:
+            return True
+    except:
+        pass
+    return False
 
 
 def _safe_percentage(x):

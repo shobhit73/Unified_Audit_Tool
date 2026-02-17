@@ -73,3 +73,20 @@ def read_uzio_raw_file(uploaded_file):
     except Exception as e:
         st.error(f"Error reading Uzio Raw File: {e}")
         return None
+
+def norm_col(c):
+    """Normalize column names to be case-insensitive and stripped."""
+    if c is None: return ""
+    return str(c).strip().replace("\n", " ").strip()
+
+def clean_money_val(x):
+    """Parse money/percentage strings to float. Returns original string if not a number."""
+    if pd.isna(x) or x == "":
+        return 0.0
+    s = str(x).strip()
+    s_clean = s.replace("$", "").replace("%", "").replace(",", "")
+    s_clean = s_clean.replace("(", "-").replace(")", "") # Handle accounting negative
+    try:
+        return float(s_clean)
+    except:
+        return 0.0

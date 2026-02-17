@@ -42,7 +42,7 @@ def norm_money(x):
         return 0.0
     if isinstance(x, (float, int)):
         return 0.0 if pd.isna(x) else float(x)
-    s = str(x).replace(",", "").replace("$", "").strip()
+    s = str(x).replace(",", "").replace("$", "").replace("%", "").strip()
     if not s:
         return 0.0
     try:
@@ -226,6 +226,23 @@ def run_audit(file_uzio, file_adp):
         if acc["Routing"] or acc["Account"]:
             if acc not in adp_map[emp_id]:
                 adp_map[emp_id].append(acc)
+
+    # 2b. Post-Process ADP "Full" / Net Pay
+    # If an employee has "Partial %" accounts and one "Full" account, 
+    # the "Full" account's percent is effectively 100 - sum(partials).
+    for emp_id, accs in adp_map.items():
+        net_accs = [a for a in accs if a.get("IsNet")]
+        partial_accs = [a for a in accs if not a.get("IsNet") and a.get("Percent") > 0]
+        
+        if len(net_accs) == 1 and partial_accs:
+            # Calculate sum of partials
+            total_partial = sum(a["Percent"] for a in partial_accs)
+            if total_partial < 100.0:
+                remainder = 100.0 - total_partial
+                # Update the Net account's percent to match Uzio's logic
+                # Only if it seems reasonable (e.g. > 0)
+                if remainder > 0:
+                     net_accs[0]["Percent"] = round(remainder, 2)
 
     # 3. Comparison Logic
     FIELDS = ["Routing Number", "Account Number", "Account Type", "Amount", "Percent"]

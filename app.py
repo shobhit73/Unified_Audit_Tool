@@ -120,7 +120,8 @@ with st.sidebar:
         tool_option = st.radio("Select Paycom Tool", [
             "Paycom Census Audit",
             "Paycom Withholding Audit",
-            "Paycom Payment Audit"
+            "Paycom Payment Audit",
+            "Paycom Deduction Audit"
         ], index=0, label_visibility="collapsed")
 
     # Footer
@@ -171,6 +172,11 @@ elif tool_option == "Paycom Payment Audit":
     import paycom_payment_audit_app
     importlib.reload(paycom_payment_audit_app)
     paycom_payment_audit_app.render_ui()
+
+elif tool_option == "Paycom Deduction Audit":
+    import paycom_deduction_audit_app
+    importlib.reload(paycom_deduction_audit_app)
+    paycom_deduction_audit_app.render_ui()
 
 elif tool_option == "ADP Withholding Audit":
     import adp_withholding_audit_app

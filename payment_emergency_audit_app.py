@@ -566,8 +566,15 @@ def normalize_adp_payment_table(adp_pay: pd.DataFrame, emp_col: str) -> pd.DataF
                         sum_partial_pct += v
         full_pct = max(0.0, 100.0 - sum_partial_pct) if has_partial_pct else 100.0
 
+        is_single_row = (len(idxs) == 1)
+
         for i, c in zip(idxs, cats):
-            if c == "partial_amt":
+            if is_single_row:
+                # Rule: Single Account -> Always 100%
+                df.at[i, "Paycheck Distribution"] = "percentage"
+                df.at[i, "Paycheck Percentage"] = 100.0
+                df.at[i, "Paycheck Amount"] = ""
+            elif c == "partial_amt":
                 df.at[i, "Paycheck Distribution"] = "amount"
                 df.at[i, "Paycheck Amount"] = df.at[i, dep_amt_col] if dep_amt_col is not None else ""
                 df.at[i, "Paycheck Percentage"] = ""
@@ -578,9 +585,23 @@ def normalize_adp_payment_table(adp_pay: pd.DataFrame, emp_col: str) -> pd.DataF
                 df.at[i, "Paycheck Percentage"] = val if not np.isnan(val) else ""
                 df.at[i, "Paycheck Amount"] = ""
             elif c == "full":
-                df.at[i, "Paycheck Distribution"] = "percentage"
-                df.at[i, "Paycheck Percentage"] = full_pct
-                df.at[i, "Paycheck Amount"] = ""
+                if has_partial_pct:
+                    # Rule: Multiple Accounts AND Partial % exists -> Remainder (100 - rest)
+                    df.at[i, "Paycheck Distribution"] = "percentage"
+                    df.at[i, "Paycheck Percentage"] = full_pct
+                    df.at[i, "Paycheck Amount"] = ""
+                else:
+                    # Rule: Multiple Accounts BUT only Partial Amounts (no %) -> Leave Blank if source is blank
+                    src_val = norm_blank(df.at[i, dep_pct_col])
+                    if src_val == "":
+                        df.at[i, "Paycheck Distribution"] = ""
+                        df.at[i, "Paycheck Percentage"] = ""
+                        df.at[i, "Paycheck Amount"] = ""
+                    else:
+                        # Fallback if there's a value (e.g. they typed 100)
+                        df.at[i, "Paycheck Distribution"] = "percentage"
+                        df.at[i, "Paycheck Percentage"] = full_pct
+                        df.at[i, "Paycheck Amount"] = ""
             else:
                 pct = df.at[i, dep_pct_col] if dep_pct_col is not None else ""
                 amt = df.at[i, dep_amt_col] if dep_amt_col is not None else ""
@@ -639,11 +660,25 @@ def normalize_uzio_payment_full_inference(uzio_pay: pd.DataFrame, emp_col: str) 
         return df
 
     for emp, g in df.groupby(emp_col, sort=False):
+        # Rule: Single Account -> Always 100%
+        if len(g) == 1:
+            idx = g.index[0]
+            df.at[idx, dist_col] = "Percentage"
+            df.at[idx, pct_col] = 100.0
+            # Ensure amount is cleared if we force percentage? 
+            # (Optional, but safe if it was ambiguous. If it was Flat Dollar we overwrite)
+            continue
+
         if len(g) < 2:
             continue
 
         candidate_idxs = []
         for i in g.index:
+            # Rule: Skip "Flat Dollar" rows from being inferred as Remainder
+            d_val = df.at[i, dist_col]
+            if norm_distribution_token(d_val) == "amount":
+                continue
+
             if _is_blank_money_or_percent(df.at[i, amt_col]) and _is_blank_money_or_percent(df.at[i, pct_col]):
                 candidate_idxs.append(i)
 

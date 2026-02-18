@@ -81,7 +81,16 @@ def run_tool(file_paycom, file_uzio):
         st.error(f"Could not find 'Employee ID' or 'Opening/Operating Balance' in Uzio Template. Found: {list(df_u.columns)}")
         return None
 
+    # Future Columns
+    col_future_app = next((c for c in p_cols if "Future Approved" in c), None)
+    col_future_pend = next((c for c in p_cols if "Future Pending" in c), None)
+
     # 3. Process / Update
+    
+    # Trackers
+    matched_paycom_ids = set()
+    unassigned_policies_rows = [] # List of dicts (Uzio rows)
+
     # function to apply map
     def update_balance(row):
         # Rule: If existing Uzio Opening Balance is Blank/NaN -> Keep Blank (Policy Not Assigned)
@@ -91,26 +100,80 @@ def run_tool(file_paycom, file_uzio):
         
         # Check if current value is "blank" (NaN or empty string)
         if pd.isna(current_val) or str(current_val).strip() == "":
+            # Log as Unassigned Policy
+            unassigned_policies_rows.append(row.to_dict())
             return current_val # Keep blank
             
         # Policy is assigned, try to find Paycom value
         eid = clean_id(row[col_id_u])
         if eid in balance_map:
+            matched_paycom_ids.add(eid)
             return balance_map[eid] # Update with Paycom value
             
         return current_val # Keep original if no Paycom match
 
     df_u[col_bal_u] = df_u.apply(update_balance, axis=1)
 
-    # 4. Output
-    # We need to export just this data (Time Off Details tab). 
-    # Perfectly reconstructing the multi-tab template with formatting is hard with just pandas.
-    # We will export the modified dataframe. User can copy-paste back if strictly needed, 
-    # or we provide this as the import file (usually import systems just need the data sheet).
+    # --- Generate Additional Reports ---
+
+    # 1. Missing in Uzio (Paycom IDs not in matched_paycom_ids)
+    # We need to look at all Paycom rows where we *have* a Net Available but didn't match
+    missing_in_uzio = []
+    for idx, row in df_p.iterrows():
+        eid = clean_id(row[col_id_p])
+        # If valid ID and valid Balance, check if matched
+        if eid and eid not in matched_paycom_ids:
+            # Also check if it was worth matching (has balance)
+            val = row[col_bal_p]
+            if pd.notna(val) and str(val).strip() != "":
+                missing_in_uzio.append(row)
     
+    df_missing = pd.DataFrame(missing_in_uzio)
+
+    # 2. Unassigned Policies (Already collected)
+    df_unassigned = pd.DataFrame(unassigned_policies_rows)
+
+    # 3. Future Time Off
+    # Filter Paycom rows where Future Approved > 0 OR Future Pending > 0
+    future_rows = []
+    if col_future_app and col_future_pend:
+        for idx, row in df_p.iterrows():
+            try:
+                fa = float(row[col_future_app]) if pd.notna(row[col_future_app]) else 0
+                fp = float(row[col_future_pend]) if pd.notna(row[col_future_pend]) else 0
+                if fa > 0 or fp > 0:
+                    future_rows.append(row)
+            except:
+                pass # skip if non-numeric
+    
+    df_future = pd.DataFrame(future_rows)
+
+    # 4. Output
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine='xlsxwriter') as writer:
+        # Tab 1: Updated Template
         df_u.to_excel(writer, sheet_name='Time Off Details', index=False)
+        
+        # Tab 2: Missing in Uzio
+        if not df_missing.empty:
+            df_missing.to_excel(writer, sheet_name='Missing in Uzio', index=False)
+        else:
+            pd.DataFrame({'Message': ['All Paycom employees matched']}).to_excel(writer, sheet_name='Missing in Uzio', index=False)
+
+        # Tab 3: Unassigned Policies
+        if not df_unassigned.empty:
+            df_unassigned.to_excel(writer, sheet_name='Unassigned Policies', index=False)
+        else:
+            pd.DataFrame({'Message': ['No unassigned policies found']}).to_excel(writer, sheet_name='Unassigned Policies', index=False)
+            
+        # Tab 4: Future Time Off
+        if not df_future.empty:
+            df_future.to_excel(writer, sheet_name='Future Time Off', index=False)
+        else:
+            pd.DataFrame({'Message': ['No future time off found']}).to_excel(writer, sheet_name='Future Time Off', index=False)
+            
+        # Tab 5: Paycom Raw Data
+        df_p.to_excel(writer, sheet_name='Paycom Raw Data', index=False)
         
     return out.getvalue()
 

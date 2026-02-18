@@ -7,9 +7,9 @@ from datetime import datetime
 sys.path.append(os.getcwd())
 
 try:
-    from census_audit_app import run_comparison as run_adp
-    from paycom_census_audit_app import run_comparison as run_paycom
-    from audit_utils import UZIO_RAW_MAPPING
+    from apps.adp.census_audit import run_comparison as run_adp
+    from apps.paycom.census_audit import run_comparison as run_paycom
+    from utils.audit_utils import UZIO_RAW_MAPPING
 except ImportError as e:
     print(f"Import Error: {e}")
     sys.exit(1)

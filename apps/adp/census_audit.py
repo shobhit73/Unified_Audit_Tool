@@ -5,7 +5,7 @@ from datetime import datetime, date
 import numpy as np
 import pandas as pd
 import streamlit as st
-from audit_utils import read_uzio_raw_file
+from utils.audit_utils import read_uzio_raw_file
 
 # =========================================================
 # Data_Audit_Tool (Streamlit)

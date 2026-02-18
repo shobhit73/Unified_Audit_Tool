@@ -3,7 +3,7 @@ import pandas as pd
 import io
 import re
 from datetime import date
-from audit_utils import norm_col, clean_money_val
+from utils.audit_utils import norm_col, clean_money_val
 
 # =========================================================
 # Paycom to Uzio Deduction Audit Tool

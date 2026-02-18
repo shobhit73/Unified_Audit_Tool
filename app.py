@@ -133,52 +133,52 @@ with st.sidebar:
 # Router Logic
 # ---------------------------------------------------------
 if tool_option == "Deduction Audit":
-    import deduction_audit_app
-    importlib.reload(deduction_audit_app) 
-    deduction_audit_app.render_ui()
+    from apps.adp import deduction_audit
+    importlib.reload(deduction_audit) 
+    deduction_audit.render_ui()
     
 elif tool_option == "Prior Payroll Audit":
-    import prior_payroll_audit_app
-    importlib.reload(prior_payroll_audit_app)
-    prior_payroll_audit_app.render_ui()
+    from apps.adp import prior_payroll_audit
+    importlib.reload(prior_payroll_audit)
+    prior_payroll_audit.render_ui()
 
 elif tool_option == "Census Audit":
-    import census_audit_app
-    importlib.reload(census_audit_app)
+    from apps.adp import census_audit
+    importlib.reload(census_audit)
     # Note: This is practically "ADP Census Audit"
-    census_audit_app.render_ui()
+    census_audit.render_ui()
 
 elif tool_option == "Payment Audit":
-    import adp_payment_audit_app
-    importlib.reload(adp_payment_audit_app)
-    adp_payment_audit_app.render_ui()
+    from apps.adp import payment_audit
+    importlib.reload(payment_audit)
+    payment_audit.render_ui()
 
 elif tool_option == "Emergency Contact Audit":
-    import adp_emergency_audit_app
-    importlib.reload(adp_emergency_audit_app)
-    adp_emergency_audit_app.render_ui()
+    from apps.adp import emergency_audit
+    importlib.reload(emergency_audit)
+    emergency_audit.render_ui()
 
 elif tool_option == "Paycom Census Audit":
-    import paycom_census_audit_app
-    importlib.reload(paycom_census_audit_app)
-    paycom_census_audit_app.render_ui()
+    from apps.paycom import census_audit
+    importlib.reload(census_audit)
+    census_audit.render_ui()
 
 elif tool_option == "Paycom Withholding Audit":
-    import paycom_withholding_audit_app
-    importlib.reload(paycom_withholding_audit_app)
-    paycom_withholding_audit_app.render_ui()
+    from apps.paycom import withholding_audit
+    importlib.reload(withholding_audit)
+    withholding_audit.render_ui()
 
 elif tool_option == "Paycom Payment Audit":
-    import paycom_payment_audit_app
-    importlib.reload(paycom_payment_audit_app)
-    paycom_payment_audit_app.render_ui()
+    from apps.paycom import payment_audit
+    importlib.reload(payment_audit)
+    payment_audit.render_ui()
 
 elif tool_option == "Paycom Deduction Audit":
-    import paycom_deduction_audit_app
-    importlib.reload(paycom_deduction_audit_app)
-    paycom_deduction_audit_app.render_ui()
+    from apps.paycom import deduction_audit
+    importlib.reload(deduction_audit)
+    deduction_audit.render_ui()
 
 elif tool_option == "ADP Withholding Audit":
-    import adp_withholding_audit_app
-    importlib.reload(adp_withholding_audit_app)
-    adp_withholding_audit_app.render_ui()
+    from apps.adp import withholding_audit
+    importlib.reload(withholding_audit)
+    withholding_audit.render_ui()

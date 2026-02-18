@@ -6,7 +6,7 @@ from datetime import datetime, date
 import numpy as np
 import pandas as pd
 import streamlit as st
-from audit_utils import read_uzio_raw_file
+from utils.audit_utils import read_uzio_raw_file
 
 # =========================================================
 # Paycom vs UZIO – Census Audit Tool
@@ -50,7 +50,8 @@ PAYCOM_FIELD_MAP = {
     'Mailing Address Line 2': 'Mailing_Address_Line_2',
     'Mailing City': 'Mailing_City/Municipality',
     'Mailing Zip': 'Mailing_Zip/Postal_Code',
-    'Mailing State': 'Mailing_State/Province'
+    'Mailing State': 'Mailing_State/Province',
+    'License Number': 'DriversLicense'
 }
 
 # ---------- Helpers ----------

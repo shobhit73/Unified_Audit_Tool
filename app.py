@@ -107,78 +107,82 @@ with st.sidebar:
     if provider == "ADP":
         st.markdown('<div class="provider-header">ADP Tools</div>', unsafe_allow_html=True)
         tool_option = st.radio("Select ADP Tool", [
-            "Deduction Audit", 
-            "Prior Payroll Audit",
-            "Census Audit",
-            "Payment Audit",
-            "Emergency Contact Audit",
-            "ADP Withholding Audit"
+            "ADP - Deduction Audit", 
+            "ADP - Prior Payroll Audit",
+            "ADP - Census Audit",
+            "ADP - Payment Audit",
+            "ADP - Emergency Contact Audit",
+            "ADP - Withholding Audit"
         ], index=0, label_visibility="collapsed")
         
     elif provider == "Paycom":
         st.markdown('<div class="provider-header">Paycom Tools</div>', unsafe_allow_html=True)
         tool_option = st.radio("Select Paycom Tool", [
-            "Paycom Census Audit",
-            "Paycom Withholding Audit",
-            "Paycom Payment Audit",
-            "Paycom Deduction Audit"
+            "Paycom - Census Audit",
+            "Paycom - Withholding Audit",
+            "Paycom - Payment Audit",
+            "Paycom - Deduction Audit",
+            "Paycom - Emergency Contact Audit"
         ], index=0, label_visibility="collapsed")
 
     # Footer
     st.markdown("---")
-    st.caption(f"Mode: {provider} Audit")
     st.caption("v2.3 | Unified Platform")
 
 # ---------------------------------------------------------
 # Router Logic
 # ---------------------------------------------------------
-if tool_option == "Deduction Audit":
+if tool_option == "ADP - Deduction Audit":
     from apps.adp import deduction_audit
     importlib.reload(deduction_audit) 
     deduction_audit.render_ui()
     
-elif tool_option == "Prior Payroll Audit":
+elif tool_option == "ADP - Prior Payroll Audit":
     from apps.adp import prior_payroll_audit
     importlib.reload(prior_payroll_audit)
     prior_payroll_audit.render_ui()
 
-elif tool_option == "Census Audit":
+elif tool_option == "ADP - Census Audit":
     from apps.adp import census_audit
     importlib.reload(census_audit)
-    # Note: This is practically "ADP Census Audit"
     census_audit.render_ui()
 
-elif tool_option == "Payment Audit":
+elif tool_option == "ADP - Payment Audit":
     from apps.adp import payment_audit
     importlib.reload(payment_audit)
     payment_audit.render_ui()
 
-elif tool_option == "Emergency Contact Audit":
+elif tool_option == "ADP - Emergency Contact Audit":
     from apps.adp import emergency_audit
     importlib.reload(emergency_audit)
     emergency_audit.render_ui()
 
-elif tool_option == "Paycom Census Audit":
+elif tool_option == "Paycom - Census Audit":
     from apps.paycom import census_audit
     importlib.reload(census_audit)
     census_audit.render_ui()
 
-elif tool_option == "Paycom Withholding Audit":
+elif tool_option == "Paycom - Withholding Audit":
     from apps.paycom import withholding_audit
     importlib.reload(withholding_audit)
     withholding_audit.render_ui()
 
-elif tool_option == "Paycom Payment Audit":
+elif tool_option == "Paycom - Payment Audit":
     from apps.paycom import payment_audit
     importlib.reload(payment_audit)
     payment_audit.render_ui()
 
-elif tool_option == "Paycom Deduction Audit":
+elif tool_option == "Paycom - Deduction Audit":
     from apps.paycom import deduction_audit
     importlib.reload(deduction_audit)
     deduction_audit.render_ui()
 
-elif tool_option == "ADP Withholding Audit":
+elif tool_option == "ADP - Withholding Audit":
     from apps.adp import withholding_audit
     importlib.reload(withholding_audit)
     withholding_audit.render_ui()
+
+elif tool_option == "Paycom - Emergency Contact Audit":
+    from apps.paycom import emergency_audit
+    importlib.reload(emergency_audit)
+    emergency_audit.render_ui()

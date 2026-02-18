@@ -369,6 +369,12 @@ def normalized_compare(field_name: str, uzio_val, paycom_val) -> bool:
             return abs(fa - fb) <= 1e-9
         return normalize_space_and_case(uzio_val) == normalize_space_and_case(paycom_val)
 
+    if "license" in f:
+        # Standardize License Number: remove leading zeros
+        u = str(uzio_val).strip().lstrip("0")
+        p = str(paycom_val).strip().lstrip("0")
+        return u == p
+
     return normalize_space_and_case(uzio_val) == normalize_space_and_case(paycom_val)
 
 # ---------- Core comparison ----------

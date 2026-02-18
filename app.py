@@ -122,12 +122,13 @@ with st.sidebar:
             "Paycom - Withholding Audit",
             "Paycom - Payment Audit",
             "Paycom - Deduction Audit",
-            "Paycom - Emergency Contact Audit"
+            "Paycom - Emergency Contact Audit",
+            "Paycom - Time Off Tool"
         ], index=0, label_visibility="collapsed")
 
     # Footer
     st.markdown("---")
-    st.caption("v2.3 | Unified Platform")
+    st.caption("v2.4 | Unified Platform")
 
 # ---------------------------------------------------------
 # Router Logic
@@ -186,3 +187,8 @@ elif tool_option == "Paycom - Emergency Contact Audit":
     from apps.paycom import emergency_audit
     importlib.reload(emergency_audit)
     emergency_audit.render_ui()
+
+elif tool_option == "Paycom - Time Off Tool":
+    from apps.paycom import timeoff_audit
+    importlib.reload(timeoff_audit)
+    timeoff_audit.render_ui()

@@ -32,7 +32,7 @@ PAYCOM_FIELD_MAP = {
     'Hourly Pay Rate': 'Rate_1',
     'Working Hours': 'Scheduled_Pay_Period_Hours',
     'Job Title': 'Position',
-    'Department': 'Department',
+    'Department': 'Department_Desc',
     'Work Email': 'Work_Email',
     'Personal Email': 'Personal_Email',
     'Phone Number': 'Primary_Phone',

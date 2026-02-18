@@ -28,7 +28,7 @@ PAYCOM_FIELD_MAP = {
     'Termination Date': 'Termination_Date',
     # 'Termination Reason': 'Termination_Reason', # Not in sample file
     'Pay Type': 'Pay_Type',
-    'Annual Salary': 'Rate_1',
+    'Annual Salary': 'Annual_Salary',
     'Hourly Pay Rate': 'Rate_1',
     'Working Hours': 'Scheduled_Pay_Period_Hours',
     'Job Title': 'Position',

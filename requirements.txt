@@ -6,3 +6,4 @@ scikit-learn
 numpy
 xlsxwriter
 lxml
+html5lib

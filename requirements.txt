@@ -7,3 +7,4 @@ numpy
 xlsxwriter
 lxml
 html5lib
+beautifulsoup4'

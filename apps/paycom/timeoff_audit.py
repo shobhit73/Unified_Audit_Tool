@@ -39,7 +39,7 @@ def run_tool(file_paycom, file_uzio):
     # Look for 'Employee Code' and 'Net Available'
     p_cols = {c.strip(): c for c in df_p.columns}
     
-    col_id_p = next((c for c in p_cols if "Employee Code" in c or "Employee ID" in c), None)
+    col_id_p = next((c for c in p_cols if "Employee Code" in c or "Employee ID" in c or "EECode" in c), None)
     col_bal_p = next((c for c in p_cols if "Net Available" in c), None)
 
     if not col_id_p or not col_bal_p:

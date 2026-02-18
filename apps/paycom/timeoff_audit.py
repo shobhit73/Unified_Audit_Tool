@@ -84,10 +84,21 @@ def run_tool(file_paycom, file_uzio):
     # 3. Process / Update
     # function to apply map
     def update_balance(row):
+        # Rule: If existing Uzio Opening Balance is Blank/NaN -> Keep Blank (Policy Not Assigned)
+        # If existing is 0.00 or any number -> Update with Paycom Value (Policy Assigned)
+        
+        current_val = row[col_bal_u]
+        
+        # Check if current value is "blank" (NaN or empty string)
+        if pd.isna(current_val) or str(current_val).strip() == "":
+            return current_val # Keep blank
+            
+        # Policy is assigned, try to find Paycom value
         eid = clean_id(row[col_id_u])
         if eid in balance_map:
             return balance_map[eid] # Update with Paycom value
-        return row[col_bal_u] # Keep original (likely blank or existing)
+            
+        return current_val # Keep original if no Paycom match
 
     df_u[col_bal_u] = df_u.apply(update_balance, axis=1)
 

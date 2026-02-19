@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import pandas as pd
 import io
@@ -266,4 +265,3 @@ def render_ui():
 # Streamlit UI
 if __name__ == "__main__":
     render_ui()
-```

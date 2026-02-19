@@ -4,6 +4,7 @@ import io
 import re
 import openpyxl
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.dataframe import dataframe_to_rows
 
 APP_TITLE = "Paycom vs Uzio – Time Off Tool"
 
@@ -23,7 +24,7 @@ def run_tool(file_paycom, file_uzio):
         dfs = pd.read_html(file_paycom, header=0)
         if not dfs:
             st.error("No tables found in Paycom file.")
-            return None, None
+            return None
         df_p = dfs[0] # Assume main table is first
     except ValueError:
         # Fallback if actual Excel or CSV
@@ -35,7 +36,7 @@ def run_tool(file_paycom, file_uzio):
              df_p = pd.read_csv(file_paycom)
     except Exception as e:
         st.error(f"Error reading Paycom file: {e}")
-        return None, None
+        return None
 
     # Normalize Paycom Columns
     # Look for 'Employee Code' and 'Net Available'
@@ -46,7 +47,7 @@ def run_tool(file_paycom, file_uzio):
 
     if not col_id_p or not col_bal_p:
         st.error(f"Could not find required columns in Paycom file. Found: {list(df_p.columns)}")
-        return None, None
+        return None
 
     # Create Lookup Map: CleanID -> Net Available
     # Filter out rows where Net Available is NaN/Blank if we want to preserve blanks?
@@ -66,17 +67,17 @@ def run_tool(file_paycom, file_uzio):
     # ---------------------------------------------------------
     file_uzio.seek(0) # Reset file pointer for openpyxl
     try:
-        wb_import = openpyxl.load_workbook(file_uzio)
+        wb = openpyxl.load_workbook(file_uzio)
     except Exception as e:
         st.error(f"Error reading Uzio Template with openpyxl: {e}")
-        return None, None
+        return None
 
     # Sheet 2 is index 1
-    if len(wb_import.sheetnames) < 2:
+    if len(wb.sheetnames) < 2:
         st.error("Uzio Template must have at least 2 sheets (Instruction, Time Off Details).")
-        return None, None
+        return None
         
-    ws = wb_import.worksheets[1] # "Time Off Details"
+    ws = wb.worksheets[1] # "Time Off Details"
     
     # Header is Row 4. Data starts Row 5.
     header_row = 4
@@ -96,7 +97,7 @@ def run_tool(file_paycom, file_uzio):
             
     if not idx_id_u or not idx_bal_u:
         st.error(f"Could not find 'Employee ID' or 'Opening Balance' headers in Row 4 of Sheet 2.")
-        return None, None
+        return None
 
     # Iterate Data Rows
     for row_idx in range(header_row + 1, ws.max_row + 1):
@@ -114,13 +115,8 @@ def run_tool(file_paycom, file_uzio):
         if eid in balance_map:
             cell_bal.value = balance_map[eid]
             
-    # Save Import File
-    out_import = io.BytesIO()
-    wb_import.save(out_import)
-    out_import.seek(0)
-
     # ---------------------------------------------------------
-    # PART B: Generate Audit Report (using pandas)
+    # PART B: Calculate Audit Data (using pandas)
     # ---------------------------------------------------------
     file_uzio.seek(0) # Reset file pointer again for pandas
     # Re-read for pandas processing
@@ -128,7 +124,7 @@ def run_tool(file_paycom, file_uzio):
         df_u = pd.read_excel(file_uzio, sheet_name=1, header=3)
     except Exception as e:
         st.error(f"Error reading Uzio Template for audit: {e}")
-        return out_import.getvalue(), None # Return at least import file
+        return None
         
     u_cols = {c.strip(): c for c in df_u.columns}
     col_id_u = next((c for c in u_cols if "Employee ID" in c), None)
@@ -138,7 +134,7 @@ def run_tool(file_paycom, file_uzio):
 
     if not col_id_u or not col_bal_u:
         st.error(f"Could not find 'Employee ID' or 'Opening/Operating Balance' in Uzio Template for audit. Found: {list(df_u.columns)}")
-        return out_import.getvalue(), None
+        return None
 
     # Future Columns
     col_future_app = next((c for c in p_cols if "Future Approved" in c), None)
@@ -149,18 +145,16 @@ def run_tool(file_paycom, file_uzio):
     unassigned_policies_rows = [] 
 
     # function to apply map for audit tracking
-    def update_balance_pd(row):
+    def audit_scan(row):
         current_val = row[col_bal_u]
         if pd.isna(current_val) or str(current_val).strip() == "":
             unassigned_policies_rows.append(row.to_dict())
-            return current_val
+            return
         eid = clean_id(row[col_id_u])
         if eid in balance_map:
             matched_paycom_ids.add(eid)
-            return balance_map[eid]
-        return current_val
 
-    df_u[col_bal_u] = df_u.apply(update_balance_pd, axis=1)
+    df_u.apply(audit_scan, axis=1)
 
     # Additional Reports
     missing_in_uzio = []
@@ -172,7 +166,10 @@ def run_tool(file_paycom, file_uzio):
                 missing_in_uzio.append(row)
     
     df_missing = pd.DataFrame(missing_in_uzio)
+    if df_missing.empty: df_missing = pd.DataFrame({'Message': ['All Paycom employees matched']})
+
     df_unassigned = pd.DataFrame(unassigned_policies_rows)
+    if df_unassigned.empty: df_unassigned = pd.DataFrame({'Message': ['No unassigned policies found']})
 
     future_rows = []
     if col_future_app and col_future_pend:
@@ -185,25 +182,27 @@ def run_tool(file_paycom, file_uzio):
             except:
                 pass
     df_future = pd.DataFrame(future_rows)
+    if df_future.empty: df_future = pd.DataFrame({'Message': ['No future time off found']})
 
-    out_audit = io.BytesIO()
-    with pd.ExcelWriter(out_audit, engine='xlsxwriter') as writer:
-        df_u.to_excel(writer, sheet_name='Time Off Details (Updated)', index=False)
-        if not df_missing.empty:
-            df_missing.to_excel(writer, sheet_name='Missing in Uzio', index=False)
-        else:
-            pd.DataFrame({'Message': ['All Paycom employees matched']}).to_excel(writer, sheet_name='Missing in Uzio', index=False)
-        if not df_unassigned.empty:
-            df_unassigned.to_excel(writer, sheet_name='Unassigned Policies', index=False)
-        else:
-            pd.DataFrame({'Message': ['No unassigned policies found']}).to_excel(writer, sheet_name='Unassigned Policies', index=False)
-        if not df_future.empty:
-            df_future.to_excel(writer, sheet_name='Future Time Off', index=False)
-        else:
-            pd.DataFrame({'Message': ['No future time off found']}).to_excel(writer, sheet_name='Future Time Off', index=False)
-        df_p.to_excel(writer, sheet_name='Paycom Raw Data', index=False)
+    # ---------------------------------------------------------
+    # PART C: Append Audit Sheets to Workbook
+    # ---------------------------------------------------------
+    
+    # Helper to add DF to Sheet
+    def add_sheet_with_df(workbook, sheet_name, dataframe):
+        ws_new = workbook.create_sheet(title=sheet_name)
+        for r in dataframe_to_rows(dataframe, index=False, header=True):
+            ws_new.append(r)
 
-    return out_import.getvalue(), out_audit.getvalue()
+    add_sheet_with_df(wb, "Missing in Uzio", df_missing)
+    add_sheet_with_df(wb, "Unassigned Policies", df_unassigned)
+    add_sheet_with_df(wb, "Future Time Off", df_future)
+    add_sheet_with_df(wb, "Paycom Raw Data", df_p)
+
+    out_final = io.BytesIO()
+    wb.save(out_final)
+    
+    return out_final.getvalue()
 
 def render_ui():
     st.title(APP_TITLE)
@@ -212,9 +211,12 @@ def render_ui():
     1. Upload **Paycom TimeOff Summary Report** (.xls / HTML).
     2. Upload **Uzio Time Off Import Template** (.xlsx).
     
-    **Outputs**:
-    - **Import File**: Clean file ready for Uzio import (preserves template).
-    - **Audit Report**: Detailed analysis (Missing, Unassigned, Future).
+    **Output**:
+    - Generates a **Consolidated Excel File**.
+    - **Original Tabs** (Instructions, Time Off Details) are preserved.
+    - **Time Off Details** is updated with Paycom balances.
+    - **New Tabs** added for Audit: Missing, Unassigned, Future, Raw Data.
+    - *Note: Please delete the extra tabs before importing into Uzio.*
     """)
 
     col1, col2 = st.columns(2)
@@ -223,40 +225,24 @@ def render_ui():
     with col2:
         f_u = st.file_uploader("Uzio Template", type=["xlsx"], key="pt_u")
 
-    if st.button("Generate Reports", key="run_timeoff"):
+    if st.button("Generate Consolidated Report", key="run_timeoff"):
         if not f_u or not f_p:
             st.error("Please upload both files.")
             return
             
         try:
             with st.spinner("Processing..."):
-                res_import, res_audit = run_tool(f_p, f_u)
+                res = run_tool(f_p, f_u)
                 
-            if res_import and res_audit:
-                st.success("Files Generated Successfully!")
-                
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.download_button(
-                        "Download Uzio Import File",
-                        data=res_import,
-                        file_name="Uzio_TimeOff_Import_Ready.xlsx"
-                    )
-                with c2:
-                        st.download_button(
-                        "Download Detailed Audit Report",
-                        data=res_audit,
-                        file_name="Uzio_TimeOff_Audit_Report.xlsx"
-                    )
-            elif res_import: # Only import file was generated
-                st.warning("Audit report could not be generated, but import file is available.")
+            if res:
+                st.success("File Generated Successfully!")
                 st.download_button(
-                    "Download Uzio Import File",
-                    data=res_import,
-                    file_name="Uzio_TimeOff_Import_Ready.xlsx"
+                    "Download Consolidated File",
+                    data=res,
+                    file_name="Uzio_TimeOff_Consolidated.xlsx"
                 )
             else:
-                st.error("No files could be generated due to an error.")
+                st.error("No file could be generated due to an error.")
 
         except Exception as e:
             st.error(f"An error occurred: {e}")

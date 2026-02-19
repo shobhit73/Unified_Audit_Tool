@@ -44,6 +44,7 @@ def run_tool(file_paycom, file_uzio):
     
     col_id_p = next((c for c in p_cols if "Employee Code" in c or "Employee ID" in c or "EECode" in c), None)
     col_bal_p = next((c for c in p_cols if "Net Available" in c), None)
+    col_name_p = next((c for c in p_cols if "Employee Name" in c or "Name" in c or "Employee" in c), None)
 
     if not col_id_p or not col_bal_p:
         st.error(f"Could not find required columns in Paycom file. Found: {list(df_p.columns)}")
@@ -129,6 +130,8 @@ def run_tool(file_paycom, file_uzio):
     u_cols = {c.strip(): c for c in df_u.columns}
     col_id_u = next((c for c in u_cols if "Employee ID" in c), None)
     col_bal_u = next((c for c in u_cols if "Operating Balance" in c), None)
+    col_name_u = next((c for c in u_cols if "Employee Name" in c or "Name" in c), None)
+
     if not col_bal_u:
         col_bal_u = next((c for c in u_cols if "Opening Balance" in c), None)
 
@@ -143,13 +146,29 @@ def run_tool(file_paycom, file_uzio):
     # Trackers
     matched_paycom_ids = set()
     unassigned_policies_rows = [] 
+    
+    # Exception List: [{'Employee ID', 'Employee Name', 'Issue Category', 'Paycom Balance', 'Future Approved', 'Future Pending'}]
+    all_exceptions = []
 
     # function to apply map for audit tracking
     def audit_scan(row):
         current_val = row[col_bal_u]
         if pd.isna(current_val) or str(current_val).strip() == "":
             unassigned_policies_rows.append(row.to_dict())
+            
+            # Add to Exception Consolidated
+            eid = str(row[col_id_u]) if pd.notna(row[col_id_u]) else ""
+            name = str(row[col_name_u]) if col_name_u and pd.notna(row[col_name_u]) else "N/A"
+            all_exceptions.append({
+                'Employee ID': eid,
+                'Employee Name': name,
+                'Issue Category': 'Unassigned Policy (Blank Balance)',
+                'Paycom Balance': '',
+                'Future Approved': '',
+                'Future Pending': ''
+            })
             return
+            
         eid = clean_id(row[col_id_u])
         if eid in balance_map:
             matched_paycom_ids.add(eid)
@@ -160,10 +179,37 @@ def run_tool(file_paycom, file_uzio):
     missing_in_uzio = []
     for idx, row in df_p.iterrows():
         eid = clean_id(row[col_id_p])
+        val = row[col_bal_p]
+        
+        # Future Check (independent of missing)
+        fa = float(row[col_future_app]) if col_future_app and pd.notna(row[col_future_app]) else 0
+        fp = float(row[col_future_pend]) if col_future_pend and pd.notna(row[col_future_pend]) else 0
+        
+        if fa > 0 or fp > 0:
+             name = str(row[col_name_p]) if col_name_p and pd.notna(row[col_name_p]) else "N/A"
+             all_exceptions.append({
+                'Employee ID': eid,
+                'Employee Name': name,
+                'Issue Category': 'Future Time Off Detected',
+                'Paycom Balance': val,
+                'Future Approved': fa,
+                'Future Pending': fp
+            })
+
         if eid and eid not in matched_paycom_ids:
-            val = row[col_bal_p]
             if pd.notna(val) and str(val).strip() != "":
                 missing_in_uzio.append(row)
+                
+                # Add to Exception Consolidated
+                name = str(row[col_name_p]) if col_name_p and pd.notna(row[col_name_p]) else "N/A"
+                all_exceptions.append({
+                    'Employee ID': eid,
+                    'Employee Name': name,
+                    'Issue Category': 'Missing in Uzio Template',
+                    'Paycom Balance': val,
+                    'Future Approved': fa,
+                    'Future Pending': fp
+                })
     
     df_missing = pd.DataFrame(missing_in_uzio)
     if df_missing.empty: df_missing = pd.DataFrame({'Message': ['All Paycom employees matched']})
@@ -184,6 +230,11 @@ def run_tool(file_paycom, file_uzio):
     df_future = pd.DataFrame(future_rows)
     if df_future.empty: df_future = pd.DataFrame({'Message': ['No future time off found']})
 
+    # Consolidated Exceptions DataFrame
+    df_exceptions = pd.DataFrame(all_exceptions)
+    if df_exceptions.empty:
+         df_exceptions = pd.DataFrame({'Message': ['No exceptions found']})
+
     # ---------------------------------------------------------
     # PART C: Append Audit Sheets to Workbook
     # ---------------------------------------------------------
@@ -198,6 +249,9 @@ def run_tool(file_paycom, file_uzio):
     add_sheet_with_df(wb, "Unassigned Policies", df_unassigned)
     add_sheet_with_df(wb, "Future Time Off", df_future)
     add_sheet_with_df(wb, "Paycom Raw Data", df_p)
+    
+    # Final Tab: Consolidated Exceptions in one glance
+    add_sheet_with_df(wb, "Exception Summary", df_exceptions)
 
     out_final = io.BytesIO()
     wb.save(out_final)

@@ -289,11 +289,15 @@ def render_ui():
                 res = run_tool(f_p, f_u)
                 
             if res:
+                client = st.session_state.get('client_name', 'Client')
+                timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
+                filename = f"{client}_Uzio_Paycom_TimeOff_Audit_Report_{timestamp}.xlsx"
+
                 st.success("File Generated Successfully!")
                 st.download_button(
                     "Download Consolidated File",
                     data=res,
-                    file_name="Uzio_TimeOff_Consolidated.xlsx"
+                    file_name=filename
                 )
             else:
                 st.error("No file could be generated due to an error.")

@@ -290,10 +290,14 @@ def render_ui():
                 report = run_audit(f_uzio, f_adp)
             
             st.success("Audit Complete!")
+            client = st.session_state.get('client_name', 'Client')
+            timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
+            filename = f"{client}_Uzio_ADP_Emergency_Audit_Report_{timestamp}.xlsx"
+
             st.download_button(
                 "Download Report",
                 data=report,
-                file_name=f"ADP_Emergency_Audit_{date.today()}.xlsx"
+                file_name=filename
             )
         except Exception as e:
             st.error(f"Error: {e}")

@@ -805,10 +805,14 @@ def render_ui():
             with st.spinner("Running audit..."):
                 out_excel = run_comparison(uzio_file, paycom_file)
             st.success("Audit Complete!")
+            client = st.session_state.get('client_name', 'Client')
+            timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
+            filename = f"{client}_Uzio_Paycom_Census_Audit_Report_{timestamp}.xlsx"
+
             st.download_button(
                 label="Download Audit Report",
                 data=out_excel,
-                file_name=f"Paycom_Census_Audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                file_name=filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         except Exception as e:

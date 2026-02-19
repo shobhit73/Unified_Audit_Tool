@@ -111,8 +111,9 @@ def render_ui():
 
             st.success("Report generated.")
 
-            today_str = date.today().isoformat()
-            out_filename = f"Client_Name_Paycom_Payment_Data_Audit_{today_str}.xlsx"
+            client = st.session_state.get('client_name', 'Client')
+            timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
+            out_filename = f"{client}_Uzio_Paycom_Payment_Audit_Report_{timestamp}.xlsx"
 
             st.download_button(
                 label="Download Report (.xlsx)",

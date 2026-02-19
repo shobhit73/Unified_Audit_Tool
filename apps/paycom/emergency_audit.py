@@ -325,10 +325,14 @@ def render_ui():
                 
             if report:
                 st.success("Audit Complete!")
+                client = st.session_state.get('client_name', 'Client')
+                timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
+                filename = f"{client}_Uzio_Paycom_Emergency_Audit_Report_{timestamp}.xlsx"
+
                 st.download_button(
                     "Download Report",
                     data=report,
-                    file_name=f"Paycom_Emergency_Audit_{date.today()}.xlsx"
+                    file_name=filename
                 )
         except Exception as e:
             st.error(f"Error: {e}")

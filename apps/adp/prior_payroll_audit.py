@@ -417,9 +417,9 @@ def render_ui():
                     else:
                         st.success("Audit Completed Successfully!")
                         
-                        today_str = datetime.now().strftime("%b-%d-%Y")
-                        clean_client = "".join([c if c.isalnum() or c in (' ', '_', '-') else '' for c in client_name]).strip().replace(" ", "_")
-                        filename = f"{clean_client}_Prior_Payroll_Report_{today_str}.xlsx"
+                        client = st.session_state.get('client_name', 'Client')
+                        timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
+                        filename = f"{client}_Uzio_ADP_Prior_Payroll_Audit_Report_{timestamp}.xlsx"
                         
                         st.download_button(
                             label="Download Audit Report",

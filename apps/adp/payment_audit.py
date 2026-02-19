@@ -443,10 +443,14 @@ def render_ui():
                 report_bytes = run_audit(uzio_file, adp_file)
             
             st.success("Audit Complete!")
+            client = st.session_state.get('client_name', 'Client')
+            timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
+            filename = f"{client}_Uzio_ADP_Payment_Audit_Report_{timestamp}.xlsx"
+
             st.download_button(
                 label="Download Audit Report",
                 data=report_bytes,
-                file_name=f"ADP_Payment_Audit_{date.today()}.xlsx",
+                file_name=filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         except Exception as e:

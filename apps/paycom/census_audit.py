@@ -799,15 +799,16 @@ def render_ui():
 
     uzio_file = st.file_uploader("Upload Uzio Census Export (.xlsm)", type=["xlsm"])
     paycom_file = st.file_uploader("Upload Paycom Census Export (.csv or .xlsx)", type=["csv", "xlsx"])
+    
+    client_name = st.text_input("Client Name", value="Client", key="paycom_census_client")
 
     if st.button("Run Audit", type="primary", disabled=(not uzio_file or not paycom_file)):
         try:
             with st.spinner("Running audit..."):
                 out_excel = run_comparison(uzio_file, paycom_file)
             st.success("Audit Complete!")
-            client = st.session_state.get('client_name', 'Client')
             timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
-            filename = f"{client}_Uzio_Paycom_Census_Audit_Report_{timestamp}.xlsx"
+            filename = f"{client_name}_Uzio_Paycom_Census_Audit_Report_{timestamp}.xlsx"
 
             st.download_button(
                 label="Download Audit Report",

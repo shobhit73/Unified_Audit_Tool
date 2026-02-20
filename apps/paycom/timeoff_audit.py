@@ -260,6 +260,8 @@ def run_tool(file_paycom, file_uzio):
 
 def render_ui():
     st.title(APP_TITLE)
+    client_name = st.text_input("Client Name", value="Client", key="paycom_timeoff_client")
+
     st.markdown("""
     **Instructions**:
     1. Upload **Paycom TimeOff Summary Report** (.xls / HTML).
@@ -289,9 +291,8 @@ def render_ui():
                 res = run_tool(f_p, f_u)
                 
             if res:
-                client = st.session_state.get('client_name', 'Client')
                 timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
-                filename = f"{client}_Uzio_Paycom_TimeOff_Audit_Report_{timestamp}.xlsx"
+                filename = f"{client_name}_Uzio_Paycom_TimeOff_Audit_Report_{timestamp}.xlsx"
 
                 st.success("File Generated Successfully!")
                 st.download_button(

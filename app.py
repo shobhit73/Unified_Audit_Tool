@@ -101,11 +101,6 @@ with st.sidebar:
     # 1. Select Provider
     provider = st.radio("Select Provider", ["ADP", "Paycom"], index=0)
     
-    # Client Name Input
-    if "client_name" not in st.session_state:
-        st.session_state["client_name"] = "Client"
-        
-    st.text_input("Client Name", key="client_name", help="Enter client name for report filenames")
     
     # 2. Dynamic Tool Selection based on Provider
     tool_option = None

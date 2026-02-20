@@ -85,6 +85,8 @@ def strip_type(t):
 # ---------- UI ----------
 def render_ui():
     st.title(APP_TITLE)
+    client_name = st.text_input("Client Name", value="Client", key="paycom_payment_client")
+
     st.markdown("""
     **Instructions**:
     1. Upload **Uzio Payment Export** (`HR Report_...xlsx`).
@@ -111,9 +113,8 @@ def render_ui():
 
             st.success("Report generated.")
 
-            client = st.session_state.get('client_name', 'Client')
             timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
-            out_filename = f"{client}_Uzio_Paycom_Payment_Audit_Report_{timestamp}.xlsx"
+            out_filename = f"{client_name}_Uzio_Paycom_Payment_Audit_Report_{timestamp}.xlsx"
 
             st.download_button(
                 label="Download Report (.xlsx)",

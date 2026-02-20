@@ -895,6 +895,8 @@ def render_ui():
     - **Active_Missing_In_Uzio**: Active employees in ADP not found in Uzio.
     """)
 
+    client_name = st.text_input("Client Name", value="Client", key="adp_census_client")
+
     uzio_file = st.file_uploader("Upload Uzio Census Export (.xlsm)", type=["xlsm"])
     adp_file = st.file_uploader("Upload ADP Census Export (.xlsx)", type=["xlsx"])
 
@@ -910,9 +912,8 @@ def render_ui():
             
             st.success("Report generated.")
             
-            client = st.session_state.get('client_name', 'Client')
             timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
-            out_filename = f"{client}_Uzio_ADP_Census_Audit_Report_{timestamp}.xlsx"
+            out_filename = f"{client_name}_Uzio_ADP_Census_Audit_Report_{timestamp}.xlsx"
             
             st.download_button(
                 label="Download Report (.xlsx)",

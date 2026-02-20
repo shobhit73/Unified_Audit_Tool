@@ -83,9 +83,8 @@ def render_ui():
                     )
 
                     st.success("Audit Completed Successfully!")
-                    client = st.session_state.get('client_name', 'Client')
                     timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
-                    filename = f"{client}_Uzio_ADP_Withholding_Audit_Report_{timestamp}.xlsx"
+                    filename = f"{client_name}_Uzio_ADP_Withholding_Audit_Report_{timestamp}.xlsx"
 
                     st.download_button(
                         label="Download Report",

@@ -263,6 +263,8 @@ def run_audit(file_uzio, file_adp):
 
 def render_ui():
     st.title(APP_TITLE)
+    client_name = st.text_input("Client Name", value="Client", key="adp_emergency_client")
+
     st.markdown("""
     **Instructions**:
     1. Upload **Uzio Emergency Contact Export** (`.xlsx`).
@@ -290,9 +292,8 @@ def render_ui():
                 report = run_audit(f_uzio, f_adp)
             
             st.success("Audit Complete!")
-            client = st.session_state.get('client_name', 'Client')
             timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
-            filename = f"{client}_Uzio_ADP_Emergency_Audit_Report_{timestamp}.xlsx"
+            filename = f"{client_name}_Uzio_ADP_Emergency_Audit_Report_{timestamp}.xlsx"
 
             st.download_button(
                 "Download Report",

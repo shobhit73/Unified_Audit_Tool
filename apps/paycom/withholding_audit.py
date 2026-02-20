@@ -601,6 +601,9 @@ def build_report_bytes(summary, field_summary_by_status, comparison_detail, miss
 
 def render_ui():
     st.title(APP_TITLE)
+    
+    client_name = st.text_input("Client Name", value="Client", key="paycom_withholding_client")
+
     st.write(
         "Upload Paycom CSV (wide), UZIO CSV (long key-value), and Mapping.xlsx. "
         "Optional: key_mapping.yml + filing status_code file for labels + filing status UI mapping."
@@ -684,9 +687,8 @@ def render_ui():
                 report_bytes = build_report_bytes(summary, field_summary, detail, missing_list)
 
             st.success("Report generated.")
-            client = st.session_state.get('client_name', 'Client')
             timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
-            out_filename = f"{client}_Uzio_Paycom_Withholding_Audit_Report_{timestamp}.xlsx"
+            out_filename = f"{client_name}_Uzio_Paycom_Withholding_Audit_Report_{timestamp}.xlsx"
 
             st.download_button(
                 label="Download Audit Report",

@@ -307,6 +307,8 @@ def render_ui():
     - Emergency_1_Phone
     - Emergency_1_Language (Info Only)
     """)
+    
+    client_name = st.text_input("Client Name", value="Client", key="paycom_emergency_client")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -325,9 +327,8 @@ def render_ui():
                 
             if report:
                 st.success("Audit Complete!")
-                client = st.session_state.get('client_name', 'Client')
                 timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
-                filename = f"{client}_Uzio_Paycom_Emergency_Audit_Report_{timestamp}.xlsx"
+                filename = f"{client_name}_Uzio_Paycom_Emergency_Audit_Report_{timestamp}.xlsx"
 
                 st.download_button(
                     "Download Report",

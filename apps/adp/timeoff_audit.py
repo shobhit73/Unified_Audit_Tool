@@ -218,6 +218,8 @@ def run_tool(file_adp, file_uzio):
 
 def render_ui():
     st.title(APP_TITLE)
+    client_name = st.text_input("Client Name", value="Client", key="adp_timeoff_client")
+
     st.markdown("""
     **Instructions**:
     1. Upload **ADP Time Off Balance Summary** (.xlsx).
@@ -247,9 +249,8 @@ def render_ui():
                 res = run_tool(f_a, f_u)
                 
             if res:
-                client = st.session_state.get('client_name', 'Client')
                 timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
-                filename = f"{client}_Uzio_ADP_TimeOff_Audit_Report_{timestamp}.xlsx"
+                filename = f"{client_name}_Uzio_ADP_TimeOff_Audit_Report_{timestamp}.xlsx"
 
                 st.success("File Generated Successfully!")
                 st.download_button(

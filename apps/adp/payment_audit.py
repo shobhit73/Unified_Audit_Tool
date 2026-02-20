@@ -416,6 +416,8 @@ def run_audit(file_uzio, file_adp):
 
 def render_ui():
     st.title(APP_TITLE)
+    client_name = st.text_input("Client Name", value="Client", key="adp_payment_client")
+
     st.markdown("""
     **Instructions**:
     1. Upload **Uzio Payment Export** (`HR Report_...xlsx`).
@@ -443,9 +445,8 @@ def render_ui():
                 report_bytes = run_audit(uzio_file, adp_file)
             
             st.success("Audit Complete!")
-            client = st.session_state.get('client_name', 'Client')
             timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
-            filename = f"{client}_Uzio_ADP_Payment_Audit_Report_{timestamp}.xlsx"
+            filename = f"{client_name}_Uzio_ADP_Payment_Audit_Report_{timestamp}.xlsx"
 
             st.download_button(
                 label="Download Audit Report",

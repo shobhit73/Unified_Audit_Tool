@@ -305,7 +305,9 @@ def render_ui():
         
     m_file = st.file_uploader("Mapping Sheet", type=["xlsx", "csv"], key="pd_m")
     
-    if st.button("Run Audit", type="primary"):
+    client_name = st.text_input("Client Name", value="Client", key="paycom_deduction_client")
+                    
+    if st.button("Run Comparison", type="primary"):
         if not u_file or not p_file or not m_file:
             st.error("Please upload all 3 files.")
             return
@@ -317,9 +319,8 @@ def render_ui():
                 st.error(err)
             else:
                 st.success("Audit Complete!")
-                client = st.session_state.get('client_name', 'Client')
                 timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
-                filename = f"{client}_Uzio_Paycom_Deduction_Audit_Report_{timestamp}.xlsx"
+                filename = f"{client_name}_Uzio_Paycom_Deduction_Audit_Report_{timestamp}.xlsx"
 
                 st.download_button(
                     "Download Report",

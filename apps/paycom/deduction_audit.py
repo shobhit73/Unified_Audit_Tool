@@ -67,7 +67,7 @@ def read_uzio_deduction(file):
                   
     raise ValueError("Could not find 'Employee Id' column in any sheet.")
 
-def run_audit(file_uzio, file_paycom, file_mapping):
+def run_audit(file_uzio, file_paycom, UI_MAPPING):
     # 1. Load Data
     
     # Uzio
@@ -101,43 +101,9 @@ def run_audit(file_uzio, file_paycom, file_mapping):
     except Exception as e:
         return None, f"Error reading Paycom file: {e}", []
 
-    # Mapping
-    try:
-        if file_mapping.name.endswith('.csv'):
-             df_map = pd.read_csv(file_mapping)
-        else:
-             df_map = pd.read_excel(file_mapping)
-        df_map.columns = [norm_col(c) for c in df_map.columns]
-    except Exception as e:
-        return None, f"Error reading Mapping file: {e}", []
-
     # 2. Process Mapping
-    # Expect columns roughly like "Paycom Code", "Uzio Name"
-    map_p_col = next((c for c in df_map.columns if "paycom" in c.lower()), None)
-    map_u_col = next((c for c in df_map.columns if "uzio" in c.lower()), None)
-    
-    if not map_p_col or not map_u_col:
-         # Try simpler heuristic: Column 1 -> Paycom, Column 2 -> Uzio?
-         # Or assume user followed instructions. Let's error if strictly not found for safety.
-         # Actually, let's be flexible. If 2 columns, use them.
-         if len(df_map.columns) >= 2:
-             map_p_col = df_map.columns[1] # Assume Paycom Code
-             map_u_col = df_map.columns[0] # Assume Uzio Name (or vice versa? User said "uzio coloumn and paycom colloumn")
-             # Let's prompt user to be sure? No, strict auto-detect is better.
-             # User said: "consisting of two coloumns uzio coloumn and paycom colloumn"
-             # Let's check headers for keywords again
-             pass
-    
-    if not map_p_col or not map_u_col:
-        return None, f"Mapping Sheet must have headers identifying 'Uzio' and 'Paycom'. Found: {list(df_map.columns)}", []
-
-    mapping = {} # Paycom Code -> Uzio Name
-    for _, row in df_map.iterrows():
-        p_val = norm_str(row[map_p_col])
-        u_val = norm_str(row[map_u_col])
-        if p_val and u_val:
-            mapping[p_val.lower()] = u_val
-            mapping[p_val] = u_val
+    mapping = {k.lower(): v for k, v in UI_MAPPING.items()}
+    mapping.update(UI_MAPPING) # include original case too
 
     # 3. Process Paycom
     # Columns: EE Code, EE Name, Deduction Code, Deduction Desc, Amount, Percent
@@ -158,14 +124,15 @@ def run_audit(file_uzio, file_paycom, file_mapping):
         raw_desc = norm_str(row.get(p_desc_col))
         
         # Map to Uzio Name
-        # Try Code first, then Description
-        ded_name = mapping.get(raw_code.lower())
+        # Try Description first, then Code
+        ded_name = mapping.get(raw_desc.lower())
         if not ded_name:
-             ded_name = mapping.get(raw_desc.lower())
+             ded_name = mapping.get(raw_desc)
              
         if not ded_name:
-             # Skip unmapped? Or keep as "Unmapped"?
-             # Usually audit only checks mapped ones.
+             ded_name = mapping.get(raw_code.lower())
+             
+        if not ded_name:
              continue
              
         amt = clean_money_val(row.get(p_amt_col))
@@ -255,6 +222,12 @@ def run_audit(file_uzio, file_paycom, file_mapping):
             diff = abs(p_amt - u_amt)
             if diff < 0.01:
                 status = "Data Match"
+            elif p_amt == 0.0 and abs(p_rate - u_amt) < 0.01:
+                 # Check if paycom rate matches uzio amount (common for percentages)
+                 status = "Data Match"
+            elif p_amt == 0.0 and abs(p_rate * 100 - u_amt) < 0.01:
+                 # Handle decimal percentage formats (e.g. 0.05 rate vs 5.0 amount)
+                 status = "Data Match"
             else:
                 # Check rate mismatch? E.g. 0.04 vs 4.0?
                 # User had issue with % mismatch.
@@ -288,43 +261,126 @@ def run_audit(file_uzio, file_paycom, file_mapping):
              
     return output.getvalue(), None, results
 
+def get_unique_uzio_deductions(file):
+    try:
+        # Seek to start
+        file.seek(0)
+        df_uzio = read_uzio_deduction(file)
+        
+        u_ded_col = next((c for c in df_uzio.columns if "deduction name" in c.lower()), None)
+        if not u_ded_col: return []
+
+        unique_deductions = df_uzio[u_ded_col].dropna().unique().tolist()
+        return [str(d).strip() for d in unique_deductions if str(d).strip() != ""]
+    except Exception as e:
+        return []
+
+def get_unique_paycom_deductions(file):
+    try:
+        p_header_idx = 0
+        file.seek(0)
+        with io.BytesIO(file.getvalue()) as f:
+            import csv
+            wrapper = io.TextIOWrapper(f, encoding='utf-8', errors='replace')
+            for i in range(100):
+                line = wrapper.readline()
+                if "Code" in line and "Amount" in line:
+                    p_header_idx = i
+                    break
+            wrapper.detach() 
+
+        file.seek(0)
+        df_paycom = pd.read_csv(file, header=p_header_idx)
+        df_paycom.columns = [norm_col(c) for c in df_paycom.columns]
+        
+        p_desc_col = next((c for c in df_paycom.columns if "deduction desc" in c.lower()), next((c for c in df_paycom.columns if "description" in c.lower()), None))
+        
+        if not p_desc_col:
+             p_desc_col = next((c for c in df_paycom.columns if "deduction code" in c.lower()), next((c for c in df_paycom.columns if "code" in c.lower() and "employee" not in c.lower() and "ee" not in c.lower()), None))
+
+        if not p_desc_col: return []
+
+        unique_deductions = df_paycom[p_desc_col].dropna().unique().tolist()
+        return [str(d).strip() for d in unique_deductions if str(d).strip() != ""]
+    except Exception as e:
+        return []
+
 def render_ui():
     st.title(APP_TITLE)
     st.markdown("""
     **Instructions**:
     1. Upload **Uzio Deduction Export** (Excel).
     2. Upload **Paycom Deduction Export** (CSV).
-    3. Upload **Mapping File** (Excel/CSV with `Paycom Code` and `Uzio Name` columns).
+    3. Map the extracted Paycom deductions to Uzio deductions, then click **Run Comparison**.
     """)
     
     col1, col2 = st.columns(2)
     with col1:
         u_file = st.file_uploader("Uzio Deduction File", type=["xlsx", "xls"], key="pd_u")
     with col2:
-        p_file = st.file_uploader("Paycom Deduction File", type=["csv", "xlsx"], key="pd_p")
+        p_file = st.file_uploader("Paycom Deduction File", type=["csv"], key="pd_p")
         
-    m_file = st.file_uploader("Mapping Sheet", type=["xlsx", "csv"], key="pd_m")
-    
     client_name = st.text_input("Client Name", value="Client", key="paycom_deduction_client")
-                    
-    if st.button("Run Comparison", type="primary"):
-        if not u_file or not p_file or not m_file:
-            st.error("Please upload all 3 files.")
-            return
-            
-        with st.spinner("Processing..."):
-            report, err, _ = run_audit(u_file, p_file, m_file)
-            
-            if err:
-                st.error(err)
-            else:
-                st.success("Audit Complete!")
-                timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
-                filename = f"{client_name}_Uzio_Paycom_Deduction_Audit_Report_{timestamp}.xlsx"
+    
+    if u_file and p_file:
+         st.markdown("---")
+         st.subheader("Map Deductions")
+         
+         uzio_deductions = get_unique_uzio_deductions(u_file)
+         paycom_deductions = get_unique_paycom_deductions(p_file)
+         
+         if not uzio_deductions:
+              st.error("Could not find any 'Deduction Name' values in the Uzio file.")
+         elif not paycom_deductions:
+              st.error("Could not find any Deduction Descriptions or Codes in the Paycom file.")
+         else:
+              uzio_options = ["— Ignore / Skip —"] + sorted(uzio_deductions)
+              
+              st.markdown("Please map the Paycom Deductions to the corresponding Uzio Deductions below:")
+              
+              ui_mapping = {}
+              
+              # Render mapping UI
+              for p_ded in sorted(paycom_deductions):
+                  col_a, col_b = st.columns([1, 1])
+                  with col_a:
+                       st.write(p_ded)
+                  with col_b:
+                       # Try to auto-match if names are very similar
+                       default_idx = 0
+                       for idx, opt in enumerate(uzio_options):
+                           if opt != "— Ignore / Skip —" and opt.lower() == p_ded.lower():
+                               default_idx = idx
+                               break
+                               
+                       selected = st.selectbox(
+                           f"Map for {p_ded}", 
+                           uzio_options, 
+                           index=default_idx, 
+                           key=f"map_p_{p_ded}",
+                           label_visibility="collapsed"
+                       )
+                       if selected != "— Ignore / Skip —":
+                            ui_mapping[p_ded] = selected
+              
+              st.markdown("---")
+              if st.button("Run Comparison", type="primary"):
+                  with st.spinner("Processing..."):
+                      u_file.seek(0)
+                      p_file.seek(0)
+                      report, err, _ = run_audit(u_file, p_file, ui_mapping)
+                      
+                      if err:
+                          st.error(err)
+                      else:
+                          st.success("Audit Complete!")
+                          timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
+                          filename = f"{client_name}_Uzio_Paycom_Deduction_Audit_Report_{timestamp}.xlsx"
+          
+                          st.download_button(
+                              "Download Report",
+                              data=report,
+                              file_name=filename,
+                              mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                          )
 
-                st.download_button(
-                    "Download Report",
-                    data=report,
-                    file_name=filename,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )

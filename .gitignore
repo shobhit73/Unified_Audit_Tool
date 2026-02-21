@@ -11,3 +11,8 @@ venv
 env
 *.log
 .DS_Store
+
+# Security / Secrets
+.env
+.streamlit/secrets.toml
+**/.vscode/

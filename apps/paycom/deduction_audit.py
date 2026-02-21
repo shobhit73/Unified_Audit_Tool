@@ -27,7 +27,7 @@ def read_uzio_deduction(file):
     Read Uzio Deduction Export.
     Search all sheets for header row containing 'Employee Id' and 'Deduction Name'.
     """
-    xls = pd.ExcelFile(file)
+    xls = pd.ExcelFile(io.BytesIO(file.getvalue()), engine='openpyxl')
     
     for sheet in xls.sheet_names:
         # Read first 20 rows
@@ -43,25 +43,18 @@ def read_uzio_deduction(file):
         
         if header_row_idx is not None:
              # Found it!
-             if hasattr(file, 'seek'):
-                 file.seek(0)
-             df = pd.read_excel(xls, sheet_name=sheet, header=header_row_idx)
+             df = pd.read_excel(xls, sheet_name=sheet, header=header_row_idx, dtype=str)
              # Normalize columns
              df.columns = [norm_col(c) for c in df.columns]
              return df
 
     # Fallback if strict check fails: Try just Employee Id
-    if hasattr(file, 'seek'):
-         file.seek(0)
-         
     for sheet in xls.sheet_names:
         df_raw = pd.read_excel(xls, sheet_name=sheet, header=None, nrows=20)
         for idx, row in df_raw.iterrows():
              row_vals = [str(v).strip().lower() for v in row.values if pd.notna(v)]
              if any("employee id" in v for v in row_vals):
-                  if hasattr(file, 'seek'):
-                      file.seek(0)
-                  df = pd.read_excel(xls, sheet_name=sheet, header=idx)
+                  df = pd.read_excel(xls, sheet_name=sheet, header=idx, dtype=str)
                   df.columns = [norm_col(c) for c in df.columns]
                   return df
                   

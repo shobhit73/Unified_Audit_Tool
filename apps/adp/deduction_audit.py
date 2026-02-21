@@ -30,14 +30,50 @@ def clean_money_val(x):
         # If it's not a number (like an SSN), return the string itself for comparison
         return s
 
+def read_uzio_deduction(file):
+    """
+    Read Uzio Deduction Export.
+    Search all sheets for header row containing 'Employee Id' and 'Deduction Name'.
+    """
+    xls = pd.ExcelFile(io.BytesIO(file.getvalue()), engine='openpyxl')
+    
+    for sheet in xls.sheet_names:
+        # Read first 20 rows
+        df_raw = pd.read_excel(xls, sheet_name=sheet, header=None, nrows=20)
+        
+        header_row_idx = None
+        for idx, row in df_raw.iterrows():
+            row_vals = [str(v).strip().lower() for v in row.values if pd.notna(v)]
+            # Strict check: Must have Employee Id AND Deduction Name
+            if any("employee id" in v for v in row_vals) and any("deduction name" in v for v in row_vals):
+                header_row_idx = idx
+                break
+        
+        if header_row_idx is not None:
+             # Found it!
+             df = pd.read_excel(xls, sheet_name=sheet, header=header_row_idx, dtype=str)
+             # Normalize columns
+             df.columns = [norm_col(c) for c in df.columns]
+             return df
+
+    # Fallback if strict check fails: Try just Employee Id
+    for sheet in xls.sheet_names:
+        df_raw = pd.read_excel(xls, sheet_name=sheet, header=None, nrows=20)
+        for idx, row in df_raw.iterrows():
+             row_vals = [str(v).strip().lower() for v in row.values if pd.notna(v)]
+             if any("employee id" in v for v in row_vals):
+                  df = pd.read_excel(xls, sheet_name=sheet, header=idx, dtype=str)
+                  df.columns = [norm_col(c) for c in df.columns]
+                  return df
+                  
+    raise ValueError("Could not find 'Employee Id' column in any sheet.")
+
 def run_audit(file_uzio, file_adp, UI_MAPPING):
     # 1. Load Data
     
     # Uzio Data File
     try:
-        xls_uzio = pd.ExcelFile(io.BytesIO(file_uzio.getvalue()), engine='openpyxl')
-        uzio_sheet = xls_uzio.sheet_names[0] # assuming single/first sheet
-        df_uzio = pd.read_excel(xls_uzio, sheet_name=uzio_sheet, dtype=str)
+        df_uzio = read_uzio_deduction(file_uzio)
     except Exception as e:
         return None, f"Error reading Uzio Data File: {e}", []
 
@@ -255,11 +291,8 @@ def _generate_output(results):
 def get_unique_uzio_deductions_from_excel(file):
     try:
         file.seek(0)
-        xls_uzio = pd.ExcelFile(io.BytesIO(file.getvalue()), engine='openpyxl')
-        uzio_sheet = xls_uzio.sheet_names[0] 
-        df_uzio = pd.read_excel(xls_uzio, sheet_name=uzio_sheet, dtype=str)
+        df_uzio = read_uzio_deduction(file)
         
-        df_uzio.columns = [norm_col(c) for c in df_uzio.columns]
         u_ded_col = next((c for c in df_uzio.columns if "deduction name" in c.lower()), None)
         if not u_ded_col: return []
 

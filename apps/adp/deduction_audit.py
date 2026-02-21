@@ -359,28 +359,45 @@ def render_ui():
          elif not adp_deductions:
               st.error("Could not find any Deduction Descriptions or Codes in the ADP file.")
          else:
-              uzio_options = ["— Ignore / Skip —"] + sorted(uzio_deductions)
-              
               st.markdown("Please map the ADP Deductions to the corresponding Uzio Deductions below:")
               
               ui_mapping = {}
+              
+              # Initialize session state for mappings
+              for a_ded in adp_deductions:
+                  key = f"map_adp_{a_ded}"
+                  if key not in st.session_state:
+                      default_val = "— Ignore / Skip —"
+                      for opt in uzio_deductions:
+                          if opt.lower() == a_ded.lower():
+                              default_val = opt
+                              break
+                      st.session_state[key] = default_val
+
+              # Collect all currently selected values
+              selected_values = set()
+              for a_ded in adp_deductions:
+                  val = st.session_state.get(f"map_adp_{a_ded}", "— Ignore / Skip —")
+                  if val != "— Ignore / Skip —":
+                      selected_values.add(val)
               
               for a_ded in sorted(adp_deductions):
                   col_a, col_b = st.columns([1, 1])
                   with col_a:
                        st.write(a_ded)
                   with col_b:
-                       default_idx = 0
-                       for idx, opt in enumerate(uzio_options):
-                           if opt != "— Ignore / Skip —" and opt.lower() == a_ded.lower():
-                               default_idx = idx
-                               break
+                       key = f"map_adp_{a_ded}"
+                       current_val = st.session_state.get(key, "— Ignore / Skip —")
+                       
+                       available_options = ["— Ignore / Skip —"]
+                       for opt in sorted(uzio_deductions):
+                           if opt == current_val or opt not in selected_values:
+                               available_options.append(opt)
                                
                        selected = st.selectbox(
                            f"Map for {a_ded}", 
-                           uzio_options, 
-                           index=default_idx, 
-                           key=f"map_adp_{a_ded}",
+                           available_options,
+                           key=key,
                            label_visibility="collapsed"
                        )
                        if selected != "— Ignore / Skip —":

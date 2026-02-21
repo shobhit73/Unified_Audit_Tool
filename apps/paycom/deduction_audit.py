@@ -294,7 +294,18 @@ def get_unique_paycom_deductions(file):
         if not p_desc_col: return []
 
         unique_deductions = df_paycom[p_desc_col].dropna().unique().tolist()
-        return [str(d).strip() for d in unique_deductions if str(d).strip() != ""]
+        
+        filtered_deductions = []
+        for d in unique_deductions:
+             s = str(d).strip()
+             if not s:
+                 continue
+             s_lower = s.lower()
+             if "checking" in s_lower or "savings" in s_lower:
+                 continue
+             filtered_deductions.append(s)
+             
+        return filtered_deductions
     except Exception as e:
         return []
 

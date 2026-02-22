@@ -119,18 +119,35 @@ def generate_uzio_template(df_source, vendor_field_map):
                 def format_date(d):
                     if pd.isna(d) or str(d).strip() == "": return ""
                     try:
-                        # Attempt to parse into standard format
                         dt = pd.to_datetime(str(d).strip(), errors='coerce')
                         if pd.isna(dt): return str(d).strip()
                         return dt.strftime('%d/%m/%Y')
                     except:
                         return str(d).strip()
                 series = series.apply(format_date)
+            elif std_name == 'SSN':
+                series = series.apply(lambda x: str(x).replace("-", "").strip() if pd.notna(x) else "")
+            elif std_name == 'Gender':
+                def format_gender(g):
+                    if pd.isna(g) or str(g).strip() == "": return ""
+                    g_str = str(g).strip().lower()
+                    if g_str.startswith('m'): return "Male"
+                    if g_str.startswith('f'): return "Female"
+                    return str(g).strip().title()
+                series = series.apply(format_gender)
+            elif std_name == 'Employment Status':
+                series = series.apply(lambda x: str(x).strip().upper() if pd.notna(x) else "")
                 
             # We port the data
             df_uzio[uzio_header] = series
         else:
             df_uzio[uzio_header] = ""
+
+    # Apply Work Email Fallback
+    if 'Official Email*' in df_uzio.columns and 'Personal Email' in df_uzio.columns:
+        # Fill missing Work Emails with Personal Email
+        missing_work_mask = df_uzio['Official Email*'].isna() | (df_uzio['Official Email*'].astype(str).str.strip() == "")
+        df_uzio.loc[missing_work_mask, 'Official Email*'] = df_uzio.loc[missing_work_mask, 'Personal Email']
 
     # Apply Pay Type rules
     if 'Pay Type*' in df_uzio.columns:
@@ -154,7 +171,7 @@ def inject_into_uzio_template(df_uzio, template_path="templates/Uzio_Census_Temp
     """
     Injects a formatted Uzio DataFrame into the standard Uzio .xlsm template.
     Preserves all sheets, instructions, and headers.
-    Data starts at Row 5 of the 'Employee Details' sheet.
+    Dynamically finds the row containing 'Employee First Name*' and starts data on the next row.
     """
     import openpyxl
     import os
@@ -165,20 +182,31 @@ def inject_into_uzio_template(df_uzio, template_path="templates/Uzio_Census_Temp
     wb = openpyxl.load_workbook(template_path, keep_vba=True)
     ws = wb['Employee Details']
     
-    # Write data starting at row 5
-    start_row = 5
-    
-    # We want to match the columns perfectly. The template has exact headers in row 4.
+    # Dynamically find the header row
+    header_row = 4 # Fallback
     headers_in_template = {}
+    
+    for r in range(1, 10): # Search first 10 rows
+        for c in range(1, ws.max_column + 1):
+            val = ws.cell(row=r, column=c).value
+            if str(val).strip() == 'Employee First Name*':
+                header_row = r
+                break
+        if header_row == r:
+            break
+            
+    # Map column headers
     for col_idx in range(1, ws.max_column + 1):
-        # We only really care about columns that exist in the UZIO_RAW_MAPPING
-        val = ws.cell(row=4, column=col_idx).value
-        headers_in_template[str(val).strip()] = col_idx
+        val = ws.cell(row=header_row, column=col_idx).value
+        if val:
+            headers_in_template[str(val).strip()] = col_idx
+
+    # Write data starting at the row after the headers
+    start_row = header_row + 1
 
     for row_idx, row_data in df_uzio.iterrows():
         excel_row = start_row + row_idx
         for col_name in df_uzio.columns:
-            # Find which column index this header corresponds to in the template
             c_name_strip = str(col_name).strip()
             if c_name_strip in headers_in_template:
                 col_idx = headers_in_template[c_name_strip]

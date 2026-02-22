@@ -6,39 +6,39 @@ from utils.audit_utils import generate_uzio_template
 APP_TITLE = "Paycom to Uzio Census Template Generator"
 
 PAYCOM_FIELD_MAP = {
-    'Employee ID': 'Employee_Code',
-    'First Name': 'Legal_Firstname',
-    'Last Name': 'Legal_Lastname',
-    'Middle Initial': 'Legal_Middle_Name',
-    'Employment Status': 'Employee_Status',
-    'Hire Date': 'Most_Recent_Hire_Date',
-    'Original Hire Date': 'Most_Recent_Hire_Date',
-    'Termination Date': 'Termination_Date',
-    'Pay Type': 'Pay_Type',
-    'Annual Salary': 'Annual_Salary',
-    'Hourly Pay Rate': 'Rate_1',
-    'Working Hours': 'Scheduled_Pay_Period_Hours',
-    'Job Title': 'Position',
-    'Department': 'Department_Desc',
-    'Work Email': 'Work_Email',
-    'Personal Email': 'Personal_Email',
-    'Phone Number': 'Primary_Phone',
-    'SSN': 'SS_Number',
-    'DOB': 'Birth_Date_(MM/DD/YYYY)',
-    'Gender': 'Gender',
-    'Tobacco User': 'Tobacco_User',
-    'FLSA Classification': 'Exempt_Status',
-    'Address Line 1': 'Primary_Address_Line_1',
-    'Address Line 2': 'Primary_Address_Line_2',
-    'City': 'Primary_City/Municipality',
-    'Zip': 'Primary_Zip/Postal_Code',
-    'State': 'Primary_State/Province',
-    'Mailing Address Line 1': 'Mailing_Address_Line_1',
-    'Mailing Address Line 2': 'Mailing_Address_Line_2',
-    'Mailing City': 'Mailing_City/Municipality',
-    'Mailing Zip': 'Mailing_Zip/Postal_Code',
-    'Mailing State': 'Mailing_State/Province',
-    'License Number': 'DriversLicense'
+    'Employee ID': ['Employee_Code', 'Employee Code', 'EE Code'],
+    'First Name': ['Legal_Firstname', 'First Name', 'Legal First Name'],
+    'Last Name': ['Legal_Lastname', 'Last Name', 'Legal Last Name'],
+    'Middle Initial': ['Legal_Middle_Name', 'Middle Name', 'Middle Initial'],
+    'Employment Status': ['Employee_Status', 'Status', 'EE Status', 'Employment Status'],
+    'Hire Date': ['Most_Recent_Hire_Date', 'Hire Date', 'Recent Hire Date'],
+    'Original Hire Date': ['Most_Recent_Hire_Date', 'Original Hire Date', 'Hire Date'],
+    'Termination Date': ['Termination_Date', 'Termination Date'],
+    'Pay Type': ['Pay_Type', 'Pay Type'],
+    'Annual Salary': ['Annual_Salary', 'Annual Salary'],
+    'Hourly Pay Rate': ['Rate_1', 'Hourly Rate', 'Pay Rate', 'Rate 1'],
+    'Working Hours': ['Scheduled_Pay_Period_Hours', 'Scheduled Hours', 'Working Hours'],
+    'Job Title': ['Position', 'Job Title'],
+    'Department': ['Department_Desc', 'Department', 'Department Desc'],
+    'Work Email': ['Work_Email', 'Work Email', 'Email'],
+    'Personal Email': ['Personal_Email', 'Personal Email'],
+    'Phone Number': ['Primary_Phone', 'Phone Number', 'Phone'],
+    'SSN': ['SS_Number', 'SSN', 'Social Security Number'],
+    'DOB': ['Birth_Date_(MM/DD/YYYY)', 'Birth Date', 'DOB'],
+    'Gender': ['Gender', 'Sex'],
+    'Tobacco User': ['Tobacco_User', 'Tobacco User'],
+    'FLSA Classification': ['Exempt_Status', 'FLSA Status', 'FLSA Classification'],
+    'Address Line 1': ['Primary_Address_Line_1', 'Address Line 1'],
+    'Address Line 2': ['Primary_Address_Line_2', 'Address Line 2'],
+    'City': ['Primary_City/Municipality', 'City'],
+    'Zip': ['Primary_Zip/Postal_Code', 'Zip', 'Zip Code'],
+    'State': ['Primary_State/Province', 'State'],
+    'Mailing Address Line 1': ['Mailing_Address_Line_1', 'Mailing Address Line 1'],
+    'Mailing Address Line 2': ['Mailing_Address_Line_2', 'Mailing Address Line 2'],
+    'Mailing City': ['Mailing_City/Municipality', 'Mailing City'],
+    'Mailing Zip': ['Mailing_Zip/Postal_Code', 'Mailing Zip'],
+    'Mailing State': ['Mailing_State/Province', 'Mailing State'],
+    'License Number': ['DriversLicense', 'Drivers License', 'License Number']
 }
 
 def norm_colname(c: str) -> str:
@@ -79,11 +79,23 @@ def render_ui():
                     # Normalize source columns
                     df_paycom.columns = [norm_colname(c) for c in df_paycom.columns]
                     
-                    # Normalize the VENDOR_FIELD_MAP values
-                    normalized_field_map = {k: norm_colname(v) for k, v in PAYCOM_FIELD_MAP.items()}
+                    # Normalize and Resolve the VENDOR_FIELD_MAP values
+                    # We pick the first column name in the fallback list that actually exists in df_paycom
+                    resolved_field_map = {}
+                    for std_name, vendor_cols in PAYCOM_FIELD_MAP.items():
+                        found = False
+                        for vc in vendor_cols:
+                            norm_vc = norm_colname(vc)
+                            if norm_vc in df_paycom.columns:
+                                resolved_field_map[std_name] = norm_vc
+                                found = True
+                                break
+                        # If none found, just map to the first one so it defaults to blank downstream
+                        if not found:
+                            resolved_field_map[std_name] = norm_colname(vendor_cols[0])
                     
                     # Generate Uzio Template
-                    df_uzio = generate_uzio_template(df_paycom, normalized_field_map)
+                    df_uzio = generate_uzio_template(df_paycom, resolved_field_map)
                     
                     # Inject into the Master Template
                     from utils.audit_utils import inject_into_uzio_template

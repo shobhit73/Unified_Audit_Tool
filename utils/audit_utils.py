@@ -149,3 +149,41 @@ def generate_uzio_template(df_source, vendor_field_map):
             df_uzio.loc[salary_mask, 'Working Hours per Week(Digits)**'] = ""
             
     return df_uzio
+
+def inject_into_uzio_template(df_uzio, template_path="templates/Uzio_Census_Template.xlsm"):
+    """
+    Injects a formatted Uzio DataFrame into the standard Uzio .xlsm template.
+    Preserves all sheets, instructions, and headers.
+    Data starts at Row 5 of the 'Employee Details' sheet.
+    """
+    import openpyxl
+    import os
+    
+    if not os.path.exists(template_path):
+        raise FileNotFoundError(f"Template file not found at {template_path}")
+        
+    wb = openpyxl.load_workbook(template_path, keep_vba=True)
+    ws = wb['Employee Details']
+    
+    # Write data starting at row 5
+    start_row = 5
+    
+    # We want to match the columns perfectly. The template has exact headers in row 4.
+    headers_in_template = {}
+    for col_idx in range(1, ws.max_column + 1):
+        # We only really care about columns that exist in the UZIO_RAW_MAPPING
+        val = ws.cell(row=4, column=col_idx).value
+        headers_in_template[str(val).strip()] = col_idx
+
+    for row_idx, row_data in df_uzio.iterrows():
+        excel_row = start_row + row_idx
+        for col_name in df_uzio.columns:
+            # Find which column index this header corresponds to in the template
+            c_name_strip = str(col_name).strip()
+            if c_name_strip in headers_in_template:
+                col_idx = headers_in_template[c_name_strip]
+                val = row_data[col_name]
+                if pd.notna(val) and val != "":
+                    ws.cell(row=excel_row, column=col_idx, value=val)
+                    
+    return wb

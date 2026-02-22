@@ -12,6 +12,7 @@ ADP_FIELD_MAP = {
     'Last Name': ['Legal Last Name', 'Last Name'],
     'Middle Initial': ['Legal Middle Name', 'Middle Name', 'Middle Initial'],
     'Employment Status': ['Position Status', 'Worker Status', 'Status'],
+    'Employment Type': ['Worker Category Description', 'Worker Category', 'Employment Type'],
     'Hire Date': ['Hire/Rehire Date', 'Hire Date', 'Most Recent Hire Date'],
     'Original Hire Date': ['Hire Date', 'Original Hire Date'],
     'Termination Date': ['Termination Date'],

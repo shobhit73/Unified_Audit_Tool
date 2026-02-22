@@ -16,6 +16,7 @@ UZIO_RAW_MAPPING = {
     'Original DOH': 'Original Hire Date',
     'Termination Date': 'Termination Date',
     'Termination Reason': 'Termination Reason',
+    'Employment Type*': 'Employment Type',
     'Pay Type*': 'Pay Type',
     'Annual Salary(Digits)**': 'Annual Salary',
     'Hourly Pay Rate**': 'Hourly Pay Rate',
@@ -133,9 +134,9 @@ def generate_uzio_template(df_source, vendor_field_map):
                     g_str = str(g).strip().lower()
                     if g_str.startswith('m'): return "Male"
                     if g_str.startswith('f'): return "Female"
-                    return str(g).strip().title()
+                    return ""
                 series = series.apply(format_gender)
-            elif std_name == 'Employment Status':
+            elif std_name in ['Employment Status', 'Employment Type']:
                 series = series.apply(lambda x: str(x).strip().upper() if pd.notna(x) else "")
                 
             # We port the data
@@ -175,6 +176,7 @@ def inject_into_uzio_template(df_uzio, template_path="templates/Uzio_Census_Temp
     """
     import openpyxl
     import os
+    import re
     
     if not os.path.exists(template_path):
         raise FileNotFoundError(f"Template file not found at {template_path}")
@@ -189,7 +191,7 @@ def inject_into_uzio_template(df_uzio, template_path="templates/Uzio_Census_Temp
     for r in range(1, 10): # Search first 10 rows
         for c in range(1, ws.max_column + 1):
             val = ws.cell(row=r, column=c).value
-            if str(val).strip() == 'Employee First Name*':
+            if val and re.sub(r'\s+', ' ', str(val)).strip() == 'Employee First Name*':
                 header_row = r
                 break
         if header_row == r:
@@ -199,7 +201,9 @@ def inject_into_uzio_template(df_uzio, template_path="templates/Uzio_Census_Temp
     for col_idx in range(1, ws.max_column + 1):
         val = ws.cell(row=header_row, column=col_idx).value
         if val:
-            headers_in_template[str(val).strip()] = col_idx
+            # Normalize to handle templates with embedded newlines like 'Employment\nStatus*'
+            norm_val = re.sub(r'\s+', ' ', str(val)).strip()
+            headers_in_template[norm_val] = col_idx
 
     # Write data starting at the row after the headers
     start_row = header_row + 1
@@ -207,7 +211,7 @@ def inject_into_uzio_template(df_uzio, template_path="templates/Uzio_Census_Temp
     for row_idx, row_data in df_uzio.iterrows():
         excel_row = start_row + row_idx
         for col_name in df_uzio.columns:
-            c_name_strip = str(col_name).strip()
+            c_name_strip = re.sub(r'\s+', ' ', str(col_name)).strip()
             if c_name_strip in headers_in_template:
                 col_idx = headers_in_template[c_name_strip]
                 val = row_data[col_name]

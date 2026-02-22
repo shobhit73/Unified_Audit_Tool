@@ -11,6 +11,7 @@ PAYCOM_FIELD_MAP = {
     'Last Name': ['Legal_Lastname', 'Last Name', 'Legal Last Name'],
     'Middle Initial': ['Legal_Middle_Name', 'Middle Name', 'Middle Initial'],
     'Employment Status': ['Employee_Status', 'Status', 'EE Status', 'Employment Status'],
+    'Employment Type': ['Employment Type', 'EE Type', 'Employee Type'],
     'Hire Date': ['Most_Recent_Hire_Date', 'Hire Date', 'Recent Hire Date'],
     'Original Hire Date': ['Most_Recent_Hire_Date', 'Original Hire Date', 'Hire Date'],
     'Termination Date': ['Termination_Date', 'Termination Date'],

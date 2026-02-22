@@ -111,6 +111,7 @@ with st.sidebar:
             "ADP - Deduction Audit", 
             "ADP - Prior Payroll Audit",
             "ADP - Census Audit",
+            "ADP - Census Generator",
             "ADP - Payment Audit",
             "ADP - Emergency Contact Audit",
             "ADP - Withholding Audit",
@@ -121,6 +122,7 @@ with st.sidebar:
         st.markdown('<div class="provider-header">Paycom Tools</div>', unsafe_allow_html=True)
         tool_option = st.radio("Select Paycom Tool", [
             "Paycom - Census Audit",
+            "Paycom - Census Generator",
             "Paycom - Withholding Audit",
             "Paycom - Payment Audit",
             "Paycom - Deduction Audit",
@@ -150,6 +152,11 @@ elif tool_option == "ADP - Census Audit":
     importlib.reload(census_audit)
     census_audit.render_ui()
 
+elif tool_option == "ADP - Census Generator":
+    from apps.adp import census_generator
+    importlib.reload(census_generator)
+    census_generator.render_ui()
+
 elif tool_option == "ADP - Payment Audit":
     from apps.adp import payment_audit
     importlib.reload(payment_audit)
@@ -169,6 +176,11 @@ elif tool_option == "Paycom - Census Audit":
     from apps.paycom import census_audit
     importlib.reload(census_audit)
     census_audit.render_ui()
+
+elif tool_option == "Paycom - Census Generator":
+    from apps.paycom import census_generator
+    importlib.reload(census_generator)
+    census_generator.render_ui()
 
 elif tool_option == "Paycom - Withholding Audit":
     from apps.paycom import withholding_audit

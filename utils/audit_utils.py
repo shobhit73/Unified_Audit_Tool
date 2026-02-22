@@ -90,3 +90,62 @@ def clean_money_val(x):
         return float(s_clean)
     except:
         return 0.0
+
+def generate_uzio_template(df_source, vendor_field_map):
+    """
+    Generate an Uzio Census Template DataFrame from a source DataFrame.
+    """
+    
+    # Create an empty dataframe with Uzio headers
+    uzio_headers = list(UZIO_RAW_MAPPING.keys())
+    df_uzio = pd.DataFrame(columns=uzio_headers)
+    
+    # Iterate through each Uzio expected header
+    for uzio_header, std_name in UZIO_RAW_MAPPING.items():
+        # Special Case: Leave blank
+        if std_name in ['Job Title', 'Department', 'Termination Reason']:
+            df_uzio[uzio_header] = ""
+            continue
+            
+        vendor_col = vendor_field_map.get(std_name)
+        if vendor_col and vendor_col in df_source.columns:
+            # We have a direct mapping
+            series = df_source[vendor_col].copy()
+            
+            # Apply formatting rules
+            if std_name == 'Middle Initial':
+                series = series.apply(lambda x: str(x).strip()[0] if pd.notna(x) and str(x).strip() else "")
+            elif std_name in ['Hire Date', 'Original Hire Date', 'Termination Date', 'DOB']:
+                def format_date(d):
+                    if pd.isna(d) or str(d).strip() == "": return ""
+                    try:
+                        # Attempt to parse into standard format
+                        dt = pd.to_datetime(str(d).strip(), errors='coerce')
+                        if pd.isna(dt): return str(d).strip()
+                        return dt.strftime('%d/%m/%Y')
+                    except:
+                        return str(d).strip()
+                series = series.apply(format_date)
+                
+            # We port the data
+            df_uzio[uzio_header] = series
+        else:
+            df_uzio[uzio_header] = ""
+
+    # Apply Pay Type rules
+    if 'Pay Type*' in df_uzio.columns:
+        pay_type_series = df_uzio['Pay Type*'].astype(str).str.lower().str.strip()
+        
+        # Hourly logic
+        hourly_mask = pay_type_series.str.contains('hour', na=False)
+        if 'Annual Salary(Digits)**' in df_uzio.columns:
+            df_uzio.loc[hourly_mask, 'Annual Salary(Digits)**'] = ""
+            
+        # Salaried logic
+        salary_mask = pay_type_series.str.contains('salar', na=False)
+        if 'Hourly Pay Rate**' in df_uzio.columns:
+            df_uzio.loc[salary_mask, 'Hourly Pay Rate**'] = 0
+        if 'Working Hours per Week(Digits)**' in df_uzio.columns:
+            df_uzio.loc[salary_mask, 'Working Hours per Week(Digits)**'] = ""
+            
+    return df_uzio

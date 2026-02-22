@@ -136,9 +136,18 @@ def generate_uzio_template(df_source, vendor_field_map):
                     if g_str.startswith('f'): return "Female"
                     return ""
                 series = series.apply(format_gender)
-            elif std_name in ['Employment Status', 'Employment Type']:
+            elif std_name == 'Employment Status':
                 series = series.apply(lambda x: str(x).strip().upper() if pd.notna(x) else "")
-                
+            elif std_name == 'Employment Type':
+                def format_emp_type(et):
+                    if pd.isna(et) or str(et).strip() == "": return ""
+                    et_str = str(et).strip().lower()
+                    if 'full' in et_str: return 'Full Time'
+                    if 'part' in et_str: return 'Part Time'
+                    if 'season' in et_str: return 'Seasonal'
+                    if 'other' in et_str: return 'Other'
+                    return ""
+                series = series.apply(format_emp_type)
             # We port the data
             df_uzio[uzio_header] = series
         else:

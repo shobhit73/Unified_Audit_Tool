@@ -25,7 +25,7 @@ ADP_FIELD_MAP = {
     'Department': ['Department Description', 'Department'],
     'Work Email': ['Work Contact: Work Email', 'Work Email'],
     'Personal Email': ['Personal Contact: Personal Email', 'Personal Email'],
-    'Phone Number': ['Primary Mobile', 'Mobile', 'Phone Number'],
+    'Phone Number': ['Personal Contact: Personal Mobile', 'Primary Mobile', 'Mobile', 'Phone Number'],
     'SSN': ['Tax ID (SSN)', 'SSN'],
     'DOB': ['Birth Date', 'Date of Birth', 'DOB'],
     'Gender': ['Sex', 'Gender (Self-ID)', 'Gender'],

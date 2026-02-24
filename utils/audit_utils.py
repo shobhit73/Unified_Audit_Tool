@@ -167,6 +167,9 @@ def generate_uzio_template(df_source, vendor_field_map):
         hourly_mask = pay_type_series.str.contains('hour', na=False)
         if 'Annual Salary(Digits)**' in df_uzio.columns:
             df_uzio.loc[hourly_mask, 'Annual Salary(Digits)**'] = ""
+        # Enforce Hourly = Non-Exempt
+        if 'FLSA Classification' in df_uzio.columns:
+            df_uzio.loc[hourly_mask, 'FLSA Classification'] = "Non-Exempt"
             
         # Salaried logic
         salary_mask = pay_type_series.str.contains('salar', na=False)
@@ -174,6 +177,14 @@ def generate_uzio_template(df_source, vendor_field_map):
             df_uzio.loc[salary_mask, 'Hourly Pay Rate**'] = 0
         if 'Working Hours per Week(Digits)**' in df_uzio.columns:
             df_uzio.loc[salary_mask, 'Working Hours per Week(Digits)**'] = ""
+        # Enforce Salaried = Exempt
+        if 'FLSA Classification' in df_uzio.columns:
+            df_uzio.loc[salary_mask, 'FLSA Classification'] = "Exempt"
+            
+        # Mandatory fallback: if FLSA is still blank, default to Non-Exempt as a safety measure
+        if 'FLSA Classification' in df_uzio.columns:
+            blank_flsa_mask = df_uzio['FLSA Classification'].isna() | (df_uzio['FLSA Classification'].astype(str).str.strip() == "")
+            df_uzio.loc[blank_flsa_mask, 'FLSA Classification'] = "Non-Exempt"
             
     return df_uzio
 

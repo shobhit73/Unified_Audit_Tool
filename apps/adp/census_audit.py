@@ -641,7 +641,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                         else:
                             status = "Data Mismatch"
 
-                        if status == "Value missing in Uzio (ADP has value)":
+                        if status in ["Value missing in Uzio (ADP has value)", "Data Mismatch"]:
                             if emp_pay_bucket == "hourly" and is_annual_salary_field(field):
                                 status = "Data Match"
                             elif emp_pay_bucket == "salaried" and is_hourly_rate_field(field):

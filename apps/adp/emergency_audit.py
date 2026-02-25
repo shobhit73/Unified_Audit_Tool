@@ -9,10 +9,10 @@ APP_TITLE = "ADP vs Uzio – Emergency Contact Audit Tool"
 # --- Constants ---
 STATUS_MATCH = "Data Match"
 STATUS_MISMATCH = "Data Mismatch"
-STATUS_MISSING_UZIO = "Employee Not Found in Uzio"
-STATUS_MISSING_ADP = "Employee Not Found in ADP"
-STATUS_CONTACT_MISSING_UZIO = "Contact Missing in Uzio (ADP has it)"
-STATUS_CONTACT_MISSING_ADP = "Contact Missing in ADP (Uzio has it)"
+STATUS_MISSING_UZIO = "Missing in Uzio"
+STATUS_MISSING_ADP = "Missing in ADP"
+STATUS_EMP_MISSING_UZIO = "Employee ID not in Uzio (present in adp)"
+STATUS_EMP_MISSING_ADP = "Employee ID not in ADP (Present in uzio)"
 
 def norm_str(x):
     if pd.isna(x) or x is None:
@@ -30,12 +30,14 @@ def norm_phone(x):
     """Normalize phone to just digits."""
     if pd.isna(x): return ""
     s = str(x).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
     # Remove all non-digit chars
     digits = re.sub(r"\D", "", s)
     # If empty, return empty
     if not digits: return ""
-    # Optional: if length > 10, maybe keep last 10? 
-    # For now, keep all digits to look for strict match or substring match
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
     return digits
 
 def norm_relation(x):
@@ -105,9 +107,11 @@ def run_audit(file_uzio, file_adp):
     # 3. Group by Employee
     # Structure: { EmpID: [ {Name, Relation, Phone}, ... ] }
     uzio_data = {}
+    u_all_eids = set()
     for idx, row in df_uzio.iterrows():
         eid = norm_id(row.get(u_map["EmpID"]))
         if not eid: continue
+        u_all_eids.add(eid)
         
         contact = {
             "Name": norm_str(row.get(u_map["Name"])),
@@ -121,9 +125,11 @@ def run_audit(file_uzio, file_adp):
             uzio_data[eid].append(contact)
 
     adp_data = {}
+    a_all_eids = set()
     for idx, row in df_adp.iterrows():
         eid = norm_id(row.get(a_map["EmpID"]))
         if not eid: continue
+        a_all_eids.add(eid)
         
         contact = {
             "Name": norm_str(row.get(a_map["Name"])),
@@ -146,26 +152,28 @@ def run_audit(file_uzio, file_adp):
         
         # Missing Employee
         if not u_contacts and a_contacts:
+            status = STATUS_EMP_MISSING_UZIO if eid not in u_all_eids else STATUS_MISSING_UZIO
             for a in a_contacts:
                 for f in FIELDS:
                     rows.append({
                         "Employee ID": eid,
-                        "Status": STATUS_MISSING_UZIO,
+                        "Status": status,
                         "Field": f,
-                        "Uzio Value": "Not Found",
+                        "Uzio Value": "Not Found" if status == STATUS_EMP_MISSING_UZIO else "",
                         "ADP Value": _get_val(a, f)
                     })
             continue
             
         if u_contacts and not a_contacts:
+            status = STATUS_EMP_MISSING_ADP if eid not in a_all_eids else STATUS_MISSING_ADP
             for u in u_contacts:
                 for f in FIELDS:
                     rows.append({
                         "Employee ID": eid,
-                        "Status": STATUS_MISSING_ADP,
+                        "Status": status,
                         "Field": f,
-                        "Uzio Value": _get_val(u, f),
-                        "ADP Value": "Not Found"
+                        "Uzio Value": _get_val(u, f) if f != "Phone" else u["RawPhone"],
+                        "ADP Value": "Not Found" if status == STATUS_EMP_MISSING_ADP else ""
                     })
             continue
 
@@ -233,10 +241,10 @@ def run_audit(file_uzio, file_adp):
             for f in FIELDS:
                 rows.append({
                     "Employee ID": eid,
-                    "Status": STATUS_CONTACT_MISSING_ADP,
+                    "Status": STATUS_MISSING_ADP,
                     "Field": f,
                     "Uzio Value": _get_val(u, f) if f != "Phone" else u["RawPhone"],
-                    "ADP Value": "Not Found"
+                    "ADP Value": ""
                 })
                 
         # Unmatched ADP (Missing in Uzio)
@@ -244,9 +252,9 @@ def run_audit(file_uzio, file_adp):
             for f in FIELDS:
                 rows.append({
                     "Employee ID": eid,
-                    "Status": STATUS_CONTACT_MISSING_UZIO,
+                    "Status": STATUS_MISSING_UZIO,
                     "Field": f,
-                    "Uzio Value": "Not Found",
+                    "Uzio Value": "",
                     "ADP Value": _get_val(a, f) if f != "Phone" else a["RawPhone"]
                 })
 

@@ -10,10 +10,10 @@ APP_TITLE = "Paycom vs Uzio – Emergency Contact Audit Tool"
 # --- Constants ---
 STATUS_MATCH = "Data Match"
 STATUS_MISMATCH = "Data Mismatch"
-STATUS_MISSING_UZIO = "Employee Not Found in Uzio"
-STATUS_MISSING_PAYCOM = "Employee Not Found in Paycom"
-STATUS_CONTACT_MISSING_UZIO = "Contact Missing in Uzio (Paycom has it)"
-STATUS_CONTACT_MISSING_PAYCOM = "Contact Missing in Paycom (Uzio has it)"
+STATUS_MISSING_UZIO = "Missing in Uzio"
+STATUS_MISSING_PAYCOM = "Missing in Paycom"
+STATUS_EMP_MISSING_UZIO = "Employee ID not in Uzio (present in paycom)"
+STATUS_EMP_MISSING_PAYCOM = "Employee ID not in Paycom (Present in uzio)"
 
 def norm_str(x):
     if pd.isna(x) or x is None:
@@ -31,8 +31,12 @@ def norm_phone(x):
     """Normalize phone to just digits."""
     if pd.isna(x): return ""
     s = str(x).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
     digits = re.sub(r"\D", "", s)
     if not digits: return ""
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
     return digits
 
 def norm_relation(x):
@@ -125,9 +129,11 @@ def run_audit(file_uzio, file_paycom):
 
     # 4. Process Data
     uzio_data = {}
+    u_all_eids = set()
     for idx, row in df_uzio.iterrows():
         eid = norm_id(row.get(u_map["EmpID"]))
         if not eid: continue
+        u_all_eids.add(eid)
         
         contact = {
             "Name": norm_str(row.get(u_map["Name"])),
@@ -141,9 +147,11 @@ def run_audit(file_uzio, file_paycom):
             uzio_data[eid].append(contact)
 
     paycom_data = {}
+    p_all_eids = set()
     for idx, row in df_paycom.iterrows():
         eid = norm_id(row.get(p_map["EmpID"]))
         if not eid: continue
+        p_all_eids.add(eid)
         
         # Paycom Census only has ONE emergency contact set (Emergency_1_*)? 
         # Or assumes checks for just the first one as per request.
@@ -170,34 +178,36 @@ def run_audit(file_uzio, file_paycom):
         
         # Missing Employee
         if not u_contacts and p_contacts:
+            status = STATUS_EMP_MISSING_UZIO if eid not in u_all_eids else STATUS_MISSING_UZIO
             for p in p_contacts:
                 for f in FIELDS:
                     rows.append({
                         "Employee ID": eid,
-                        "Status": STATUS_MISSING_UZIO,
+                        "Status": status,
                         "Field": f,
-                        "Uzio Value": "Not Found",
+                        "Uzio Value": "Not Found" if status == STATUS_EMP_MISSING_UZIO else "",
                         "Paycom Value": _get_val(p, f)
                     })
                 # Add Language check just for reporting
                 rows.append({
                     "Employee ID": eid,
-                    "Status": STATUS_MISSING_UZIO,
+                    "Status": status,
                     "Field": "Language",
-                    "Uzio Value": "Not Found",
+                    "Uzio Value": "Not Found" if status == STATUS_EMP_MISSING_UZIO else "",
                     "Paycom Value": p["Language"]
                 })
             continue
 
         if u_contacts and not p_contacts:
+            status = STATUS_EMP_MISSING_PAYCOM if eid not in p_all_eids else STATUS_MISSING_PAYCOM
             for u in u_contacts:
                 for f in FIELDS:
                     rows.append({
                         "Employee ID": eid,
-                        "Status": STATUS_MISSING_PAYCOM,
+                        "Status": status,
                         "Field": f,
                         "Uzio Value": _get_val(u, f) if f != "Phone" else u["RawPhone"],
-                        "Paycom Value": "Not Found"
+                        "Paycom Value": "Not Found" if status == STATUS_EMP_MISSING_PAYCOM else ""
                     })
             continue
 
@@ -267,19 +277,19 @@ def run_audit(file_uzio, file_paycom):
             for f in FIELDS:
                 rows.append({
                     "Employee ID": eid,
-                    "Status": STATUS_CONTACT_MISSING_PAYCOM,
+                    "Status": STATUS_MISSING_PAYCOM,
                     "Field": f,
                     "Uzio Value": _get_val(u, f) if f != "Phone" else u["RawPhone"],
-                    "Paycom Value": "Not Found"
+                    "Paycom Value": ""
                 })
 
         for p in p_pending:
             for f in FIELDS:
                 rows.append({
                     "Employee ID": eid,
-                    "Status": STATUS_CONTACT_MISSING_UZIO,
+                    "Status": STATUS_MISSING_UZIO,
                     "Field": f,
-                    "Uzio Value": "Not Found",
+                    "Uzio Value": "",
                     "Paycom Value": _get_val(p, f)
                 })
 

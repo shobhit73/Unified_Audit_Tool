@@ -102,7 +102,7 @@ def read_adp_license(file) -> pd.DataFrame:
              return df
 
 # --- AUDIT LOGIC ---
-def run_license_audit(uzio_df, adp_df, mapping_dict):
+def run_license_audit(uzio_df, adp_df):
     """
     Compares Uzio and ADP License data based on:
       Uzio: Employee ID, License Type, License Number, License Expiration Date
@@ -171,12 +171,11 @@ def run_license_audit(uzio_df, adp_df, mapping_dict):
         if not uzio_licenses and adp_licenses:
             for adp_rec in adp_licenses:
                  adp_type = str(adp_rec.get(ADP_TYPE_COL, "")).strip()
-                 mapped_uzio_type = mapping_dict.get(adp_type, "Unmapped")
                  
                  rows.append({
                      "Employee ID": eid,
                      "Audit Field": f"License Type",
-                     "Expected Uzio License": mapped_uzio_type,
+                     "Expected Uzio License": adp_type,
                      "Uzio License Found": "",
                      "ADP License Name": adp_type,
                      "Uzio Value": "",
@@ -213,20 +212,20 @@ def run_license_audit(uzio_df, adp_df, mapping_dict):
                 uz_raw_date = uz_rec.get(UZIO_DATE_COL, "")
                 uz_date = try_parse_date(uz_raw_date)
                 
-                # Find matching ADP license based on the mapping dictionary
+                # Find matching ADP license
                 match_found = False
                 for i, adp_rec in enumerate(adp_licenses):
                     if i in matched_adp_indices:
                         continue
                         
                     adp_type = str(adp_rec.get(ADP_TYPE_COL, "")).strip()
-                    mapped_type = mapping_dict.get(adp_type, "")
                     
-                    if uz_type.lower() == mapped_type.lower() and mapped_type != "":
+                    # Direct check without mapping dictionary
+                    if uz_type.lower() == adp_type.lower() and adp_type != "":
                         match_found = True
                         matched_adp_indices.add(i)
                         
-                        adp_num = str(adp_rec.get(ADP_NUM_COL, "")).blank()
+                        adp_num = str(adp_rec.get(ADP_NUM_COL, "")).strip()
                         adp_raw_date = adp_rec.get(ADP_DATE_COL, "")
                         adp_date = try_parse_date(adp_raw_date)
                         
@@ -297,12 +296,11 @@ def run_license_audit(uzio_df, adp_df, mapping_dict):
             for i, adp_rec in enumerate(adp_licenses):
                 if i not in matched_adp_indices:
                      adp_type = str(adp_rec.get(ADP_TYPE_COL, "")).strip()
-                     mapped_uzio_type = mapping_dict.get(adp_type, "Unmapped")
                      
                      rows.append({
                          "Employee ID": eid,
                          "Audit Field": "License Type",
-                         "Expected Uzio License": mapped_uzio_type,
+                         "Expected Uzio License": adp_type,
                          "Uzio License Found": "",
                          "ADP License Name": adp_type,
                          "Uzio Value": "",
@@ -342,46 +340,15 @@ def render_ui():
 
             st.success(f"Files loaded successfully. Found {len(adp_types)} unique ADP License Types and {len(uzio_types)} unique Uzio License Types.")
 
-            st.markdown("### Step 2: Map License Types")
-            st.write("For each underlying ADP License Description, specify the corresponding UZIO License Type. You must map these before auditing.")
+            submit_audit = st.button("Run License Audit")
 
-            # Create default values
-            uzio_options = ["— IGNORE (Do not audit) —"] + uzio_types
-
-            # Interactive UI Form
-            mapping_dict = {}
-            with st.form("license_mapping_form"):
-                 for adp_type in adp_types:
-                     # Attempt an intelligent guess based on exact string match
-                     default_idx = 0
-                     for i, opt in enumerate(uzio_options):
-                         if opt.lower() == adp_type.lower():
-                             default_idx = i
-                             break
-                             
-                     selection = st.selectbox(
-                         f"ADP License: **{adp_type}** maps to UZIO:", 
-                         options=uzio_options,
-                         index=default_idx,
-                         key=f"license_map_{adp_type}"
-                     )
-                     
-                     if selection != "— IGNORE (Do not audit) —":
-                         mapping_dict[adp_type] = selection
-                         
-                 submit_mapping = st.form_submit_button("Run License Audit")
-
-            if submit_mapping:
+            if submit_audit:
                  if not client_name:
                      st.warning("Please enter a Client Name before running the audit.")
                      return
-                     
-                 if not mapping_dict:
-                     st.warning("You must map at least one License Type to run an audit.")
-                     return
 
                  with st.spinner("Running Audit & Generating Match Report..."):
-                     result_df = run_license_audit(uzio_df, adp_df, mapping_dict)
+                     result_df = run_license_audit(uzio_df, adp_df)
                      
                  if result_df is not None:
                       st.success("Audit Complete!")
@@ -405,10 +372,6 @@ def render_ui():
                       buffer = io.BytesIO()
                       with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                           result_df.to_excel(writer, sheet_name='License Audit Results', index=False)
-                          
-                          # Add raw mapping sheet just for records
-                          map_df = pd.DataFrame(list(mapping_dict.items()), columns=['ADP_License_Description', 'Mapped_Uzio_License_Type'])
-                          map_df.to_excel(writer, sheet_name='Applied Mapping Strategy', index=False)
 
                       st.download_button(
                           label="Download Excel Report",

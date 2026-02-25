@@ -181,7 +181,7 @@ def run_license_audit(uzio_df, adp_df, mapping_dict):
                      "ADP License Name": adp_type,
                      "Uzio Value": "",
                      "ADP Value": adp_type,
-                     "Audit Status": "Missing in Uzio"
+                     "Audit Status": "Employee ID not in Uzio (present in adp)" if not uzio_licenses and not any(r[UZIO_KEY] == eid for r in uzio_records) else "Missing in Uzio"
                  })
                  
         # Scenario 2: Missing in ADP
@@ -197,7 +197,7 @@ def run_license_audit(uzio_df, adp_df, mapping_dict):
                      "ADP License Name": "",
                      "Uzio Value": uz_type,
                      "ADP Value": "",
-                     "Audit Status": "Missing in ADP"
+                     "Audit Status": "Employee ID not in ADP (Present in uzio)" if not adp_licenses and not any(r[ADP_KEY] == eid for r in adp_records) else "Missing in ADP"
                  })
                  
         # Scenario 3: Exists in both, compare line items
@@ -394,8 +394,8 @@ def render_ui():
                       
                       col1.metric("Total Match", counts.get("Data Match", 0))
                       col2.metric("Total Mismatch", counts.get("Data Mismatch", 0))
-                      col3.metric("Missing in UZIO", counts.get("Missing in Uzio", 0))
-                      col4.metric("Missing in ADP", counts.get("Missing in ADP", 0))
+                      col3.metric("Missing in UZIO", counts.get("Missing in Uzio", 0) + counts.get("Employee ID not in Uzio (present in adp)", 0))
+                      col4.metric("Missing in ADP", counts.get("Missing in ADP", 0) + counts.get("Employee ID not in ADP (Present in uzio)", 0))
 
                       st.dataframe(result_df)
 

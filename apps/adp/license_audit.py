@@ -38,68 +38,52 @@ def try_parse_date(x):
 def read_uzio_license(file) -> pd.DataFrame:
     """Reads UZIO license report, extracting exact headers while bypassing corrupt metadata."""
     try:
-        df = pd.read_excel(file, dtype=str)
-        return df
-    except Exception:
-        # Fallback to Openpyxl for corrupt metadata
-        import openpyxl
-        import warnings
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            wb = openpyxl.load_workbook(file, data_only=True)
-            ws = wb.active
-            rows = list(ws.iter_rows(values_only=True))
-            
-            # Find the header row by looking for 'Employee ID'
-            header_idx = -1
-            for i, r in enumerate(rows[:20]):
-                if any(str(c).strip() == 'Employee ID' for c in r if c):
-                    header_idx = i
-                    break
-            
-            if header_idx == -1:
-                st.error("Could not locate 'Employee ID' header in Uzio file.")
-                return None
-                
-            cols = [str(c).strip() if c else f"Unnamed_{i}" for i, c in enumerate(rows[header_idx])]
-            data = rows[header_idx + 1:]
-            df = pd.DataFrame(data, columns=cols).astype(str)
-            # Remove entirely empty rows
+        df = pd.read_excel(file, header=None, dtype=str)
+        # Find the header row by looking for 'Employee ID'
+        header_idx = -1
+        for i, row in df.head(20).iterrows():
+            if any(str(c).strip() == 'Employee ID' for c in row.values if pd.notna(c)):
+                header_idx = i
+                break
+        
+        if header_idx != -1:
+            df.columns = [str(c).strip() if pd.notna(c) else f"Unnamed_{i}" for i, c in enumerate(df.iloc[header_idx])]
+            df = df.iloc[header_idx + 1:].reset_index(drop=True)
             df = df.replace('None', '')
             df.dropna(how='all', inplace=True)
             return df
+        else:
+            # Fallback if not found in first 20 rows
+            df = pd.read_excel(file, dtype=str)
+            return df
+    except Exception as e:
+        st.error(f"Could not read Uzio file: {e}")
+        return None
 
 def read_adp_license(file) -> pd.DataFrame:
     """Reads ADP license report, extracting headers while bypassing metadata."""
     try:
-         df = pd.read_excel(file, dtype=str)
-         return df
-    except Exception:
-         import openpyxl
-         import warnings
-         with warnings.catch_warnings(record=True):
-             warnings.simplefilter("always")
-             wb = openpyxl.load_workbook(file, data_only=True)
-             ws = wb.active
-             rows = list(ws.iter_rows(values_only=True))
-             
-             # Locate header row
-             header_idx = -1
-             for i, r in enumerate(rows[:20]):
-                 if any(str(c).strip() == 'Associate ID' for c in r if c):
-                     header_idx = i
-                     break
-                     
-             if header_idx == -1:
-                 st.error("Could not locate 'Associate ID' header in ADP file.")
-                 return None
-                 
-             cols = [str(c).strip() if c else f"Unnamed_{i}" for i, c in enumerate(rows[header_idx])]
-             data = rows[header_idx + 1:]
-             df = pd.DataFrame(data, columns=cols).astype(str)
-             df = df.replace('None', '')
-             df.dropna(how='all', inplace=True)
-             return df
+        df = pd.read_excel(file, header=None, dtype=str)
+        # Locate header row
+        header_idx = -1
+        for i, row in df.head(20).iterrows():
+            if any(str(c).strip() == 'Associate ID' for c in row.values if pd.notna(c)):
+                header_idx = i
+                break
+                
+        if header_idx != -1:
+            df.columns = [str(c).strip() if pd.notna(c) else f"Unnamed_{i}" for i, c in enumerate(df.iloc[header_idx])]
+            df = df.iloc[header_idx + 1:].reset_index(drop=True)
+            df = df.replace('None', '')
+            df.dropna(how='all', inplace=True)
+            return df
+        else:
+            # Fallback
+            df = pd.read_excel(file, dtype=str)
+            return df
+    except Exception as e:
+        st.error(f"Could not read ADP file: {e}")
+        return None
 
 # --- AUDIT LOGIC ---
 def run_license_audit(uzio_df, adp_df):
@@ -117,7 +101,7 @@ def run_license_audit(uzio_df, adp_df):
     UZIO_DATE_COL = 'License Expiration Date'
     
     ADP_TYPE_COL = 'License/Certification Description'
-    ADP_NUM_COL = 'License/Certification ID'
+    ADP_NUM_COL = 'License/Certification Code' if 'License/Certification Code' in adp_df.columns else 'License/Certification ID'
     ADP_DATE_COL = 'Expiration Date'
     
     required_uzio = [UZIO_KEY, UZIO_TYPE_COL, UZIO_NUM_COL, UZIO_DATE_COL]

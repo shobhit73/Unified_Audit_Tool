@@ -89,33 +89,29 @@ def read_adp_license(file) -> pd.DataFrame:
 def run_license_audit(uzio_df, adp_df):
     """
     Compares Uzio and ADP License data based on:
-      Uzio: Employee ID, License Type, License Number, License Expiration Date
-      ADP: Associate ID, License/Certification Description, License/Certification ID, Expiration Date
+      Uzio: Employee ID, License Number, License Expiration Date
+      ADP: Associate ID, License/Certification ID, Expiration Date
     """
-    
     UZIO_KEY = 'Employee ID'
-    ADP_KEY = 'Associate ID'
-    
-    UZIO_TYPE_COL = 'License Type'
     UZIO_NUM_COL = 'License Number'
     UZIO_DATE_COL = 'License Expiration Date'
     
-    ADP_TYPE_COL = 'License/Certification Description'
+    ADP_KEY = 'Associate ID'
     ADP_NUM_COL = 'License/Certification Code' if 'License/Certification Code' in adp_df.columns else 'License/Certification ID'
     ADP_DATE_COL = 'Expiration Date'
     
-    required_uzio = [UZIO_KEY, UZIO_TYPE_COL, UZIO_NUM_COL, UZIO_DATE_COL]
-    required_adp = [ADP_KEY, ADP_TYPE_COL, ADP_NUM_COL, ADP_DATE_COL]
+    required_uzio = [UZIO_KEY, UZIO_NUM_COL, UZIO_DATE_COL]
+    required_adp = [ADP_KEY, ADP_NUM_COL, ADP_DATE_COL]
     
-    for c in required_uzio:
-        if c not in uzio_df.columns:
-            st.error(f"Missing required Uzio column: {c}")
-            return None
+    missing_uzio = [c for c in required_uzio if c not in uzio_df.columns]
+    if missing_uzio:
+        st.error(f"Missing required Uzio columns: {', '.join(missing_uzio)}")
+        return None
             
-    for c in required_adp:
-        if c not in adp_df.columns:
-            st.error(f"Missing required ADP column: {c}")
-            return None
+    missing_adp = [c for c in required_adp if c not in adp_df.columns]
+    if missing_adp:
+        st.error(f"Missing required ADP columns: {', '.join(missing_adp)}")
+        return None
             
     # Normalize Keys
     uzio_df[UZIO_KEY] = uzio_df[UZIO_KEY].apply(lambda x: str(x).strip().lstrip('0') if norm_blank(x) != "" else "")
@@ -146,160 +142,79 @@ def run_license_audit(uzio_df, adp_df):
             
     rows = []
     
-    # Process each employee ID uniquely
     for eid in all_keys:
         uzio_licenses = uzio_map.get(eid, [])
         adp_licenses = adp_map.get(eid, [])
         
-        # Scenario 1: Missing in Uzio
-        if not uzio_licenses and adp_licenses:
-            for adp_rec in adp_licenses:
-                 adp_type = str(adp_rec.get(ADP_TYPE_COL, "")).strip()
-                 
-                 rows.append({
-                     "Employee ID": eid,
-                     "Audit Field": f"License Type",
-                     "Expected Uzio License": adp_type,
-                     "Uzio License Found": "",
-                     "ADP License Name": adp_type,
-                     "Uzio Value": "",
-                     "ADP Value": adp_type,
-                     "Audit Status": "Employee ID not in Uzio (present in adp)" if not uzio_licenses and not any(r[UZIO_KEY] == eid for r in uzio_records) else "Missing in Uzio"
-                 })
-                 
-        # Scenario 2: Missing in ADP
-        elif uzio_licenses and not adp_licenses:
-            for uz_rec in uzio_licenses:
-                 uz_type = str(uz_rec.get(UZIO_TYPE_COL, "")).strip()
-                 
-                 rows.append({
-                     "Employee ID": eid,
-                     "Audit Field": f"License Type",
-                     "Expected Uzio License": uz_type,
-                     "Uzio License Found": uz_type,
-                     "ADP License Name": "",
-                     "Uzio Value": uz_type,
-                     "ADP Value": "",
-                     "Audit Status": "Employee ID not in ADP (Present in uzio)" if not adp_licenses and not any(r[ADP_KEY] == eid for r in adp_records) else "Missing in ADP"
-                 })
-                 
-        # Scenario 3: Exists in both, compare line items
-        elif uzio_licenses and adp_licenses:
+        # We only care if Uzio has a license according to the logic requested
+        for uz_rec in uzio_licenses:
+            uz_num = str(uz_rec.get(UZIO_NUM_COL, "")).strip()
+            uz_raw_date = uz_rec.get(UZIO_DATE_COL, "")
+            uz_date = try_parse_date(uz_raw_date)
             
-            # Keep track of matched ADP licenses
-            matched_adp_indices = set()
-            
-            # Iterate through Uzio licenses
-            for uz_rec in uzio_licenses:
-                uz_type = str(uz_rec.get(UZIO_TYPE_COL, "")).strip()
-                uz_num = str(uz_rec.get(UZIO_NUM_COL, "")).strip()
-                uz_raw_date = uz_rec.get(UZIO_DATE_COL, "")
-                uz_date = try_parse_date(uz_raw_date)
+            if not uz_num:
+                # Uzio license number is blank
+                rows.append({
+                    "Employee ID": eid,
+                    "Field": "License Number",
+                    "Status": "Missing in Uzio",
+                    "Uzio Value": "",
+                    "ADP Value": ""
+                })
+                # Check expiration date also if needed? Usually we flag the whole record.
+                # If they want, we can flag date too, but blank license is the main issue.
+                continue
                 
-                # Find matching ADP license
-                match_found = False
-                for i, adp_rec in enumerate(adp_licenses):
-                    if i in matched_adp_indices:
-                        continue
-                        
-                    adp_type = str(adp_rec.get(ADP_TYPE_COL, "")).strip()
+            # Uzio has a license number. Check if it's in ADP.
+            match_found = False
+            matched_adp_rec = None
+            
+            for adp_rec in adp_licenses:
+                adp_num = str(adp_rec.get(ADP_NUM_COL, "")).strip()
+                if uz_num.lower() == adp_num.lower():
+                    match_found = True
+                    matched_adp_rec = adp_rec
+                    break
                     
-                    # Direct check without mapping dictionary
-                    if uz_type.lower() == adp_type.lower() and adp_type != "":
-                        match_found = True
-                        matched_adp_indices.add(i)
-                        
-                        adp_num = str(adp_rec.get(ADP_NUM_COL, "")).strip()
-                        adp_raw_date = adp_rec.get(ADP_DATE_COL, "")
-                        adp_date = try_parse_date(adp_raw_date)
-                        
-                        # Compare Number
-                        if uz_num != adp_num:
-                            rows.append({
-                                 "Employee ID": eid,
-                                 "Audit Field": "License Number",
-                                 "Expected Uzio License": uz_type,
-                                 "Uzio License Found": uz_type,
-                                 "ADP License Name": adp_type,
-                                 "Uzio Value": uz_num,
-                                 "ADP Value": adp_num,
-                                 "Audit Status": "Data Mismatch"
-                             })
-                        else:
-                             rows.append({
-                                 "Employee ID": eid,
-                                 "Audit Field": "License Number",
-                                 "Expected Uzio License": uz_type,
-                                 "Uzio License Found": uz_type,
-                                 "ADP License Name": adp_type,
-                                 "Uzio Value": uz_num,
-                                 "ADP Value": adp_num,
-                                 "Audit Status": "Data Match"
-                             })
-                             
-                        # Compare Expiration Date
-                        if uz_date != adp_date:
-                            rows.append({
-                                 "Employee ID": eid,
-                                 "Audit Field": "Expiration Date",
-                                 "Expected Uzio License": uz_type,
-                                 "Uzio License Found": uz_type,
-                                 "ADP License Name": adp_type,
-                                 "Uzio Value": uz_date,
-                                 "ADP Value": adp_date,
-                                 "Audit Status": "Data Mismatch"
-                             })
-                        else:
-                            rows.append({
-                                 "Employee ID": eid,
-                                 "Audit Field": "Expiration Date",
-                                 "Expected Uzio License": uz_type,
-                                 "Uzio License Found": uz_type,
-                                 "ADP License Name": adp_type,
-                                 "Uzio Value": uz_date,
-                                 "ADP Value": adp_date,
-                                 "Audit Status": "Data Match"
-                             })
-                             
-                        break # Stop looking for this Uzio license type
-                        
-                # If no ADP match was found for this Uzio license
-                if not match_found:
-                    rows.append({
-                         "Employee ID": eid,
-                         "Audit Field": "License Type",
-                         "Expected Uzio License": uz_type,
-                         "Uzio License Found": uz_type,
-                         "ADP License Name": "",
-                         "Uzio Value": uz_type,
-                         "ADP Value": "",
-                         "Audit Status": "Missing in ADP"
-                     })
-                     
-            # For any ADP licenses that were NOT matched to Uzio
-            for i, adp_rec in enumerate(adp_licenses):
-                if i not in matched_adp_indices:
-                     adp_type = str(adp_rec.get(ADP_TYPE_COL, "")).strip()
-                     
-                     rows.append({
-                         "Employee ID": eid,
-                         "Audit Field": "License Type",
-                         "Expected Uzio License": adp_type,
-                         "Uzio License Found": "",
-                         "ADP License Name": adp_type,
-                         "Uzio Value": "",
-                         "ADP Value": adp_type,
-                         "Audit Status": "Missing in Uzio"
-                     })
+            if match_found:
+                # License Number matched
+                rows.append({
+                    "Employee ID": eid,
+                    "Field": "License Number",
+                    "Status": "Data Match",
+                    "Uzio Value": uz_num,
+                    "ADP Value": str(matched_adp_rec.get(ADP_NUM_COL, "")).strip()
+                })
+                
+                # Check Expiration Date
+                adp_raw_date = matched_adp_rec.get(ADP_DATE_COL, "")
+                adp_date = try_parse_date(adp_raw_date)
+                
+                status = "Data Match" if uz_date == adp_date else "Data Mismatch"
+                rows.append({
+                    "Employee ID": eid,
+                    "Field": "Expiration Date",
+                    "Status": status,
+                    "Uzio Value": uz_date,
+                    "ADP Value": adp_date
+                })
+            else:
+                # Not found in ADP
+                rows.append({
+                    "Employee ID": eid,
+                    "Field": "License Number",
+                    "Status": "Missing in ADP",
+                    "Uzio Value": uz_num,
+                    "ADP Value": ""
+                })
 
     return pd.DataFrame(rows)
 
 # --- UI RENDER FLOW ---
 def render_ui():
     st.title("ADP License Details Audit Tool")
-    st.write("Compare license numbers, types, and expiration dates between ADP and Uzio.")
+    st.write("Compare license numbers and expiration dates between ADP and Uzio. Output will be generated as a single sheet.")
 
-    # Track Client Name uniquely
     client_name = st.text_input("Client Name", key="adp_license_client_name")
 
     st.markdown("### Step 1: Upload Files")
@@ -311,7 +226,7 @@ def render_ui():
 
     if uzio_file and adp_file:
         try:
-            with st.spinner("Extracting Unique Licenses..."):
+            with st.spinner("Extracting Licenses..."):
                 uzio_df = read_uzio_license(uzio_file)
                 adp_df = read_adp_license(adp_file)
 
@@ -319,12 +234,7 @@ def render_ui():
                 st.error("Failed to parse one or both files.")
                 return
 
-            uzio_types = sorted(list(set(str(t).strip() for t in uzio_df['License Type'].dropna() if t)))
-            adp_types = sorted(list(set(str(t).strip() for t in adp_df['License/Certification Description'].dropna() if t)))
-
-            st.success(f"Files loaded successfully. Found {len(adp_types)} unique ADP License Types and {len(uzio_types)} unique Uzio License Types.")
-
-            submit_audit = st.button("Run License Audit")
+            submit_audit = st.button("Run License Audit", type="primary")
 
             if submit_audit:
                  if not client_name:
@@ -337,16 +247,15 @@ def render_ui():
                  if result_df is not None:
                       st.success("Audit Complete!")
                       
-                      # Create summary counts
                       st.markdown("### Audit Summary")
                       
                       col1, col2, col3, col4 = st.columns(4)
-                      counts = result_df['Audit Status'].value_counts().to_dict()
+                      counts = result_df['Status'].value_counts().to_dict()
                       
                       col1.metric("Total Match", counts.get("Data Match", 0))
                       col2.metric("Total Mismatch", counts.get("Data Mismatch", 0))
-                      col3.metric("Missing in UZIO", counts.get("Missing in Uzio", 0) + counts.get("Employee ID not in Uzio (present in adp)", 0))
-                      col4.metric("Missing in ADP", counts.get("Missing in ADP", 0) + counts.get("Employee ID not in ADP (Present in uzio)", 0))
+                      col3.metric("Missing in UZIO", counts.get("Missing in Uzio", 0))
+                      col4.metric("Missing in ADP", counts.get("Missing in ADP", 0))
 
                       st.dataframe(result_df)
 

@@ -166,11 +166,16 @@ def run_audit(uzio_file, paycom_file):
     }
 
     uzio_map = {}
+    uzio_emp_names = {}
     
     for idx, row in df_uzio.iterrows():
         # UZIO ID: Keep AS IS (do not pad/normalize) to avoid colliding "001" and "0001"
         emp_id = norm_str(row.get(col_map["EmpID"]))
         if not emp_id: continue
+        
+        name_str = norm_str(row.get(col_map["Name"]))
+        if emp_id not in uzio_emp_names:
+            uzio_emp_names[emp_id] = name_str
         
         acc = {
             "Routing": norm_digits(row.get(col_map["Routing"])).lstrip("0"),
@@ -178,7 +183,7 @@ def run_audit(uzio_file, paycom_file):
             "Type": norm_str(row.get(col_map["Type"])),
             "Percent": norm_money(row.get(col_map["Percent"])),
             "Amount": norm_money(row.get(col_map["Amount"])),
-            "Name": norm_str(row.get(col_map["Name"]))
+            "Name": name_str
         }
         
         if acc["Routing"] or acc["Account"]:
@@ -237,10 +242,8 @@ def run_audit(uzio_file, paycom_file):
         
         for cand in valid_candidates:
             # Get Uzio Name
-            # uzio_data[cand] is a list of account dicts. All should have same name.
-            u_entries = uzio_data[cand]
-            if not u_entries: continue
-            u_name = u_entries[0]["Name"].lower()
+            # uzio_data holds emp_names dict
+            u_name = uzio_data.get(cand, "").lower()
             
             score = 0
             # Check if Paycom parts (First, Last) appear in Uzio Full Name
@@ -265,7 +268,7 @@ def run_audit(uzio_file, paycom_file):
         if pc_last_col: name_parts.append(row.get(pc_last_col))
         
         # Smart Resolve with Name
-        emp_id = resolve_paycom_id(raw_id, name_parts, uzio_map)
+        emp_id = resolve_paycom_id(raw_id, name_parts, uzio_emp_names)
         
         if not emp_id: continue
 
@@ -376,16 +379,17 @@ def run_audit(uzio_file, paycom_file):
     FIELDS = ["Routing Number", "Account Number", "Account Type", "Amount", "Percent"]
 
     rows = []
-    all_emps = set(uzio_map.keys()) | set(paycom_map.keys())
+    all_emps = set(uzio_emp_names.keys()) | set(paycom_map.keys())
 
     for emp_id in sorted(all_emps):
         u_accs = uzio_map.get(emp_id, [])
         p_accs = paycom_map.get(emp_id, [])
         
-        emp_name = u_accs[0]["Name"] if u_accs else ""
+        emp_name = u_accs[0]["Name"] if u_accs else uzio_emp_names.get(emp_id, "")
 
         # --- Case: Missing in Uzio ---
         if not u_accs and p_accs:
+            is_in_uzio = emp_id in uzio_emp_names
             for p in p_accs:
                 for field in FIELDS:
                     p_val = _get_field_val(p, field)
@@ -395,7 +399,7 @@ def run_audit(uzio_file, paycom_file):
                         "Field": field,
                         "UZIO_Value": "",
                         "Paycom_Value": p_val,
-                        "Paycom_SourceOfTruth_Status": STATUS_MISSING_UZIO
+                        "Paycom_SourceOfTruth_Status": STATUS_VAL_MISSING_UZIO if is_in_uzio else STATUS_MISSING_UZIO
                     })
             continue
 
@@ -628,7 +632,7 @@ def run_audit(uzio_file, paycom_file):
     ]]
 
     # ---------- Summary metrics ----------
-    uzio_keys = set(uzio_map.keys())
+    uzio_keys = set(uzio_emp_names.keys())
     paycom_keys = set(paycom_map.keys())
 
     summary = pd.DataFrame({

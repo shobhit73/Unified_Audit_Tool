@@ -390,19 +390,38 @@ def validate_uzio_data(df_uzio):
             
         # Check Job Title
         val_jt = row.get('Job Title')
+        invalid_jt = False
+        allowed_titles = [
+            'dsp owner', 'operations manager', 'operations lead', 'fleet manager', 
+            'safety manager', 'performance manager', 'trainer', 'human resources', 
+            'recruiter', 'office personnel', 'payroll assistant', 'finance', 
+            'dispatch', 'management', 'admin', 'survey', 'warehouse', 'walker', 
+            'driver', 'helper', 'driver-lite', 'driver-step van', 
+            'driver-unscheduled', 'lead driver', 'ddu dedicated', 'ddu shared', 
+            'non-dsp related', 'driver -major appliance'
+        ]
+        
         if pd.isna(val_jt) or str(val_jt).strip() == "":
             missing_fields.append("Job Title")
+        elif str(val_jt).strip().lower() not in allowed_titles:
+            invalid_jt = True
             
         # Check Work Location
         val_wl = row.get('Work Location')
         if pd.isna(val_wl) or str(val_wl).strip() == "":
             missing_fields.append("Work Location")
             
-        if missing_fields:
+        if missing_fields or invalid_jt:
+            err_reasons = []
+            if missing_fields:
+                err_reasons.append("Mandatory fields are blank")
+            if invalid_jt:
+                err_reasons.append(f"Invalid Job Title: '{val_jt}'")
+                
             errors.append({
                 "Employee ID": emp_id,
                 "Missing Fields": ", ".join(missing_fields),
-                "Error": "Mandatory fields are blank"
+                "Error": " | ".join(err_reasons)
             })
             
     return pd.DataFrame(errors)

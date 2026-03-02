@@ -19,7 +19,7 @@ PAYCOM_FIELD_MAP = {
     'Annual Salary': ['Annual_Salary', 'Annual Salary'],
     'Hourly Pay Rate': ['Rate_1', 'Hourly Rate', 'Pay Rate', 'Rate 1'],
     'Working Hours': ['Scheduled_Pay_Period_Hours', 'Scheduled Hours', 'Working Hours'],
-    'Job Title': ['Position', 'Job Title'],
+    'Job Title': ['Department_Desc', 'Position', 'Job Title'],
     'Department': ['Department_Desc', 'Department', 'Department Desc'],
     'Work Email': ['Work_Email', 'Work Email', 'Email'],
     'Personal Email': ['Personal_Email', 'Personal Email'],
@@ -40,7 +40,7 @@ PAYCOM_FIELD_MAP = {
     'Mailing Zip': ['Mailing_Zip/Postal_Code', 'Mailing Zip'],
     'Mailing State': ['Mailing_State/Province', 'Mailing State'],
     'License Number': ['DriversLicense', 'Drivers License', 'License Number'],
-    'Work Location': ['Location', 'Work Location']
+    'Work Location': ['Work_Location', 'Location', 'Work Location']
 }
 
 ALLOWED_JOB_TITLES = [

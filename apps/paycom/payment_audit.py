@@ -225,6 +225,22 @@ def run_audit(uzio_file, paycom_file):
         # Filter to only existing Uzio keys
         valid_candidates = [c for c in candidates_to_try if c in uzio_data]
         
+        # O vs 0 Typography Fix Loop
+        # Often A0BZ in Paycom is AOBZ in Uzio, so check transposed characters
+        if not valid_candidates:
+            transposed_candidates = []
+            for c in candidates_to_try:
+                # Try replacing all 0 with O (e.g. A00A -> AOOA)
+                c_o = c.replace('0', 'O')
+                if c_o != c: transposed_candidates.append(c_o)
+                
+                # Try replacing all O with 0
+                c_zero = c.replace('O', '0')
+                if c_zero != c: transposed_candidates.append(c_zero)
+            
+            # Re-evaluate valid candidates against transposed array
+            valid_candidates = [c for c in transposed_candidates if c in uzio_data]
+
         if not valid_candidates:
             return s_id.zfill(4) # Fallback if absolutely no match found
             
@@ -317,6 +333,10 @@ def run_audit(uzio_file, paycom_file):
                     d_pct = round(d_amt * 100, 4)
                     d_amt = 0.0
 
+            # Ignore completely blank distributions to prevent false mismatches
+            if d_pct == 0.0 and d_amt == 0.0 and not d_acc and not d_rout:
+                continue
+
             total_dist_pct += d_pct
             total_dist_amt += d_amt
 
@@ -333,7 +353,9 @@ def run_audit(uzio_file, paycom_file):
                     "IsNet": False
                 })
 
-        paycom_accounts.extend(dist_entries)
+        # Filter valid dist entries - don't add empty accounts
+        valid_dists = [d for d in dist_entries if d["Amount"] > 0 or d["Percent"] > 0 or d["Account"] or d["Routing"]]
+        paycom_accounts.extend(valid_dists)
 
         # --- Extract NET Pay Account (remainder after distributions) ---
         net_acc = norm_digits(row.get("Net_Acct_Code")).lstrip("0")
@@ -353,15 +375,17 @@ def run_audit(uzio_file, paycom_file):
              else:
                  net_pct = 100.0
 
-             paycom_accounts.append({
-                 "EmpID": emp_id,
-                 "Routing": net_rout,
-                 "Account": net_acc,
-                 "Type": str(p_type) if p_type is not None else "",
-                 "Percent": net_pct,
-                 "Amount": 0.0,
-                 "IsNet": True
-             })
+             # Only add Net Account if there's actually remainder pay going somewhere
+             if net_pct > 0 or net_acc or net_rout:
+                 paycom_accounts.append({
+                     "EmpID": emp_id,
+                     "Routing": net_rout,
+                     "Account": net_acc,
+                     "Type": str(p_type) if p_type is not None else "",
+                     "Percent": net_pct,
+                     "Amount": 0.0,
+                     "IsNet": True
+                 })
 
     # Group Paycom by EmpID
     paycom_map = {}
@@ -567,7 +591,7 @@ def run_audit(uzio_file, paycom_file):
                     "Field": field,
                     "UZIO_Value": u_val,
                     "Paycom_Value": "Not Found",
-                    "Paycom_SourceOfTruth_Status": STATUS_MISMATCH
+                    "Paycom_SourceOfTruth_Status": STATUS_VAL_MISSING_PAYCOM
                 })
 
         # Paycom accounts unmatched
@@ -582,7 +606,7 @@ def run_audit(uzio_file, paycom_file):
                     "Field": field,
                     "UZIO_Value": "Not Found",
                     "Paycom_Value": p_val,
-                    "Paycom_SourceOfTruth_Status": STATUS_MISMATCH
+                    "Paycom_SourceOfTruth_Status": STATUS_VAL_MISSING_UZIO
                 })
 
     # ---------- Build Output DataFrames ----------

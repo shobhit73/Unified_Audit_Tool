@@ -5,6 +5,23 @@ import re
 from datetime import date
 from utils.audit_utils import norm_col
 
+# --- Monkeypatch for openpyxl to avoid Invalid datetime value errors ---
+import openpyxl.cell.cell
+if not hasattr(openpyxl.cell.cell.Cell, '_patched_for_datetime'):
+    _orig_bind_value = openpyxl.cell.cell.Cell._bind_value
+    def _safe_bind_value(self, value):
+        try:
+            _orig_bind_value(self, value)
+        except ValueError as e:
+            if "Invalid datetime value" in str(e):
+                self.data_type = 's'
+                self._value = str(value)
+            else:
+                raise
+    openpyxl.cell.cell.Cell._bind_value = _safe_bind_value
+    openpyxl.cell.cell.Cell._patched_for_datetime = True
+# -----------------------------------------------------------------------
+
 APP_TITLE = "Paycom vs Uzio – Emergency Contact Audit Tool"
 
 # --- Constants ---

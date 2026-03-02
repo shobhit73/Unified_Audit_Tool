@@ -105,7 +105,7 @@ def generate_uzio_template(df_source, vendor_field_map):
     # Iterate through each Uzio expected header
     for uzio_header, std_name in UZIO_RAW_MAPPING.items():
         # Special Case: Leave blank
-        if std_name in ['Job Title', 'Department', 'Termination Reason', 'Work Location']:
+        if std_name in ['Job Title', 'Department', 'Work Location']:
             df_uzio[uzio_header] = ""
             continue
             
@@ -162,6 +162,27 @@ def generate_uzio_template(df_source, vendor_field_map):
                     if 'other' in et_str: return 'Other'
                     return ""
                 series = series.apply(format_emp_type)
+            elif std_name == 'Termination Reason':
+                def format_term_reason(tr):
+                    if pd.isna(tr) or str(tr).strip() == "": return ""
+                    tr_str = str(tr).strip().lower()
+                    
+                    if "involuntary" in tr_str or "invluntary" in tr_str:
+                        return "Involuntary Termination of Employment"
+                    if "voluntary" in tr_str or "quit" in tr_str:
+                        return "Voluntary Termination of Employment"
+                    if "death" in tr_str:
+                        return "Death"
+                    if "retire" in tr_str:
+                        return "Retirement"
+                    if "disability" in tr_str:
+                        return "Permanent Disability"
+                    if "transfer" in tr_str:
+                        return "Transfer"
+                    
+                    # Anything else that is not blank gets 'Other'
+                    return "Other"
+                series = series.apply(format_term_reason)
             # We port the data
             df_uzio[uzio_header] = series
         else:

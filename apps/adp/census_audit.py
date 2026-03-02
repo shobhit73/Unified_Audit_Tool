@@ -83,11 +83,11 @@ def try_parse_date(x):
     if x == "":
         return ""
     if isinstance(x, (datetime, date, np.datetime64, pd.Timestamp)):
-        return pd.to_datetime(x).date().isoformat()
+        return pd.to_datetime(x).strftime("%m/%d/%Y")
     if isinstance(x, str):
         s = x.strip()
         try:
-            return pd.to_datetime(s, errors="raise").date().isoformat()
+            return pd.to_datetime(s, errors="raise").strftime("%m/%d/%Y")
         except Exception:
             return s
     return str(x)

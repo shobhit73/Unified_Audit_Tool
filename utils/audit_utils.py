@@ -93,6 +93,75 @@ def clean_money_val(x):
     except:
         return 0.0
 
+def validate_source_data(df_source, resolved_field_map):
+    """
+    Validates the mapped source data (Paycom/ADP) before generation.
+    Checks for blank values in mandatory fields and duplicate SSNs.
+    Returns a DataFrame of errors, or an empty DataFrame if valid.
+    """
+    errors = []
+    
+    # Mandatory fields to check for blanks
+    mandatory_fields = ['Employment Status', 'Employment Type', 'Pay Type', 'Work Location', 'Job Title']
+    
+    for idx, row in df_source.iterrows():
+        missing_fields = []
+        for std_name in mandatory_fields:
+            src_col = resolved_field_map.get(std_name)
+            if src_col and src_col in df_source.columns:
+                val = row[src_col]
+                # Check if it's blank/NaN
+                if pd.isna(val) or str(val).strip() == "":
+                    missing_fields.append(std_name)
+                
+        # SSN special blank check
+        ssn_col = resolved_field_map.get('SSN')
+        if ssn_col and ssn_col in df_source.columns:
+            val = row[ssn_col]
+            if pd.isna(val) or str(val).strip() == "":
+                missing_fields.append('SSN')
+                
+        if missing_fields:
+            # Try to get Employee ID or Name for reference
+            emp_id_col = resolved_field_map.get('Employee ID')
+            emp_ref = f"Row {idx+2}"
+            if emp_id_col and emp_id_col in df_source.columns:
+                eid_val = row[emp_id_col]
+                if pd.notna(eid_val) and str(eid_val).strip():
+                    emp_ref = f"Emp ID: {str(eid_val).strip()}"
+                    
+            errors.append({
+                'Employee Reference': emp_ref,
+                'Missing Fields': ", ".join(missing_fields),
+                'Issue': 'Blank Mandatory Fields'
+            })
+            
+    # Check for Duplicate SSNs across the entire dataset
+    ssn_col = resolved_field_map.get('SSN')
+    if ssn_col and ssn_col in df_source.columns:
+        # Strip and filter blanks
+        valid_ssns = df_source[ssn_col].astype(str).str.strip().replace('nan', '')
+        valid_ssns = valid_ssns[valid_ssns != ""]
+        
+        duplicates = valid_ssns[valid_ssns.duplicated(keep=False)]
+        for dup_ssn, row_idxs in duplicates.groupby(duplicates).groups.items():
+            # For each duplicated SSN
+            for r_idx in row_idxs:
+                emp_id_col = resolved_field_map.get('Employee ID')
+                emp_ref = f"Row {r_idx+2}"
+                if emp_id_col and emp_id_col in df_source.columns:
+                    eid_val = df_source.at[r_idx, emp_id_col]
+                    if pd.notna(eid_val) and str(eid_val).strip():
+                        emp_ref = f"Emp ID: {str(eid_val).strip()}"
+                
+                errors.append({
+                    'Employee Reference': emp_ref,
+                    'Missing Fields': '',
+                    'Issue': f"Duplicate SSN ({dup_ssn})"
+                })
+                
+    return pd.DataFrame(errors)
+
 def generate_uzio_template(df_source, vendor_field_map):
     """
     Generate an Uzio Census Template DataFrame from a source DataFrame.

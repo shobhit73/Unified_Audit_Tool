@@ -64,8 +64,8 @@ def render_ui():
     """)
     
     paycom_file = st.file_uploader("Upload Paycom Census Export", type=["xlsx", "csv"], key="pc_gen_upload")
-    job_map_file = st.file_uploader("Upload Job Title Mapping (Optional)", type=["xlsx", "csv"], key="pc_gen_job_map")
-    loc_map_file = st.file_uploader("Upload Work Location Mapping (Optional)", type=["xlsx", "csv"], key="pc_gen_loc_map")
+    job_map_file = st.file_uploader("Upload Job Title Mapping", type=["xlsx", "csv"], key="pc_gen_job_map")
+    loc_map_file = st.file_uploader("Upload Work Location Mapping", type=["xlsx", "csv"], key="pc_gen_loc_map")
     
     if paycom_file:
         if st.button("Generate Uzio Template", type="primary"):
@@ -98,6 +98,29 @@ def render_ui():
                         if not found:
                             resolved_field_map[std_name] = norm_colname(vendor_cols[0])
                     
+                    # Enforce Mapping Uploads
+                    if not job_map_file or not loc_map_file:
+                        st.error("Both Job Title Mapping and Work Location Mapping files must be uploaded before generating the census.")
+                        st.stop()
+
+                    # Pre-Generation Validation
+                    from utils.audit_utils import validate_source_data
+                    df_pre_errors = validate_source_data(df_paycom, resolved_field_map)
+                    
+                    if not df_pre_errors.empty:
+                        st.error("Input data validation failed! Please fix the errors in the source file before generating the Uzio Template.")
+                        err_out = io.BytesIO()
+                        df_pre_errors.to_csv(err_out, index=False)
+                        err_out.seek(0)
+                        
+                        st.download_button(
+                            label="Download Input Validation Errors (CSV)",
+                            data=err_out.getvalue(),
+                            file_name=f"Input_Validation_Errors_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+                            mime="text/csv"
+                        )
+                        st.stop()
+
                     # Generate Uzio Template
                     df_uzio = generate_uzio_template(df_paycom, resolved_field_map)
                     

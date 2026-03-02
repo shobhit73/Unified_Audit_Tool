@@ -116,8 +116,8 @@ def render_ui():
                         unique_locs = sorted([l for l in df_adp[src_loc_col].dropna().unique() if str(l).strip()])
                         
                     # Create mapping dataframes for the editor
-                    df_job_map = pd.DataFrame({"Source Job Title": unique_jobs, "Mapped Uzio Job Title": [None]*len(unique_jobs)})
-                    df_loc_map = pd.DataFrame({"Source Work Location": unique_locs, "Mapped Uzio Work Location": [None]*len(unique_locs)})
+                    df_job_map = pd.DataFrame({"Source Job Title": unique_jobs, "Mapped Uzio Job Title": pd.Series([None]*len(unique_jobs), dtype=str)})
+                    df_loc_map = pd.DataFrame({"Source Work Location": unique_locs, "Mapped Uzio Work Location": pd.Series([None]*len(unique_locs), dtype=str)})
                     
                     allowed_titles = [
                         'DSP Owner', 'Operations Manager', 'Operations Lead', 'Fleet Manager', 

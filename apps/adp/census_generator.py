@@ -69,8 +69,6 @@ def render_ui():
     """)
     
     adp_file = st.file_uploader("Upload ADP Census Export", type=["xlsx", "csv"], key="adp_gen_upload")
-    job_map_file = st.file_uploader("Upload Job Title Mapping", type=["xlsx", "csv"], key="adp_gen_job_map")
-    loc_map_file = st.file_uploader("Upload Work Location Mapping", type=["xlsx", "csv"], key="adp_gen_loc_map")
     
     if adp_file:
         if st.button("Generate Uzio Template", type="primary"):
@@ -99,91 +97,83 @@ def render_ui():
                         if not found:
                             resolved_field_map[std_name] = norm_colname(vendor_cols[0])
                     
-                    # Enforce Mapping Uploads
-                    if not job_map_file or not loc_map_file:
-                        st.error("Both Job Title Mapping and Work Location Mapping files must be uploaded before generating the census.")
-                        st.stop()
-
-                    # Pre-Generation Validation
-                    from utils.audit_utils import validate_source_data
-                    df_pre_errors = validate_source_data(df_adp, resolved_field_map)
                     
-                    if not df_pre_errors.empty:
-                        st.error("Input data validation failed! Please fix the errors in the source file before generating the Uzio Template.")
-                        err_out = io.BytesIO()
-                        df_pre_errors.to_csv(err_out, index=False)
-                        err_out.seek(0)
-                        
-                        st.download_button(
-                            label="Download Input Validation Errors (CSV)",
-                            data=err_out.getvalue(),
-                            file_name=f"Input_Validation_Errors_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
-                            mime="text/csv"
-                        )
-                        st.stop()
-
-                    # Generate Uzio Template
-                    df_uzio = generate_uzio_template(df_adp, resolved_field_map)
+                    # --- INTERACTIVE UI MAPPING ---
+                    st.markdown("### Step 2: Map Data to Uzio Format")
+                    st.markdown("Please map the unique Job Titles and Work Locations found in your source file to the acceptable Uzio formats.")
                     
-                    # Apply Job Title Mapping
                     src_job_col = resolved_field_map.get('Job Title')
-                    if src_job_col and src_job_col in df_adp.columns:
-                        job_mapping = {}
-                        if job_map_file:
-                            try:
-                                if job_map_file.name.lower().endswith('.csv'):
-                                    df_map = pd.read_csv(job_map_file, dtype=str)
-                                else:
-                                    df_map = pd.read_excel(job_map_file, dtype=str)
-                                
-                                if len(df_map.columns) >= 2:
-                                    for _, r in df_map.iterrows():
-                                        src = str(r.iloc[0]).strip().lower()
-                                        tgt = str(r.iloc[1]).strip()
-                                        if src != 'nan' and src:
-                                            job_mapping[src] = tgt if tgt != 'nan' else ""
-                            except Exception as e:
-                                st.warning(f"Could not read Job Title Mapping: {e}")
-                                
-                        def map_job(job_val):
-                            if pd.isna(job_val): return ""
-                            j = str(job_val).strip()
-                            j_lower = j.lower()
-                            if job_map_file and j_lower in job_mapping:
-                                return job_mapping[j_lower]
-                            return j
-                            
-                        df_uzio['Job Title'] = df_adp[src_job_col].apply(map_job)
-                    
-                    # Apply Work Location Mapping
                     src_loc_col = resolved_field_map.get('Work Location')
+                    
+                    # Extract unique Jobs
+                    unique_jobs = []
+                    if src_job_col and src_job_col in df_adp.columns:
+                        unique_jobs = sorted([j for j in df_adp[src_job_col].dropna().unique() if str(j).strip()])
+                        
+                    # Extract unique Locations
+                    unique_locs = []
                     if src_loc_col and src_loc_col in df_adp.columns:
-                        loc_mapping = {}
-                        if loc_map_file:
-                            try:
-                                if loc_map_file.name.lower().endswith('.csv'):
-                                    df_loc_map = pd.read_csv(loc_map_file, dtype=str)
-                                else:
-                                    df_loc_map = pd.read_excel(loc_map_file, dtype=str)
-                                
-                                if len(df_loc_map.columns) >= 2:
-                                    for _, r in df_loc_map.iterrows():
-                                        src = str(r.iloc[0]).strip().lower()
-                                        tgt = str(r.iloc[1]).strip()
-                                        if src != 'nan' and src:
-                                            loc_mapping[src] = tgt if tgt != 'nan' else ""
-                            except Exception as e:
-                                st.warning(f"Could not read Work Location Mapping: {e}")
-                                
-                        def map_loc(loc_val):
-                            if pd.isna(loc_val): return ""
-                            l = str(loc_val).strip()
-                            l_lower = l.lower()
-                            if loc_map_file and l_lower in loc_mapping:
-                                return loc_mapping[l_lower]
-                            return l
-                            
-                        df_uzio['Work Location'] = df_adp[src_loc_col].apply(map_loc)
+                        unique_locs = sorted([l for l in df_adp[src_loc_col].dropna().unique() if str(l).strip()])
+                        
+                    # Create mapping dataframes for the editor
+                    df_job_map = pd.DataFrame({"Source Job Title": unique_jobs, "Mapped Uzio Job Title": [None]*len(unique_jobs)})
+                    df_loc_map = pd.DataFrame({"Source Work Location": unique_locs, "Mapped Uzio Work Location": [None]*len(unique_locs)})
+                    
+                    allowed_titles = [
+                        'DSP Owner', 'Operations Manager', 'Operations Lead', 'Fleet Manager', 
+                        'Safety Manager', 'Performance Manager', 'Trainer', 'Human Resources', 
+                        'Recruiter', 'Office Personnel', 'Payroll Assistant', 'Finance', 
+                        'Dispatch', 'Management', 'Admin', 'Survey', 'Warehouse', 'Walker', 
+                        'Driver', 'Helper', 'Driver-Lite', 'Driver-Step Van', 
+                        'Driver-Unscheduled', 'Lead Driver', 'DDU Dedicated', 'DDU Shared', 
+                        'Non-DSP Related', 'Driver -Major Appliance'
+                    ]
+
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write("**Job Title Mapping**")
+                        edited_jobs = st.data_editor(
+                            df_job_map, 
+                            column_config={
+                                "Source Job Title": st.column_config.Column(disabled=True),
+                                "Mapped Uzio Job Title": st.column_config.SelectboxColumn("Select Uzio Role", options=allowed_titles, required=True)
+                            },
+                            hide_index=True,
+                            use_container_width=True,
+                            key="adp_job_editor"
+                        )
+                    
+                    with col2:
+                        st.write("**Work Location Mapping**")
+                        edited_locs = st.data_editor(
+                            df_loc_map,
+                            column_config={
+                                "Source Work Location": st.column_config.Column(disabled=True),
+                                "Mapped Uzio Work Location": st.column_config.TextColumn("Enter Uzio Location", required=True)
+                            },
+                            hide_index=True,
+                            use_container_width=True,
+                            key="adp_loc_editor"
+                        )
+                        
+                    # Check if mapping is completely filled out
+                    job_map_complete = not edited_jobs['Mapped Uzio Job Title'].isna().any() if not edited_jobs.empty else True
+                    loc_map_complete = not edited_locs['Mapped Uzio Work Location'].isna().any() and not (edited_locs['Mapped Uzio Work Location'] == "").any() if not edited_locs.empty else True
+                    
+                    if not job_map_complete or not loc_map_complete:
+                        st.warning("Please fill out all mappings in the tables above to enable Generation.")
+                        st.stop()
+                        
+                    # Apply Job Title Mapping
+                    if src_job_col and src_job_col in df_adp.columns:
+                        job_dict = dict(zip(edited_jobs['Source Job Title'], edited_jobs['Mapped Uzio Job Title']))
+                        df_uzio['Job Title'] = df_adp[src_job_col].map(job_dict).fillna(df_adp[src_job_col])
+                        
+                    # Apply Work Location Mapping
+                    if src_loc_col and src_loc_col in df_adp.columns:
+                        loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
+                        df_uzio['Work Location'] = df_adp[src_loc_col].map(loc_dict).fillna(df_adp[src_loc_col])
                     
                     # Validate Uzio Data
                     from utils.audit_utils import validate_uzio_data

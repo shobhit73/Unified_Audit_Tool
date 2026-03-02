@@ -41,7 +41,8 @@ UZIO_RAW_MAPPING = {
     'Mailing City': 'Mailing City',
     'Mailing Zipcode': 'Mailing Zip',
     'Mailing State(Abbreviation)': 'Mailing State',
-    'Reporting Manager ID': 'Reports To ID'
+    'Reporting Manager ID': 'Reports To ID',
+    'Work Location': 'Work Location'
 }
 
 def read_uzio_raw_file(uploaded_file):
@@ -104,7 +105,7 @@ def generate_uzio_template(df_source, vendor_field_map):
     # Iterate through each Uzio expected header
     for uzio_header, std_name in UZIO_RAW_MAPPING.items():
         # Special Case: Leave blank
-        if std_name in ['Job Title', 'Department', 'Termination Reason']:
+        if std_name in ['Job Title', 'Department', 'Termination Reason', 'Work Location']:
             df_uzio[uzio_header] = ""
             continue
             
@@ -138,6 +139,19 @@ def generate_uzio_template(df_source, vendor_field_map):
                 series = series.apply(format_gender)
             elif std_name == 'Employment Status':
                 series = series.apply(lambda x: str(x).strip().upper() if pd.notna(x) else "")
+            elif std_name in ['Zip', 'Mailing Zip']:
+                def format_zip(z):
+                    if pd.isna(z) or str(z).strip() == "": return ""
+                    # Keep digits only
+                    import re
+                    z_clean = re.sub(r'\D', '', str(z).strip())
+                    if not z_clean: return ""
+                    # Pad to 5 or truncate to 5
+                    if len(z_clean) < 5:
+                        return z_clean.zfill(5)
+                    else:
+                        return z_clean[:5]
+                series = series.apply(format_zip)
             elif std_name == 'Employment Type':
                 def format_emp_type(et):
                     if pd.isna(et) or str(et).strip() == "": return ""
@@ -165,6 +179,7 @@ def generate_uzio_template(df_source, vendor_field_map):
         
         # Hourly logic
         hourly_mask = pay_type_series.str.contains('hour', na=False)
+        df_uzio.loc[hourly_mask, 'Pay Type*'] = "Hourly"
         if 'Annual Salary(Digits)**' in df_uzio.columns:
             df_uzio.loc[hourly_mask, 'Annual Salary(Digits)**'] = ""
         # Enforce Hourly = Non-Exempt
@@ -173,6 +188,7 @@ def generate_uzio_template(df_source, vendor_field_map):
             
         # Salaried logic
         salary_mask = pay_type_series.str.contains('salar', na=False)
+        df_uzio.loc[salary_mask, 'Pay Type*'] = "Salaried"
         if 'Hourly Pay Rate**' in df_uzio.columns:
             df_uzio.loc[salary_mask, 'Hourly Pay Rate**'] = 0
         if 'Working Hours per Week(Digits)**' in df_uzio.columns:
@@ -239,3 +255,51 @@ def inject_into_uzio_template(df_uzio, template_path="templates/Uzio_Census_Temp
                     ws.cell(row=excel_row, column=col_idx, value=val)
                     
     return wb
+
+def validate_uzio_data(df_uzio):
+    """
+    Validates required fields for Uzio Census.
+    Returns a DataFrame containing Employee ID and the list of missing fields.
+    Fields checked: Pay Type*, Employment Status*, Job Title, Work Location.
+    """
+    errors = []
+    
+    # Identify expected column names from UZIO_RAW_MAPPING vs what's in df_uzio
+    # Or just use the exact Uzio headers if df_uzio has them
+    emp_id_col = 'Employee ID*' if 'Employee ID*' in df_uzio.columns else 'Employee ID'
+    
+    for idx, row in df_uzio.iterrows():
+        emp_id = row.get(emp_id_col, f"Row {idx+1}")
+        if pd.isna(emp_id) or str(emp_id).strip() == "":
+            emp_id = f"Row {idx+1}"
+            
+        missing_fields = []
+        
+        # Check Pay Type
+        val_pt = row.get('Pay Type*')
+        if pd.isna(val_pt) or str(val_pt).strip() == "":
+            missing_fields.append("Pay Type")
+            
+        # Check Employment Status
+        val_es = row.get('Employment Status*')
+        if pd.isna(val_es) or str(val_es).strip() == "":
+            missing_fields.append("Employment Status")
+            
+        # Check Job Title
+        val_jt = row.get('Job Title')
+        if pd.isna(val_jt) or str(val_jt).strip() == "":
+            missing_fields.append("Job Title")
+            
+        # Check Work Location
+        val_wl = row.get('Work Location')
+        if pd.isna(val_wl) or str(val_wl).strip() == "":
+            missing_fields.append("Work Location")
+            
+        if missing_fields:
+            errors.append({
+                "Employee ID": emp_id,
+                "Missing Fields": ", ".join(missing_fields),
+                "Error": "Mandatory fields are blank"
+            })
+            
+    return pd.DataFrame(errors)

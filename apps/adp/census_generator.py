@@ -45,7 +45,8 @@ ADP_FIELD_MAP = {
     'Protected Veteran Status': ['Protected Veteran Status'],
     'EEO Job Category': ['EEOC Job Classification'],
     'Ethnicity': ['Ethnicity'],
-    'SOC Code': ['SOC Code']
+    'SOC Code': ['SOC Code'],
+    'Work Location': ['Location', 'Location Description', 'Work Location']
 }
 
 def norm_colname(c: str) -> str:
@@ -68,6 +69,8 @@ def render_ui():
     """)
     
     adp_file = st.file_uploader("Upload ADP Census Export", type=["xlsx", "csv"], key="adp_gen_upload")
+    job_map_file = st.file_uploader("Upload Job Title Mapping (Optional)", type=["xlsx", "csv"], key="adp_gen_job_map")
+    loc_map_file = st.file_uploader("Upload Work Location Mapping (Optional)", type=["xlsx", "csv"], key="adp_gen_loc_map")
     
     if adp_file:
         if st.button("Generate Uzio Template", type="primary"):
@@ -98,6 +101,83 @@ def render_ui():
                     
                     # Generate Uzio Template
                     df_uzio = generate_uzio_template(df_adp, resolved_field_map)
+                    
+                    # Apply Job Title Mapping
+                    src_job_col = resolved_field_map.get('Job Title')
+                    if src_job_col and src_job_col in df_adp.columns:
+                        job_mapping = {}
+                        if job_map_file:
+                            try:
+                                if job_map_file.name.lower().endswith('.csv'):
+                                    df_map = pd.read_csv(job_map_file, dtype=str)
+                                else:
+                                    df_map = pd.read_excel(job_map_file, dtype=str)
+                                
+                                if len(df_map.columns) >= 2:
+                                    for _, r in df_map.iterrows():
+                                        src = str(r.iloc[0]).strip().lower()
+                                        tgt = str(r.iloc[1]).strip()
+                                        if src != 'nan' and src:
+                                            job_mapping[src] = tgt if tgt != 'nan' else ""
+                            except Exception as e:
+                                st.warning(f"Could not read Job Title Mapping: {e}")
+                                
+                        def map_job(job_val):
+                            if pd.isna(job_val): return ""
+                            j = str(job_val).strip()
+                            j_lower = j.lower()
+                            if job_map_file and j_lower in job_mapping:
+                                return job_mapping[j_lower]
+                            return j
+                            
+                        df_uzio['Job Title'] = df_adp[src_job_col].apply(map_job)
+                    
+                    # Apply Work Location Mapping
+                    src_loc_col = resolved_field_map.get('Work Location')
+                    if src_loc_col and src_loc_col in df_adp.columns:
+                        loc_mapping = {}
+                        if loc_map_file:
+                            try:
+                                if loc_map_file.name.lower().endswith('.csv'):
+                                    df_loc_map = pd.read_csv(loc_map_file, dtype=str)
+                                else:
+                                    df_loc_map = pd.read_excel(loc_map_file, dtype=str)
+                                
+                                if len(df_loc_map.columns) >= 2:
+                                    for _, r in df_loc_map.iterrows():
+                                        src = str(r.iloc[0]).strip().lower()
+                                        tgt = str(r.iloc[1]).strip()
+                                        if src != 'nan' and src:
+                                            loc_mapping[src] = tgt if tgt != 'nan' else ""
+                            except Exception as e:
+                                st.warning(f"Could not read Work Location Mapping: {e}")
+                                
+                        def map_loc(loc_val):
+                            if pd.isna(loc_val): return ""
+                            l = str(loc_val).strip()
+                            l_lower = l.lower()
+                            if loc_map_file and l_lower in loc_mapping:
+                                return loc_mapping[l_lower]
+                            return l
+                            
+                        df_uzio['Work Location'] = df_adp[src_loc_col].apply(map_loc)
+                    
+                    # Validate Uzio Data
+                    from utils.audit_utils import validate_uzio_data
+                    df_errors = validate_uzio_data(df_uzio)
+                    
+                    if not df_errors.empty:
+                        st.warning("Some mandatory fields are blank or missing in the generated census. Please download the Validation Errors report.")
+                        err_out = io.BytesIO()
+                        df_errors.to_csv(err_out, index=False)
+                        err_out.seek(0)
+                        
+                        st.download_button(
+                            label="Download Validation Errors (CSV)",
+                            data=err_out.getvalue(),
+                            file_name=f"Validation_Errors_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+                            mime="text/csv"
+                        )
                     
                     # Inject into the Master Template
                     from utils.audit_utils import inject_into_uzio_template

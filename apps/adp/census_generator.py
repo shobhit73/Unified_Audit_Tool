@@ -97,6 +97,8 @@ def render_ui():
                         if not found:
                             resolved_field_map[std_name] = norm_colname(vendor_cols[0])
                     
+                    # Generate Uzio Template
+                    df_uzio = generate_uzio_template(df_adp, resolved_field_map)
                     
                     # --- INTERACTIVE UI MAPPING ---
                     st.markdown("### Step 2: Map Data to Uzio Format")

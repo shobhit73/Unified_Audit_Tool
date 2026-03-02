@@ -138,7 +138,17 @@ def generate_uzio_template(df_source, vendor_field_map):
                     return ""
                 series = series.apply(format_gender)
             elif std_name == 'Employment Status':
-                series = series.apply(lambda x: str(x).strip().upper() if pd.notna(x) else "")
+                def format_status(x):
+                    if pd.isna(x): return ""
+                    s = str(x).strip().lower()
+                    if not s: return ""
+                    if 'not hired' in s: return 'EXCLUDE'
+                    if 'inactive' in s: return 'TERMINATED'
+                    if 'leave' in s: return 'ACTIVE'
+                    if 'term' in s: return 'TERMINATED'
+                    if 'active' in s: return 'ACTIVE'
+                    return str(x).strip().upper()
+                series = series.apply(format_status)
             elif std_name in ['Zip', 'Mailing Zip']:
                 def format_zip(z):
                     if pd.isna(z) or str(z).strip() == "": return ""
@@ -187,7 +197,10 @@ def generate_uzio_template(df_source, vendor_field_map):
             df_uzio[uzio_header] = series
         else:
             df_uzio[uzio_header] = ""
-
+    # Filter out excluded employees (e.g., 'not hired')
+    if 'Employment Status*' in df_uzio.columns:
+        df_uzio = df_uzio[df_uzio['Employment Status*'] != 'EXCLUDE'].copy()
+        
     # Apply Work Email Fallback
     if 'Official Email*' in df_uzio.columns and 'Personal Email' in df_uzio.columns:
         # Fill missing Work Emails with Personal Email

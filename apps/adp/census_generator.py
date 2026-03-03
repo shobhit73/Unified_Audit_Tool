@@ -126,6 +126,17 @@ def render_ui():
         resolved_field_map['Job Title'] = dept_col_norm
         st.warning("**Position column not found.** Falling back to **Department Description** for Job Title mapping.")
     
+    # --- CHECK: Working Hours column must exist ---
+    hours_col = resolved_field_map.get('Working Hours')
+    if not hours_col or hours_col not in df_adp.columns:
+        st.error("**⛔ 'Working Hours Per Week' column not found in the source file!** This column is required. Please ensure your ADP export includes Regular Hours or Standard Hours.")
+        return
+    
+    # --- CHECK: Reports To Associate ID column (soft flag) ---
+    reports_col = resolved_field_map.get('Reports To ID')
+    if not reports_col or reports_col not in df_adp.columns:
+        st.warning("**Reports To Associate ID column not found** in the source file. This field will be blank in the output.")
+    
     # --- PRE-GENERATION SANITY CHECKS ---
     from utils.audit_utils import validate_source_data
     validation = validate_source_data(df_adp, resolved_field_map)

@@ -119,6 +119,8 @@ def validate_source_data(df_source, resolved_field_map):
     flsa_col = resolved_field_map.get('FLSA Classification')
     work_email_col = resolved_field_map.get('Work Email')
     personal_email_col = resolved_field_map.get('Personal Email')
+    hours_col = resolved_field_map.get('Working Hours')
+    state_col = resolved_field_map.get('State')
     
     def get_emp_ref(row, idx):
         ref = f"Row {idx+2}"
@@ -180,6 +182,20 @@ def validate_source_data(df_source, resolved_field_map):
                 sal_val = row.get(salary_col)
                 if pd.isna(sal_val) or str(sal_val).strip() == "" or str(sal_val).strip() == "0":
                     missing.append("Annual Salary (required for Salaried)")
+        
+        # 7. Blank Working Hours
+        if hours_col and hours_col in df_source.columns:
+            hrs_val = row.get(hours_col)
+            if pd.isna(hrs_val) or str(hrs_val).strip() == "" or str(hrs_val).strip().lower() == 'nan':
+                missing.append("Working Hours (blank)")
+        
+        # 8. State must be 2-character abbreviation (not full name)
+        if state_col and state_col in df_source.columns:
+            state_val = row.get(state_col)
+            if pd.notna(state_val) and str(state_val).strip():
+                sv = str(state_val).strip()
+                if len(sv) > 2:
+                    missing.append(f"State ('{sv}' is full name, need 2-char abbreviation)")
         
         if missing:
             hard_errors.append({

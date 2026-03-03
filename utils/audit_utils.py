@@ -105,6 +105,7 @@ def validate_source_data(df_source, resolved_field_map):
     hard_errors = []
     flsa_corrections = []
     flsa_blanks = []
+    intern_corrections = []
     email_fallbacks = []
     
     # Resolve column references
@@ -235,11 +236,23 @@ def validate_source_data(df_source, resolved_field_map):
                             'Employee ID': emp_ref,
                             'Personal Email Used': str(pe_val).strip()
                         })
+        
+        # 9. Intern in Worker Category → auto-correct to Part Time
+        if type_col and type_col in df_source.columns:
+            type_val = row.get(type_col)
+            if pd.notna(type_val) and 'intern' in str(type_val).strip().lower():
+                df_source.at[idx, type_col] = 'Part Time'
+                intern_corrections.append({
+                    'Employee ID': emp_ref,
+                    'Original Employment Type': str(type_val).strip(),
+                    'Corrected Employment Type': 'Part Time'
+                })
     
     return {
         'hard_errors': pd.DataFrame(hard_errors),
         'flsa_corrections': pd.DataFrame(flsa_corrections),
         'flsa_blanks': pd.DataFrame(flsa_blanks),
+        'intern_corrections': pd.DataFrame(intern_corrections),
         'email_fallbacks': pd.DataFrame(email_fallbacks)
     }
 

@@ -133,6 +133,7 @@ def render_ui():
     hard_errors = validation['hard_errors']
     flsa_corrections = validation['flsa_corrections']
     flsa_blanks = validation['flsa_blanks']
+    intern_corrections = validation['intern_corrections']
     email_fallbacks = validation['email_fallbacks']
     
     # Show soft warnings first (non-blocking)
@@ -145,6 +146,11 @@ def render_ui():
         st.warning(f"**Blank FLSA Classification:** {len(flsa_blanks)} employee(s) have a Pay Type set but FLSA Classification is blank. Please verify.")
         with st.expander("View Blank FLSA Details", expanded=False):
             st.dataframe(flsa_blanks, hide_index=True, use_container_width=True)
+    
+    if not intern_corrections.empty:
+        st.warning(f"**Intern → Part Time:** {len(intern_corrections)} employee(s) had 'Intern' as Worker Category. Employment Type has been changed to **Part Time** in the output.")
+        with st.expander("View Intern Corrections", expanded=False):
+            st.dataframe(intern_corrections, hide_index=True, use_container_width=True)
     
     if not email_fallbacks.empty:
         st.info(f"**Email Fallback:** {len(email_fallbacks)} employee(s) had blank Work Email. Personal Email was used instead.")

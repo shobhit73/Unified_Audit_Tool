@@ -36,7 +36,7 @@ ADP_FIELD_MAP = {
     'Address Line 2': ['Primary Address: Address Line 2', 'Address Line 2'],
     'City': ['Primary Address: City', 'City'],
     'Zip': ['Legal / Preferred Address: Zip / Postal Code', 'Zip Code'],
-    'State': ['Primary Address: State / Territory Code', 'State'],
+    'State': ['Primary Address: State / Territory Code (Personal Profile)', 'Primary Address: State / Territory Code', 'State'],
     'Mailing Address Line 1': ['Legal / Preferred Address: Address Line 1'],
     'Mailing Address Line 2': ['Legal / Preferred Address: Address Line 2'],
     'Mailing City': ['Legal / Preferred Address: City'],

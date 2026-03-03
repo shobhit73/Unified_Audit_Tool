@@ -21,7 +21,7 @@ ADP_FIELD_MAP = {
     'Annual Salary': ['Annual Salary'],
     'Hourly Pay Rate': ['Regular Pay Rate Amount', 'Hourly Rate'],
     'Working Hours': ['Regular Hours', 'Standard Hours'],
-    'Job Title': ['Job Title Description', 'Job Title'],
+    'Job Title': ['Job Title Description', 'Job Title', 'Department Description'],
     'Department': ['Department Description', 'Department'],
     'Work Email': ['Work Contact: Work Email', 'Work Email'],
     'Personal Email': ['Personal Contact: Personal Email', 'Personal Email'],
@@ -109,6 +109,21 @@ def render_ui():
                 break
         if not found:
             resolved_field_map[std_name] = norm_colname(vendor_cols[0])
+    
+    # --- CHECK: Position column fallback to Department Description ---
+    job_col = resolved_field_map.get('Job Title')
+    dept_col_norm = norm_colname('Department Description')
+    if job_col and job_col in df_adp.columns:
+        blank_count = df_adp[job_col].isna().sum() + (df_adp[job_col].astype(str).str.strip() == '').sum()
+        if blank_count > 0 and dept_col_norm in df_adp.columns:
+            # Fill blanks from Department Description
+            mask = df_adp[job_col].isna() | (df_adp[job_col].astype(str).str.strip() == '')
+            df_adp.loc[mask, job_col] = df_adp.loc[mask, dept_col_norm]
+            st.warning(f"**Position Fallback:** {int(blank_count)} employee(s) had blank Job Title (Position). Falling back to **Department Description** for these employees.")
+    elif dept_col_norm in df_adp.columns:
+        # Job Title column not found at all, use Department Description
+        resolved_field_map['Job Title'] = dept_col_norm
+        st.warning("**Position column not found.** Falling back to **Department Description** for Job Title mapping.")
     
     # --- PRE-GENERATION SANITY CHECKS ---
     from utils.audit_utils import validate_source_data

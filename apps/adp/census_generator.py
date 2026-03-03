@@ -35,7 +35,7 @@ ADP_FIELD_MAP = {
     'Address Line 1': ['Primary Address: Address Line 1', 'Address Line 1'],
     'Address Line 2': ['Primary Address: Address Line 2', 'Address Line 2'],
     'City': ['Primary Address: City', 'City'],
-    'Zip': ['Legal / Preferred Address: Zip / Postal Code', 'Zip Code'],
+    'Zip': ['Primary Address: Zip / Postal Code', 'Legal / Preferred Address: Zip / Postal Code', 'Zip Code'],
     'State': ['Primary Address: State / Territory Code (Personal Profile)', 'Primary Address: State / Territory Code', 'State'],
     'Mailing Address Line 1': ['Legal / Preferred Address: Address Line 1'],
     'Mailing Address Line 2': ['Legal / Preferred Address: Address Line 2'],
@@ -130,6 +130,18 @@ def render_ui():
     hours_col = resolved_field_map.get('Working Hours')
     if not hours_col or hours_col not in df_adp.columns:
         st.error("**⛔ 'Working Hours Per Week' column not found in the source file!** This column is required. Please ensure your ADP export includes Regular Hours or Standard Hours.")
+        return
+    
+    # --- CHECK: State column must exist ---
+    state_col = resolved_field_map.get('State')
+    if not state_col or state_col not in df_adp.columns:
+        st.error("**⛔ 'Primary Address: State / Territory Code' column not found in the source file!** This column is required for state validation.")
+        return
+    
+    # --- CHECK: Zip column must exist ---
+    zip_col = resolved_field_map.get('Zip')
+    if not zip_col or zip_col not in df_adp.columns:
+        st.error("**⛔ 'Primary Address: Zip / Postal Code' column not found in the source file!** This column is required for zip code validation.")
         return
     
     # --- CHECK: Reports To Associate ID column (soft flag) ---

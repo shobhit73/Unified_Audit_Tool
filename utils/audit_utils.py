@@ -104,6 +104,7 @@ def validate_source_data(df_source, resolved_field_map):
     """
     hard_errors = []
     flsa_corrections = []
+    flsa_blanks = []
     email_fallbacks = []
     
     # Resolve column references
@@ -213,6 +214,14 @@ def validate_source_data(df_source, resolved_field_map):
                             'Original FLSA': str(flsa_val).strip(),
                             'Corrected FLSA': 'Exempt'
                         })
+            else:
+                # FLSA is blank — soft flag
+                if pay_val and ("hourly" in pay_val or "hour" in pay_val or "salary" in pay_val or "salaried" in pay_val):
+                    flsa_blanks.append({
+                        'Employee ID': emp_ref,
+                        'Pay Type': str(row.get(pay_type_col, '')).strip(),
+                        'FLSA Classification': '(blank)'
+                    })
         
         # 8. Blank Work Email → fill with Personal Email
         if work_email_col and work_email_col in df_source.columns:
@@ -230,6 +239,7 @@ def validate_source_data(df_source, resolved_field_map):
     return {
         'hard_errors': pd.DataFrame(hard_errors),
         'flsa_corrections': pd.DataFrame(flsa_corrections),
+        'flsa_blanks': pd.DataFrame(flsa_blanks),
         'email_fallbacks': pd.DataFrame(email_fallbacks)
     }
 

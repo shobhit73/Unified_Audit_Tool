@@ -115,6 +115,7 @@ def render_ui():
     
     hard_errors = validation['hard_errors']
     flsa_corrections = validation['flsa_corrections']
+    flsa_blanks = validation['flsa_blanks']
     email_fallbacks = validation['email_fallbacks']
     
     # Show soft warnings first (non-blocking)
@@ -122,6 +123,11 @@ def render_ui():
         st.info(f"**FLSA Auto-Corrections:** {len(flsa_corrections)} employee(s) had mismatched FLSA classifications. These have been auto-corrected.")
         with st.expander("View FLSA Corrections", expanded=False):
             st.dataframe(flsa_corrections, hide_index=True, use_container_width=True)
+    
+    if not flsa_blanks.empty:
+        st.warning(f"**Blank FLSA Classification:** {len(flsa_blanks)} employee(s) have a Pay Type set but FLSA Classification is blank. Please verify.")
+        with st.expander("View Blank FLSA Details", expanded=False):
+            st.dataframe(flsa_blanks, hide_index=True, use_container_width=True)
     
     if not email_fallbacks.empty:
         st.info(f"**Email Fallback:** {len(email_fallbacks)} employee(s) had blank Work Email. Personal Email was used instead.")

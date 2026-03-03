@@ -222,12 +222,14 @@ def render_ui():
                 # Apply Job Title Mapping
                 if src_job_col and src_job_col in df_paycom.columns:
                     job_dict = dict(zip(edited_jobs['Source Job Title'], edited_jobs['Mapped Uzio Job Title']))
-                    df_uzio['Job Title'] = df_paycom[src_job_col].map(job_dict).fillna(df_paycom[src_job_col])
+                    stripped_jobs = df_paycom[src_job_col].astype(str).str.strip()
+                    df_uzio['Job Title'] = stripped_jobs.map(job_dict).fillna(df_paycom[src_job_col])
                     
                 # Apply Work Location Mapping
                 if src_loc_col and src_loc_col in df_paycom.columns:
                     loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
-                    df_uzio['Work Location'] = df_paycom[src_loc_col].map(loc_dict).fillna(df_paycom[src_loc_col])
+                    stripped_locs = df_paycom[src_loc_col].astype(str).str.strip()
+                    df_uzio['Work Location'] = stripped_locs.map(loc_dict).fillna(df_paycom[src_loc_col])
                 
                 # Validate Uzio Data
                 from utils.audit_utils import validate_uzio_data

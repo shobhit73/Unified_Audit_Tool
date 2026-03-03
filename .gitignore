@@ -3,6 +3,9 @@
 *.xls
 *.csv
 
+# Sensitive Sample Data
+Sample Data/
+
 # Python
 __pycache__/
 *.py[cod]

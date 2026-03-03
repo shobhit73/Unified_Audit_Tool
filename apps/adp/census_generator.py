@@ -171,7 +171,27 @@ def render_ui():
     # Hard stop errors (blocking)
     if not hard_errors.empty:
         st.error(f"**⛔ {len(hard_errors)} Critical Error(s) Found in Source Data!** Please fix these in the source file before proceeding.")
-        st.dataframe(hard_errors, hide_index=True, use_container_width=True)
+        
+        # --- Summary breakdown by issue type ---
+        all_issues = []
+        for issues_str in hard_errors['Issue']:
+            for issue in str(issues_str).split(", "):
+                # Normalize: strip details in parentheses for grouping
+                import re
+                clean = re.sub(r"\s*\(.*?\)", "", issue).strip()
+                if clean:
+                    all_issues.append(clean)
+        
+        from collections import Counter
+        issue_counts = Counter(all_issues)
+        
+        st.markdown("**Summary:**")
+        for issue, count in issue_counts.most_common():
+            st.markdown(f"- **{count}** employee(s): {issue}")
+        
+        # Full details in expander
+        with st.expander(f"View All {len(hard_errors)} Error Details", expanded=False):
+            st.dataframe(hard_errors, hide_index=True, use_container_width=True)
         
         err_csv = io.BytesIO()
         hard_errors.to_csv(err_csv, index=False)

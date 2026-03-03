@@ -21,7 +21,7 @@ ADP_FIELD_MAP = {
     'Pay Type': ['Regular Pay Rate Description', 'Pay Type'],
     'Annual Salary': ['Annual Salary'],
     'Hourly Pay Rate': ['Regular Pay Rate Amount', 'Hourly Rate'],
-    'Working Hours': ['Regular Hours', 'Standard Hours'],
+    'Working Hours': ['Working Hours Per Week', 'Working Hours Per week', 'Regular Hours', 'Standard Hours'],
     'Job Title': ['Job Title Description', 'Job Title', 'Department Description'],
     'Department': ['Department Description', 'Department'],
     'Work Email': ['Work Contact: Work Email', 'Work Email'],

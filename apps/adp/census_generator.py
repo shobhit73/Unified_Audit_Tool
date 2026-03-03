@@ -110,6 +110,44 @@ def render_ui():
         if not found:
             resolved_field_map[std_name] = norm_colname(vendor_cols[0])
     
+    # --- PRE-GENERATION SANITY CHECKS ---
+    from utils.audit_utils import validate_source_data
+    validation = validate_source_data(df_adp, resolved_field_map)
+    
+    hard_errors = validation['hard_errors']
+    flsa_corrections = validation['flsa_corrections']
+    email_fallbacks = validation['email_fallbacks']
+    
+    # Show soft warnings first (non-blocking)
+    if not flsa_corrections.empty:
+        st.info(f"**FLSA Auto-Corrections:** {len(flsa_corrections)} employee(s) had mismatched FLSA classifications. These have been auto-corrected.")
+        with st.expander("View FLSA Corrections", expanded=False):
+            st.dataframe(flsa_corrections, hide_index=True, use_container_width=True)
+    
+    if not email_fallbacks.empty:
+        st.info(f"**Email Fallback:** {len(email_fallbacks)} employee(s) had blank Work Email. Personal Email was used instead.")
+        with st.expander("View Email Fallbacks", expanded=False):
+            st.dataframe(email_fallbacks, hide_index=True, use_container_width=True)
+    
+    # Hard stop errors (blocking)
+    if not hard_errors.empty:
+        st.error(f"**⛔ {len(hard_errors)} Critical Error(s) Found in Source Data!** Please fix these in the source file before proceeding.")
+        st.dataframe(hard_errors, hide_index=True, use_container_width=True)
+        
+        err_csv = io.BytesIO()
+        hard_errors.to_csv(err_csv, index=False)
+        err_csv.seek(0)
+        st.download_button(
+            label="Download Error Report (CSV)",
+            data=err_csv.getvalue(),
+            file_name=f"Source_Validation_Errors_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv",
+            key="adp_hard_err_dl"
+        )
+        return
+    
+    st.success("✅ Source data passed all sanity checks!")
+    
     # --- STEP 2: Interactive UI Mapping (persists across reruns) ---
     st.markdown("---")
     st.markdown("### Step 2: Map Data to Uzio Format")

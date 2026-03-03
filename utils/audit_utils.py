@@ -95,72 +95,143 @@ def clean_money_val(x):
 
 def validate_source_data(df_source, resolved_field_map):
     """
-    Validates the mapped source data (Paycom/ADP) before generation.
-    Checks for blank values in mandatory fields and duplicate SSNs.
-    Returns a DataFrame of errors, or an empty DataFrame if valid.
+    Comprehensive pre-generation sanity checks on the raw source data.
+    Returns a dict:
+      - 'hard_errors': pd.DataFrame of blocking issues (blank mandatory fields, bad zip, missing salary)
+      - 'flsa_corrections': pd.DataFrame of FLSA auto-corrections made
+      - 'email_fallbacks': pd.DataFrame of email fallback auto-fills made
+    The caller should block generation if hard_errors is not empty.
     """
-    errors = []
+    hard_errors = []
+    flsa_corrections = []
+    email_fallbacks = []
     
-    # Mandatory fields to check for blanks
-    mandatory_fields = ['Employment Status', 'Employment Type', 'Pay Type', 'Work Location', 'Job Title']
+    # Resolve column references
+    emp_id_col = resolved_field_map.get('Employee ID')
+    status_col = resolved_field_map.get('Employment Status')
+    type_col = resolved_field_map.get('Employment Type')
+    pay_type_col = resolved_field_map.get('Pay Type')
+    job_title_col = resolved_field_map.get('Job Title')
+    zip_col = resolved_field_map.get('Zip')
+    salary_col = resolved_field_map.get('Annual Salary')
+    flsa_col = resolved_field_map.get('FLSA Classification')
+    work_email_col = resolved_field_map.get('Work Email')
+    personal_email_col = resolved_field_map.get('Personal Email')
+    
+    def get_emp_ref(row, idx):
+        ref = f"Row {idx+2}"
+        if emp_id_col and emp_id_col in df_source.columns:
+            eid = row.get(emp_id_col)
+            if pd.notna(eid) and str(eid).strip():
+                ref = str(eid).strip()
+        return ref
     
     for idx, row in df_source.iterrows():
-        missing_fields = []
-        for std_name in mandatory_fields:
-            src_col = resolved_field_map.get(std_name)
-            if src_col and src_col in df_source.columns:
-                val = row[src_col]
-                # Check if it's blank/NaN
-                if pd.isna(val) or str(val).strip() == "":
-                    missing_fields.append(std_name)
-                
-        # SSN special blank check
-        ssn_col = resolved_field_map.get('SSN')
-        if ssn_col and ssn_col in df_source.columns:
-            val = row[ssn_col]
-            if pd.isna(val) or str(val).strip() == "":
-                missing_fields.append('SSN')
-                
-        if missing_fields:
-            # Try to get Employee ID or Name for reference
-            emp_id_col = resolved_field_map.get('Employee ID')
-            emp_ref = f"Row {idx+2}"
-            if emp_id_col and emp_id_col in df_source.columns:
-                eid_val = row[emp_id_col]
-                if pd.notna(eid_val) and str(eid_val).strip():
-                    emp_ref = f"Emp ID: {str(eid_val).strip()}"
-                    
-            errors.append({
-                'Employee Reference': emp_ref,
-                'Missing Fields': ", ".join(missing_fields),
-                'Issue': 'Blank Mandatory Fields'
-            })
-            
-    # Check for Duplicate SSNs across the entire dataset
-    ssn_col = resolved_field_map.get('SSN')
-    if ssn_col and ssn_col in df_source.columns:
-        # Strip and filter blanks
-        valid_ssns = df_source[ssn_col].astype(str).str.strip().replace('nan', '')
-        valid_ssns = valid_ssns[valid_ssns != ""]
+        emp_ref = get_emp_ref(row, idx)
         
-        duplicates = valid_ssns[valid_ssns.duplicated(keep=False)]
-        for dup_ssn, row_idxs in duplicates.groupby(duplicates).groups.items():
-            # For each duplicated SSN
-            for r_idx in row_idxs:
-                emp_id_col = resolved_field_map.get('Employee ID')
-                emp_ref = f"Row {r_idx+2}"
-                if emp_id_col and emp_id_col in df_source.columns:
-                    eid_val = df_source.at[r_idx, emp_id_col]
-                    if pd.notna(eid_val) and str(eid_val).strip():
-                        emp_ref = f"Emp ID: {str(eid_val).strip()}"
+        # --- HARD STOP CHECKS ---
+        missing = []
+        
+        # 1. Blank Employment Status
+        if status_col and status_col in df_source.columns:
+            val = row.get(status_col)
+            if pd.isna(val) or str(val).strip() == "":
+                missing.append("Employment Status")
+        
+        # 2. Blank Employment Type
+        if type_col and type_col in df_source.columns:
+            val = row.get(type_col)
+            if pd.isna(val) or str(val).strip() == "":
+                missing.append("Employment Type")
+        
+        # 3. Blank Pay Type
+        pay_val = ""
+        if pay_type_col and pay_type_col in df_source.columns:
+            pay_val = row.get(pay_type_col)
+            if pd.isna(pay_val) or str(pay_val).strip() == "":
+                missing.append("Pay Type")
+                pay_val = ""
+            else:
+                pay_val = str(pay_val).strip().lower()
+        
+        # 4. Blank Job Title
+        if job_title_col and job_title_col in df_source.columns:
+            val = row.get(job_title_col)
+            if pd.isna(val) or str(val).strip() == "":
+                missing.append("Job Title")
+        
+        # 5. Invalid Zip Code (must be 5 digits)
+        if zip_col and zip_col in df_source.columns:
+            zip_val = row.get(zip_col)
+            if pd.isna(zip_val) or str(zip_val).strip() == "":
+                missing.append("Zip Code (blank)")
+            else:
+                # Strip to digits only
+                import re
+                digits_only = re.sub(r'[^0-9]', '', str(zip_val).split('.')[0].split('-')[0])
+                if len(digits_only) < 5:
+                    missing.append(f"Zip Code ('{zip_val}' is not 5 digits)")
+        
+        # 6. Salaried without Annual Salary
+        if pay_val and ("salary" in pay_val or "salaried" in pay_val):
+            if salary_col and salary_col in df_source.columns:
+                sal_val = row.get(salary_col)
+                if pd.isna(sal_val) or str(sal_val).strip() == "" or str(sal_val).strip() == "0":
+                    missing.append("Annual Salary (required for Salaried)")
+        
+        if missing:
+            hard_errors.append({
+                'Employee ID': emp_ref,
+                'Issue': ", ".join(missing)
+            })
+        
+        # --- SOFT CHECKS (auto-correct) ---
+        
+        # 7. FLSA Mismatch
+        if flsa_col and flsa_col in df_source.columns and pay_type_col and pay_type_col in df_source.columns:
+            flsa_val = row.get(flsa_col)
+            if pd.notna(flsa_val) and str(flsa_val).strip():
+                flsa_str = str(flsa_val).strip().lower()
                 
-                errors.append({
-                    'Employee Reference': emp_ref,
-                    'Missing Fields': '',
-                    'Issue': f"Duplicate SSN ({dup_ssn})"
-                })
-                
-    return pd.DataFrame(errors)
+                if pay_val and ("hourly" in pay_val or "hour" in pay_val):
+                    if "exempt" in flsa_str and "non" not in flsa_str:
+                        # Hourly should be Non-Exempt
+                        df_source.at[idx, flsa_col] = "Non-Exempt"
+                        flsa_corrections.append({
+                            'Employee ID': emp_ref,
+                            'Pay Type': str(row.get(pay_type_col, '')).strip(),
+                            'Original FLSA': str(flsa_val).strip(),
+                            'Corrected FLSA': 'Non-Exempt'
+                        })
+                elif pay_val and ("salary" in pay_val or "salaried" in pay_val):
+                    if "non" in flsa_str and "exempt" in flsa_str:
+                        # Salaried should be Exempt
+                        df_source.at[idx, flsa_col] = "Exempt"
+                        flsa_corrections.append({
+                            'Employee ID': emp_ref,
+                            'Pay Type': str(row.get(pay_type_col, '')).strip(),
+                            'Original FLSA': str(flsa_val).strip(),
+                            'Corrected FLSA': 'Exempt'
+                        })
+        
+        # 8. Blank Work Email → fill with Personal Email
+        if work_email_col and work_email_col in df_source.columns:
+            we_val = row.get(work_email_col)
+            if pd.isna(we_val) or str(we_val).strip() == "":
+                if personal_email_col and personal_email_col in df_source.columns:
+                    pe_val = row.get(personal_email_col)
+                    if pd.notna(pe_val) and str(pe_val).strip():
+                        df_source.at[idx, work_email_col] = str(pe_val).strip()
+                        email_fallbacks.append({
+                            'Employee ID': emp_ref,
+                            'Personal Email Used': str(pe_val).strip()
+                        })
+    
+    return {
+        'hard_errors': pd.DataFrame(hard_errors),
+        'flsa_corrections': pd.DataFrame(flsa_corrections),
+        'email_fallbacks': pd.DataFrame(email_fallbacks)
+    }
 
 def generate_uzio_template(df_source, vendor_field_map):
     """

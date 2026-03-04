@@ -174,7 +174,88 @@ def render_ui():
             mime="text/csv",
             key="pc_hard_err_dl"
         )
-        return
+        
+        # --- AUTO-FIX OPTION ---
+        st.markdown("---")
+        st.markdown("### 🔧 Auto-Fix Available")
+        st.markdown("The tool can automatically fix the following issues:")
+        st.markdown("""
+        - **Blank FLSA Classification** → Set based on Pay Type (Hourly → Non-Exempt, Salaried → Exempt)
+        - **Blank Work Email** → Use Personal Email as fallback
+        - **Zip Code Issues** → Strip after dash, zero-pad to 5 digits
+        """)
+        
+        if st.button("🔧 Auto-Fix & Regenerate", type="primary", key="pc_autofix_btn"):
+            from utils.preprocess_source_data import apply_auto_fixes
+            
+            fixes = apply_auto_fixes(df_paycom, resolved_field_map)
+            
+            # Display what was fixed
+            fix_count = 0
+            if not fixes['flsa_fills'].empty:
+                fix_count += len(fixes['flsa_fills'])
+                st.info(f"**FLSA Auto-Fill:** {len(fixes['flsa_fills'])} employee(s) had blank FLSA — filled based on Pay Type.")
+                with st.expander("View FLSA Auto-Fills", expanded=False):
+                    st.dataframe(fixes['flsa_fills'], hide_index=True, use_container_width=True)
+            
+            if not fixes['email_fallbacks'].empty:
+                fix_count += len(fixes['email_fallbacks'])
+                st.info(f"**Email Fallback:** {len(fixes['email_fallbacks'])} employee(s) had blank Work Email — filled from Personal Email.")
+                with st.expander("View Email Fallbacks", expanded=False):
+                    st.dataframe(fixes['email_fallbacks'], hide_index=True, use_container_width=True)
+            
+            if not fixes['zip_corrections'].empty:
+                fix_count += len(fixes['zip_corrections'])
+                st.info(f"**Zip Code Corrections:** {len(fixes['zip_corrections'])} employee(s) had zip codes normalized (dash stripped / zero-padded).")
+                with st.expander("View Zip Corrections", expanded=False):
+                    st.dataframe(fixes['zip_corrections'], hide_index=True, use_container_width=True)
+            
+            if fix_count == 0:
+                st.warning("No auto-fixable issues were found. The remaining errors must be fixed manually in the source file.")
+                return
+            
+            # Provide corrected source file for download (CSV and XLSX)
+            st.markdown("**Download Corrected Source File:**")
+            dl_col1, dl_col2 = st.columns(2)
+            with dl_col1:
+                corrected_csv = io.BytesIO()
+                df_paycom.to_csv(corrected_csv, index=False)
+                corrected_csv.seek(0)
+                st.download_button(
+                    label="📥 Download Corrected Source (CSV)",
+                    data=corrected_csv.getvalue(),
+                    file_name=f"Paycom_Corrected_Source_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+                    mime="text/csv",
+                    key="pc_corrected_csv_dl"
+                )
+            with dl_col2:
+                corrected_xlsx = io.BytesIO()
+                df_paycom.to_excel(corrected_xlsx, index=False, engine='openpyxl')
+                corrected_xlsx.seek(0)
+                st.download_button(
+                    label="📥 Download Corrected Source (XLSX)",
+                    data=corrected_xlsx.getvalue(),
+                    file_name=f"Paycom_Corrected_Source_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="pc_corrected_xlsx_dl"
+                )
+            
+            # Re-run sanity checks on corrected data
+            st.markdown("---")
+            st.markdown("### Re-Validation After Auto-Fix")
+            validation2 = validate_source_data(df_paycom, resolved_field_map)
+            hard_errors2 = validation2['hard_errors']
+            
+            if not hard_errors2.empty:
+                st.error(f"**⛔ {len(hard_errors2)} error(s) remain after auto-fix.** These must be fixed manually in the source file.")
+                with st.expander(f"View Remaining {len(hard_errors2)} Errors", expanded=False):
+                    st.dataframe(hard_errors2, hide_index=True, use_container_width=True)
+                return
+            
+            st.success("✅ All issues resolved! Source data now passes all sanity checks.")
+            # Fall through to mapping & generation below
+        else:
+            return
     
     st.success("✅ Source data passed all sanity checks!")
     

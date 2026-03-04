@@ -114,12 +114,93 @@ def render_ui():
                 break
         if not found:
             resolved_field_map[std_name] = norm_colname(vendor_cols[0])
+            
+    # --- PAYCOM SPECIFIC PRE-PROCESSING & VALIDATION ---
+    paycom_custom_errors = []
+    
+    # Identify exact columns (normalized to lowercase)
+    col_dol = 'dol_status' if 'dol_status' in df_paycom.columns else None
+    col_pos = 'position' if 'position' in df_paycom.columns else None
+    col_dep = 'department_desc' if 'department_desc' in df_paycom.columns else None
+    
+    # Find employee status column - check variations
+    col_emp_status = None
+    for cand in ['employee_status', 'employee status', 'employment status', 'status', 'ee status']:
+        if cand in df_paycom.columns:
+            col_emp_status = cand
+            break
+            
+    for idx, row in df_paycom.iterrows():
+        emp_ref = f"Row {idx+2}"
+        if 'employee_code' in df_paycom.columns and pd.notna(row.get('employee_code')) and str(row.get('employee_code')).strip():
+            emp_ref = str(row.get('employee_code')).strip()
+        elif 'employee code' in df_paycom.columns and pd.notna(row.get('employee code')) and str(row.get('employee code')).strip():
+            emp_ref = str(row.get('employee code')).strip()
+            
+        custom_missing = []
+        
+        # 1. DOL_Status blank check
+        if col_dol:
+            val_dol = row.get(col_dol)
+            if pd.isna(val_dol) or str(val_dol).strip() == "":
+                custom_missing.append("DOL_Status")
+                
+        # 2. Employee Status blank check (Hard stop enforcement)
+        if col_emp_status:
+            val_emp = row.get(col_emp_status)
+            if pd.isna(val_emp) or str(val_emp).strip() == "":
+                custom_missing.append("Employee Status")
+                
+        # 3. Position and Department Desc check
+        if col_pos:
+            val_pos = row.get(col_pos)
+            if pd.isna(val_pos) or str(val_pos).strip() == "":
+                # Position is blank, check department_desc
+                if col_dep:
+                    val_dep = row.get(col_dep)
+                    if pd.notna(val_dep) and str(val_dep).strip() != "":
+                        # Fill position with department_desc
+                        df_paycom.at[idx, col_pos] = str(val_dep).strip()
+                    else:
+                        # Both blank
+                        custom_missing.append("Position (and Department_Desc is also blank)")
+                else:
+                    custom_missing.append("Position")
+                    
+        if custom_missing:
+            paycom_custom_errors.append({
+                'Employee ID': emp_ref,
+                'Issue': ", ".join(custom_missing)
+            })
+            
+    # --- CHECK: State column must exist ---
+    state_col = resolved_field_map.get('State')
+    if not state_col or state_col not in df_paycom.columns:
+        st.error("**⛔ 'Primary_State/Province' (or similar State) column not found in the source file!** This column is required for state validation.")
+        return
+    
+    # --- CHECK: Zip column must exist ---
+    zip_col = resolved_field_map.get('Zip')
+    if not zip_col or zip_col not in df_paycom.columns:
+        st.error("**⛔ 'Primary_Zip/Postal_Code' (or similar Zip) column not found in the source file!** This column is required for zip code validation.")
+        return
     
     # --- PRE-GENERATION SANITY CHECKS ---
     from utils.audit_utils import validate_source_data
     validation = validate_source_data(df_paycom, resolved_field_map)
     
-    hard_errors = validation['hard_errors']
+    # Merge custom Paycom hard errors with generic hard errors
+    hard_errors_df = validation['hard_errors']
+    if paycom_custom_errors:
+        df_custom = pd.DataFrame(paycom_custom_errors)
+        if not hard_errors_df.empty:
+            # Group by Employee ID to merge issues
+            hard_errors = pd.concat([hard_errors_df, df_custom]).groupby('Employee ID')['Issue'].apply(lambda x: ', '.join(x)).reset_index()
+        else:
+            hard_errors = df_custom
+    else:
+        hard_errors = hard_errors_df
+        
     flsa_corrections = validation['flsa_corrections']
     flsa_blanks = validation['flsa_blanks']
     intern_corrections = validation['intern_corrections']

@@ -93,8 +93,14 @@ def render_ui():
         st.error(f"Error reading file: {e}")
         return
         
+    # Save original column headers before normalization
+    original_columns = list(df_paycom.columns)
+    
     # Normalize source columns
     df_paycom.columns = [norm_colname(c) for c in df_paycom.columns]
+    
+    # Build mapping: normalized -> original (for restoring headers on download)
+    norm_to_orig = dict(zip(df_paycom.columns, original_columns))
     
     # Resolve field map
     resolved_field_map = {}
@@ -218,6 +224,60 @@ def render_ui():
                 label = f"**Fix Missing Working Hours Column** — Add column with 0 values ({fixable['hours_blank_count']} employee(s) affected)"
             fix_hours = st.checkbox(label, value=True, key="pc_fix_hours")
         
+        # --- Optional Mapping Checkboxes ---
+        src_job_col_af = resolved_field_map.get('Job Title')
+        src_loc_col_af = resolved_field_map.get('Work Location')
+        
+        unique_jobs_af = []
+        if src_job_col_af and src_job_col_af in df_paycom.columns:
+            unique_jobs_af = sorted([str(j).strip() for j in df_paycom[src_job_col_af].dropna().unique() if str(j).strip()])
+        
+        unique_locs_af = []
+        if src_loc_col_af and src_loc_col_af in df_paycom.columns:
+            unique_locs_af = sorted([str(l).strip() for l in df_paycom[src_loc_col_af].dropna().unique() if str(l).strip()])
+        
+        fix_job_mapping = False
+        fix_loc_mapping = False
+        edited_jobs_af = None
+        edited_locs_af = None
+        
+        if unique_jobs_af:
+            fix_job_mapping = st.checkbox(
+                f"**Map Job Titles** — Map {len(unique_jobs_af)} unique Job Title(s) to Uzio format",
+                value=False, key="pc_fix_jobs"
+            )
+        
+        if unique_locs_af:
+            fix_loc_mapping = st.checkbox(
+                f"**Map Work Locations** — Map {len(unique_locs_af)} unique Work Location(s) to Uzio format",
+                value=False, key="pc_fix_locs"
+            )
+        
+        # Show mapping editors if checked
+        if fix_job_mapping:
+            st.write("**Job Title Mapping**")
+            df_job_map_af = pd.DataFrame({"Source Job Title": unique_jobs_af, "Mapped Uzio Job Title": pd.Series([None]*len(unique_jobs_af), dtype="object")})
+            edited_jobs_af = st.data_editor(
+                df_job_map_af,
+                column_config={
+                    "Source Job Title": st.column_config.Column(disabled=True),
+                    "Mapped Uzio Job Title": st.column_config.SelectboxColumn("Select Uzio Role", options=ALLOWED_JOB_TITLES, required=True)
+                },
+                hide_index=True, use_container_width=True, key="pc_af_job_editor"
+            )
+        
+        if fix_loc_mapping:
+            st.write("**Work Location Mapping**")
+            df_loc_map_af = pd.DataFrame({"Source Work Location": unique_locs_af, "Mapped Uzio Work Location": pd.Series([""]*len(unique_locs_af), dtype=str)})
+            edited_locs_af = st.data_editor(
+                df_loc_map_af,
+                column_config={
+                    "Source Work Location": st.column_config.Column(disabled=True),
+                    "Mapped Uzio Work Location": st.column_config.TextColumn("Enter Uzio Location", required=True)
+                },
+                hide_index=True, use_container_width=True, key="pc_af_loc_editor"
+            )
+        
         if st.button("🔧 Apply Selected Fixes", type="primary", key="pc_autofix_btn"):
             fixes_to_apply = {
                 'fix_flsa': fix_flsa,
@@ -257,15 +317,35 @@ def render_ui():
                     with st.expander("View Working Hours Fixes", expanded=False):
                         st.dataframe(fixes['hours_fixes'], hide_index=True, use_container_width=True)
                 
+                # Apply mapping fixes if selected
+                if fix_job_mapping and edited_jobs_af is not None and src_job_col_af and src_job_col_af in df_paycom.columns:
+                    job_dict_af = dict(zip(edited_jobs_af['Source Job Title'], edited_jobs_af['Mapped Uzio Job Title']))
+                    stripped_jobs = df_paycom[src_job_col_af].astype(str).str.strip()
+                    df_paycom[src_job_col_af] = stripped_jobs.map(job_dict_af).fillna(df_paycom[src_job_col_af])
+                    fix_count += 1
+                    st.info(f"**Job Title Mapping:** Applied mapping for {len(job_dict_af)} unique job title(s).")
+                
+                if fix_loc_mapping and edited_locs_af is not None and src_loc_col_af and src_loc_col_af in df_paycom.columns:
+                    loc_dict_af = dict(zip(edited_locs_af['Source Work Location'], edited_locs_af['Mapped Uzio Work Location']))
+                    stripped_locs = df_paycom[src_loc_col_af].astype(str).str.strip()
+                    df_paycom[src_loc_col_af] = stripped_locs.map(loc_dict_af).fillna(df_paycom[src_loc_col_af])
+                    fix_count += 1
+                    st.info(f"**Work Location Mapping:** Applied mapping for {len(loc_dict_af)} unique location(s).")
+                
                 if fix_count > 0:
                     st.success(f"✅ {fix_count} fix(es) applied successfully!")
+                    
+                    # Restore original column headers for the download
+                    df_download = df_paycom.copy()
+                    restored_cols = [norm_to_orig.get(c, c) for c in df_download.columns]
+                    df_download.columns = restored_cols
                     
                     # Provide corrected source file for download (CSV and XLSX)
                     st.markdown("**Download Corrected Source File:**")
                     dl_col1, dl_col2 = st.columns(2)
                     with dl_col1:
                         corrected_csv = io.BytesIO()
-                        df_paycom.to_csv(corrected_csv, index=False)
+                        df_download.to_csv(corrected_csv, index=False)
                         corrected_csv.seek(0)
                         st.download_button(
                             label="📥 Download Corrected Source (CSV)",
@@ -276,7 +356,7 @@ def render_ui():
                         )
                     with dl_col2:
                         corrected_xlsx = io.BytesIO()
-                        df_paycom.to_excel(corrected_xlsx, index=False, engine='openpyxl')
+                        df_download.to_excel(corrected_xlsx, index=False, engine='openpyxl')
                         corrected_xlsx.seek(0)
                         st.download_button(
                             label="📥 Download Corrected Source (XLSX)",

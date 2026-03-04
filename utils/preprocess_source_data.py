@@ -117,7 +117,7 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
     # --- FIX: Working Hours (handle missing column first) ---
     if fixes_to_apply.get('fix_hours', False):
         # Always use a canonical column name for the fix
-        canonical_hours_col = 'working hours per week'
+        canonical_hours_col = 'Working Hours Per Week'
         
         if not hours_col or hours_col not in df.columns:
             # Column is missing entirely — add it with "0" values

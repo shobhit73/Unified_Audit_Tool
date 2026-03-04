@@ -522,9 +522,48 @@ def render_ui():
     if not job_map_complete or not loc_map_complete:
         st.warning("Please fill out all mappings in the tables above before generating the template.")
         return
+        
+    # --- DSP OWNER DETECTION ---
+    col_sup_code = None
+    for cand in ['supervisor_primary_code', 'supervisor primary code', 'supervisorcode']:
+        if cand in df_paycom.columns:
+            col_sup_code = cand
+            break
+            
+    detected_dsp_id = None
+    detected_dsp_name = ""
     
-    # --- STEP 3: Generate Template (only on button click) ---
+    if col_sup_code:
+        # Filter out blanks
+        valid_sups = df_paycom[df_paycom[col_sup_code].notna() & (df_paycom[col_sup_code].astype(str).str.strip() != "")]
+        if not valid_sups.empty:
+            sup_counts = valid_sups[col_sup_code].value_counts()
+            if not sup_counts.empty:
+                detected_dsp_id = str(sup_counts.index[0]).strip()
+                
+                # Try to get their name
+                emp_code_col = resolved_field_map.get('Employee ID')
+                if emp_code_col and emp_code_col in df_paycom.columns:
+                    match = df_paycom[df_paycom[emp_code_col].astype(str).str.strip() == detected_dsp_id]
+                    if not match.empty:
+                        fn = match.iloc[0].get(resolved_field_map.get('First Name'), '')
+                        ln = match.iloc[0].get(resolved_field_map.get('Last Name'), '')
+                        if pd.notna(fn) and pd.notna(ln):
+                            detected_dsp_name = f"{str(fn).strip()} {str(ln).strip()}".strip()
+
     st.markdown("---")
+    st.markdown("### Step 3: Finalize & Generate")
+    
+    set_dsp_owner = False
+    if detected_dsp_id:
+        name_disp = f" ({detected_dsp_name})" if detected_dsp_name else ""
+        st.info(f"**DSP Owner Detected:** Employee **{detected_dsp_id}**{name_disp} supervises the most employees.")
+        set_dsp_owner = st.checkbox(
+            f"Automatically set Position to **'DSP Owner'** for Employee {detected_dsp_id} and move them to the **very top** of the census.",
+            value=True, key="pc_set_dsp_owner"
+        )
+    
+    # --- STEP 4: Generate Template (only on button click) ---
     if st.button("Generate Uzio Template", type="primary", key="pc_gen_btn"):
         with st.spinner("Generating..."):
             try:
@@ -542,6 +581,23 @@ def render_ui():
                     loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
                     stripped_locs = df_paycom[src_loc_col].astype(str).str.strip()
                     df_uzio['Work Location'] = stripped_locs.map(loc_dict).fillna(df_paycom[src_loc_col])
+                    
+                # Apply DSP Owner Override & Sort
+                if set_dsp_owner and detected_dsp_id:
+                    emp_id_col_uzio = 'Employee ID*' if 'Employee ID*' in df_uzio.columns else 'Employee ID'
+                    if emp_id_col_uzio in df_uzio.columns:
+                        # Ensure emp_id is string
+                        df_uzio_id_str = df_uzio[emp_id_col_uzio].astype(str).str.strip()
+                        dsp_mask = df_uzio_id_str == detected_dsp_id
+                        
+                        if dsp_mask.any():
+                            # Override position
+                            df_uzio.loc[dsp_mask, 'Job Title'] = 'DSP Owner'
+                            
+                            # Shift to the top
+                            dsp_rows = df_uzio[dsp_mask]
+                            other_rows = df_uzio[~dsp_mask]
+                            df_uzio = pd.concat([dsp_rows, other_rows], ignore_index=True)
                 
                 # Validate Uzio Data
                 from utils.audit_utils import validate_uzio_data

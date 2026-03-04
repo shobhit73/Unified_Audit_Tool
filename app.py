@@ -124,6 +124,7 @@ with st.sidebar:
         tool_option = st.radio("Select Paycom Tool", [
             "Paycom - Census Audit",
             "Paycom - Census Generator",
+            "Paycom - Prior Payroll Generator",
             "Paycom - Withholding Audit",
             "Paycom - Payment Audit",
             "Paycom - Deduction Audit",
@@ -187,6 +188,11 @@ elif tool_option == "Paycom - Census Generator":
     from apps.paycom import census_generator
     importlib.reload(census_generator)
     census_generator.render_ui()
+
+elif tool_option == "Paycom - Prior Payroll Generator":
+    from apps.paycom import prior_payroll_generator
+    importlib.reload(prior_payroll_generator)
+    prior_payroll_generator.render_ui()
 
 elif tool_option == "Paycom - Withholding Audit":
     from apps.paycom import withholding_audit

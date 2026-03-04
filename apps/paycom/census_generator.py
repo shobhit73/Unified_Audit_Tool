@@ -117,11 +117,17 @@ def render_ui():
             
     # --- PAYCOM SPECIFIC PRE-PROCESSING & VALIDATION ---
     paycom_custom_errors = []
+    paycom_pos_fixes = []
     
     # Identify exact columns (normalized to lowercase)
     col_dol = 'dol_status' if 'dol_status' in df_paycom.columns else None
     col_pos = 'position' if 'position' in df_paycom.columns else None
-    col_dep = 'department_desc' if 'department_desc' in df_paycom.columns else None
+    
+    col_dep = None
+    for cand in ['department_desc', 'department_dec', 'department', 'department_description', 'labor_allocation_details', 'delivery_station_code_desc']:
+        if cand in df_paycom.columns:
+            col_dep = cand
+            break
     
     # Find employee status column - check variations
     col_emp_status = None
@@ -143,13 +149,13 @@ def render_ui():
         if col_dol:
             val_dol = row.get(col_dol)
             if pd.isna(val_dol) or str(val_dol).strip() == "":
-                custom_missing.append("DOL_Status")
+                custom_missing.append("DOL_Status is blank")
                 
         # 2. Employee Status blank check (Hard stop enforcement)
         if col_emp_status:
             val_emp = row.get(col_emp_status)
             if pd.isna(val_emp) or str(val_emp).strip() == "":
-                custom_missing.append("Employee Status")
+                custom_missing.append("Employee Status is blank")
                 
         # 3. Position and Department Desc check
         if col_pos:
@@ -161,11 +167,17 @@ def render_ui():
                     if pd.notna(val_dep) and str(val_dep).strip() != "":
                         # Fill position with department_desc
                         df_paycom.at[idx, col_pos] = str(val_dep).strip()
+                        paycom_pos_fixes.append({
+                            'Employee ID': emp_ref,
+                            'Original Position': '(blank)',
+                            'Fixed Value': str(val_dep).strip(),
+                            'Source Column': norm_to_orig.get(col_dep, col_dep)
+                        })
                     else:
                         # Both blank
-                        custom_missing.append("Position (and Department_Desc is also blank)")
+                        custom_missing.append(f"Position is blank (and fallback '{norm_to_orig.get(col_dep, col_dep)}' is also blank)")
                 else:
-                    custom_missing.append("Position")
+                    custom_missing.append("Position is blank")
                     
         if custom_missing:
             paycom_custom_errors.append({
@@ -207,6 +219,11 @@ def render_ui():
     email_fallbacks = validation['email_fallbacks']
     
     # Show soft warnings first (non-blocking)
+    if paycom_pos_fixes:
+        st.info(f"**Position Auto-Fill:** {len(paycom_pos_fixes)} employee(s) had a blank Position, but it was automatically filled using their Department Description.")
+        with st.expander("View Position Fixes", expanded=False):
+            st.dataframe(pd.DataFrame(paycom_pos_fixes), hide_index=True, use_container_width=True)
+            
     if not flsa_corrections.empty:
         st.info(f"**FLSA Auto-Corrections:** {len(flsa_corrections)} employee(s) had mismatched FLSA classifications. These have been auto-corrected.")
         with st.expander("View FLSA Corrections", expanded=False):

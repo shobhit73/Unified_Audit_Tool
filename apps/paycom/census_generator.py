@@ -280,6 +280,45 @@ def render_ui():
         )
     else:
         st.success("✅ Source data passed all sanity checks!")
+        
+    # --- DSP OWNER DETECTION ---
+    col_sup_code = None
+    for cand in ['supervisor_primary_code', 'supervisor primary code', 'supervisorcode']:
+        if cand in df_paycom.columns:
+            col_sup_code = cand
+            break
+            
+    detected_dsp_id = None
+    detected_dsp_name = ""
+    
+    if col_sup_code:
+        # Filter out blanks
+        valid_sups = df_paycom[df_paycom[col_sup_code].notna() & (df_paycom[col_sup_code].astype(str).str.strip() != "")]
+        if not valid_sups.empty:
+            sup_counts = valid_sups[col_sup_code].value_counts()
+            if not sup_counts.empty:
+                detected_dsp_id = str(sup_counts.index[0]).strip()
+                
+                # Try to get their name
+                emp_code_col = resolved_field_map.get('Employee ID')
+                if emp_code_col and emp_code_col in df_paycom.columns:
+                    match = df_paycom[df_paycom[emp_code_col].astype(str).str.strip() == detected_dsp_id]
+                    if not match.empty:
+                        fn = match.iloc[0].get(resolved_field_map.get('First Name'), '')
+                        ln = match.iloc[0].get(resolved_field_map.get('Last Name'), '')
+                        if pd.notna(fn) and pd.notna(ln):
+                            detected_dsp_name = f"{str(fn).strip()} {str(ln).strip()}".strip()
+
+    st.markdown("---")
+    
+    set_dsp_owner = False
+    if detected_dsp_id:
+        name_disp = f" ({detected_dsp_name})" if detected_dsp_name else ""
+        st.info(f"**DSP Owner Detected:** Employee **{detected_dsp_id}**{name_disp} supervises the most employees.")
+        set_dsp_owner = st.checkbox(
+            f"Automatically set Position to **'DSP Owner'** for Employee {detected_dsp_id} and move them to the **very top** of all generated files.",
+            value=True, key="pc_set_dsp_owner"
+        )
     
     # --- AUTO-FIX OPTIONS (always shown, checkbox-based) ---
     from utils.preprocess_source_data import detect_fixable_issues, apply_auto_fixes
@@ -435,6 +474,22 @@ def render_ui():
                     
                     # Restore original column headers for the download
                     df_download = df_paycom.copy()
+                    
+                    # Also move DSP owner to the top if requested
+                    if set_dsp_owner and detected_dsp_id:
+                        emp_id_col = resolved_field_map.get('Employee ID')
+                        if emp_id_col and emp_id_col in df_download.columns:
+                            df_dl_id_str = df_download[emp_id_col].astype(str).str.strip()
+                            dsp_mask = df_dl_id_str == detected_dsp_id
+                            if dsp_mask.any():
+                                # Try setting Job Title/Position here too if mapped
+                                p_col = resolved_field_map.get('Job Title')
+                                if p_col and p_col in df_download.columns:
+                                    df_download.loc[dsp_mask, p_col] = 'DSP Owner'
+                                dsp_rows = df_download[dsp_mask]
+                                other_rows = df_download[~dsp_mask]
+                                df_download = pd.concat([dsp_rows, other_rows], ignore_index=True)
+
                     restored_cols = [norm_to_orig.get(c, c) for c in df_download.columns]
                     df_download.columns = restored_cols
                     
@@ -523,45 +578,8 @@ def render_ui():
         st.warning("Please fill out all mappings in the tables above before generating the template.")
         return
         
-    # --- DSP OWNER DETECTION ---
-    col_sup_code = None
-    for cand in ['supervisor_primary_code', 'supervisor primary code', 'supervisorcode']:
-        if cand in df_paycom.columns:
-            col_sup_code = cand
-            break
-            
-    detected_dsp_id = None
-    detected_dsp_name = ""
-    
-    if col_sup_code:
-        # Filter out blanks
-        valid_sups = df_paycom[df_paycom[col_sup_code].notna() & (df_paycom[col_sup_code].astype(str).str.strip() != "")]
-        if not valid_sups.empty:
-            sup_counts = valid_sups[col_sup_code].value_counts()
-            if not sup_counts.empty:
-                detected_dsp_id = str(sup_counts.index[0]).strip()
-                
-                # Try to get their name
-                emp_code_col = resolved_field_map.get('Employee ID')
-                if emp_code_col and emp_code_col in df_paycom.columns:
-                    match = df_paycom[df_paycom[emp_code_col].astype(str).str.strip() == detected_dsp_id]
-                    if not match.empty:
-                        fn = match.iloc[0].get(resolved_field_map.get('First Name'), '')
-                        ln = match.iloc[0].get(resolved_field_map.get('Last Name'), '')
-                        if pd.notna(fn) and pd.notna(ln):
-                            detected_dsp_name = f"{str(fn).strip()} {str(ln).strip()}".strip()
-
     st.markdown("---")
     st.markdown("### Step 3: Finalize & Generate")
-    
-    set_dsp_owner = False
-    if detected_dsp_id:
-        name_disp = f" ({detected_dsp_name})" if detected_dsp_name else ""
-        st.info(f"**DSP Owner Detected:** Employee **{detected_dsp_id}**{name_disp} supervises the most employees.")
-        set_dsp_owner = st.checkbox(
-            f"Automatically set Position to **'DSP Owner'** for Employee {detected_dsp_id} and move them to the **very top** of the census.",
-            value=True, key="pc_set_dsp_owner"
-        )
     
     # --- STEP 4: Generate Template (only on button click) ---
     if st.button("Generate Uzio Template", type="primary", key="pc_gen_btn"):

@@ -3,6 +3,7 @@ import re
 import pandas as pd
 import streamlit as st
 import openpyxl
+import difflib
 from collections import defaultdict
 from datetime import datetime
 
@@ -38,6 +39,57 @@ SKIP_LABEL = "── Skip (do not map) ──"
 # ─────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────
+
+def auto_guess_mapping(td: str, cd: str, uzio_col_headers: dict) -> str:
+    """Attempt to auto-map Paycom code description to Uzio column string."""
+    if not td or not isinstance(td, str):
+        return SKIP_LABEL
+        
+    td_lower = td.lower()
+    td_clean = re.sub(r'[^a-z0-9]', '', td_lower)
+    if not td_clean:
+        return SKIP_LABEL
+        
+    best_match = SKIP_LABEL
+    best_score = 0.0
+    
+    for col_idx, hdr in uzio_col_headers.items():
+        if col_idx < UZIO_FIRST_DATA_COL:
+            continue
+            
+        hdr_lower = str(hdr).lower()
+        hdr_clean = re.sub(r'[^a-z0-9]', '', hdr_lower)
+        if not hdr_clean:
+            continue
+            
+        # Base string similarity
+        score = difflib.SequenceMatcher(None, td_clean, hdr_clean).ratio()
+        
+        # Word overlap boost
+        td_words = set(re.findall(r'[a-z0-9]+', td_lower))
+        hdr_words = set(re.findall(r'[a-z0-9]+', hdr_lower))
+        overlap = td_words & hdr_words
+        if overlap:
+            score += 0.15 * len(overlap)
+            
+        # Specific domain boosts for common payroll terms
+        if 'medicare' in td_words and 'medicare' in hdr_words: score += 0.3
+        if ('soc' in td_words or 'ss' in td_words) and 'social' in hdr_words: score += 0.3
+        if ('fit' in td_words or 'fed' in td_words) and 'federal' in hdr_words: score += 0.3
+        if '401k' in td_lower and '401k' in hdr_lower: score += 0.3
+        if 'regular' in td_words and 'regular' in hdr_words: score += 0.3
+        if 'overtime' in td_words and 'overtime' in hdr_words: score += 0.3
+        if 'bonus' in td_words and 'bonus' in hdr_words: score += 0.3
+        if 'futa' in td_words and 'futa' in hdr_words: score += 0.3
+        if 'sui' in td_words and 'sui' in hdr_words: score += 0.3
+        
+        # Must pass a minimum threshold to be considered an auto-match
+        if score > best_score and score >= 0.7:
+            best_score = score
+            best_match = f"Col {col_idx}: {hdr}"
+            
+    return best_match
+
 
 def parse_filename_dates(filename: str):
     """Extract pay-period start, end, and pay date from Paycom filename.
@@ -390,12 +442,18 @@ def render_ui():
                 st.info(f"No Paycom items found for this section.")
                 continue
             
+            # Generate pre-filled mappings for each item
+            pre_filled_targets = []
+            for tc, td, cd in items:
+                guessed = auto_guess_mapping(td, cd, uzio_col_headers)
+                pre_filled_targets.append(guessed)
+                
             # Build a dataframe for the data editor
             df_map = pd.DataFrame({
                 'Type Code': [tc for tc, td, cd in items],
                 'Description': [td for tc, td, cd in items],
                 'Category': [cd for tc, td, cd in items],
-                'Map To Uzio Column': [SKIP_LABEL for _ in items],
+                'Map To Uzio Column': pre_filled_targets,
             })
             
             edited = st.data_editor(
@@ -446,6 +504,33 @@ def render_ui():
     else:
         st.warning("⚠️ Could not auto-detect a 'Net Pay' column in the Uzio template. Net pay will not be populated.")
     
+    # ── Mapping Pre-Review ──
+    st.markdown("#### Final Mapping Review")
+    review_data = []
+    for tc, td, cd in sorted(all_type_combos, key=lambda x: (x[2], x[0], x[1])):
+        section = PAYCOM_CATEGORY_TO_SECTION.get(cd, 'Deductions')
+        if section.startswith('_'):
+            if cd == 'Net Pay Distribution':
+                target = f"Auto-Summed (Col {net_pay_col_idx})" if net_pay_col_idx else "Auto-Summed (Missing Net Pay Col)"
+            else:
+                target = "Auto-Skipped (Employee Benefit)"
+        else:
+            col_idx = mapping.get((tc, td))
+            if col_idx is not None:
+                target = f"Col {col_idx}: {uzio_col_headers.get(col_idx, '')}"
+            else:
+                target = SKIP_LABEL
+                
+        review_data.append({
+            'Category': cd,
+            'Type Code': tc,
+            'Description': td,
+            'Uzio Target': target
+        })
+        
+    with st.expander("👀 View Final Mapping Setup Before Generating", expanded=False):
+        st.dataframe(pd.DataFrame(review_data), hide_index=True, use_container_width=True)
+
     # ── STEP 3: Generate ────────────────────────────────────
     st.markdown("---")
     st.markdown("### Step 3: Generate & Download")

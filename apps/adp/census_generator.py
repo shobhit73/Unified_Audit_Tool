@@ -126,11 +126,10 @@ def render_ui():
         resolved_field_map['Job Title'] = dept_col_norm
         st.warning("**Position column not found.** Falling back to **Department Description** for Job Title mapping.")
     
-    # --- CHECK: Working Hours column must exist ---
+    # --- CHECK: Working Hours column (soft flag instead of hard stop) ---
     hours_col = resolved_field_map.get('Working Hours')
     if not hours_col or hours_col not in df_adp.columns:
-        st.error("**⛔ 'Working Hours Per Week' column not found in the source file!** This column is required. Please ensure your ADP export includes Regular Hours or Standard Hours.")
-        return
+        st.warning("**⚠️ 'Working Hours Per Week' column not found** in the source file. You can use the Auto-Fix option below to add this column, or fix it manually.")
     
     # --- CHECK: State column must exist ---
     state_col = resolved_field_map.get('State')
@@ -180,15 +179,14 @@ def render_ui():
         with st.expander("View Email Fallbacks", expanded=False):
             st.dataframe(email_fallbacks, hide_index=True, use_container_width=True)
     
-    # Hard stop errors (blocking)
+    # Show hard errors (non-blocking — user can still proceed)
     if not hard_errors.empty:
-        st.error(f"**⛔ {len(hard_errors)} Critical Error(s) Found in Source Data!** Please fix these in the source file before proceeding.")
+        st.error(f"**⛔ {len(hard_errors)} Critical Error(s) Found in Source Data!** You can fix these manually, use Auto-Fix below, or proceed as-is.")
         
         # --- Summary breakdown by issue type ---
         all_issues = []
         for issues_str in hard_errors['Issue']:
             for issue in str(issues_str).split(", "):
-                # Normalize: strip details in parentheses for grouping
                 import re
                 clean = re.sub(r"\s*\(.*?\)", "", issue).strip()
                 if clean:
@@ -215,90 +213,119 @@ def render_ui():
             mime="text/csv",
             key="adp_hard_err_dl"
         )
-        
-        # --- AUTO-FIX OPTION ---
-        st.markdown("---")
-        st.markdown("### 🔧 Auto-Fix Available")
-        st.markdown("The tool can automatically fix the following issues:")
-        st.markdown("""
-        - **Blank FLSA Classification** → Set based on Pay Type (Hourly → Non-Exempt, Salaried → Exempt)
-        - **Blank Work Email** → Use Personal Email as fallback
-        - **Zip Code Issues** → Strip after dash, zero-pad to 5 digits
-        """)
-        
-        if st.button("🔧 Auto-Fix & Regenerate", type="primary", key="adp_autofix_btn"):
-            from utils.preprocess_source_data import apply_auto_fixes
-            
-            fixes = apply_auto_fixes(df_adp, resolved_field_map)
-            
-            # Display what was fixed
-            fix_count = 0
-            if not fixes['flsa_fills'].empty:
-                fix_count += len(fixes['flsa_fills'])
-                st.info(f"**FLSA Auto-Fill:** {len(fixes['flsa_fills'])} employee(s) had blank FLSA — filled based on Pay Type.")
-                with st.expander("View FLSA Auto-Fills", expanded=False):
-                    st.dataframe(fixes['flsa_fills'], hide_index=True, use_container_width=True)
-            
-            if not fixes['email_fallbacks'].empty:
-                fix_count += len(fixes['email_fallbacks'])
-                st.info(f"**Email Fallback:** {len(fixes['email_fallbacks'])} employee(s) had blank Work Email — filled from Personal Email.")
-                with st.expander("View Email Fallbacks", expanded=False):
-                    st.dataframe(fixes['email_fallbacks'], hide_index=True, use_container_width=True)
-            
-            if not fixes['zip_corrections'].empty:
-                fix_count += len(fixes['zip_corrections'])
-                st.info(f"**Zip Code Corrections:** {len(fixes['zip_corrections'])} employee(s) had zip codes normalized (dash stripped / zero-padded).")
-                with st.expander("View Zip Corrections", expanded=False):
-                    st.dataframe(fixes['zip_corrections'], hide_index=True, use_container_width=True)
-            
-            if fix_count == 0:
-                st.warning("No auto-fixable issues were found. The remaining errors must be fixed manually in the source file.")
-                return
-            
-            # Provide corrected source file for download (CSV and XLSX)
-            st.markdown("**Download Corrected Source File:**")
-            dl_col1, dl_col2 = st.columns(2)
-            with dl_col1:
-                corrected_csv = io.BytesIO()
-                df_adp.to_csv(corrected_csv, index=False)
-                corrected_csv.seek(0)
-                st.download_button(
-                    label="📥 Download Corrected Source (CSV)",
-                    data=corrected_csv.getvalue(),
-                    file_name=f"ADP_Corrected_Source_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
-                    mime="text/csv",
-                    key="adp_corrected_csv_dl"
-                )
-            with dl_col2:
-                corrected_xlsx = io.BytesIO()
-                df_adp.to_excel(corrected_xlsx, index=False, engine='openpyxl')
-                corrected_xlsx.seek(0)
-                st.download_button(
-                    label="📥 Download Corrected Source (XLSX)",
-                    data=corrected_xlsx.getvalue(),
-                    file_name=f"ADP_Corrected_Source_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="adp_corrected_xlsx_dl"
-                )
-            
-            # Re-run sanity checks on corrected data
-            st.markdown("---")
-            st.markdown("### Re-Validation After Auto-Fix")
-            validation2 = validate_source_data(df_adp, resolved_field_map)
-            hard_errors2 = validation2['hard_errors']
-            
-            if not hard_errors2.empty:
-                st.error(f"**⛔ {len(hard_errors2)} error(s) remain after auto-fix.** These must be fixed manually in the source file.")
-                with st.expander(f"View Remaining {len(hard_errors2)} Errors", expanded=False):
-                    st.dataframe(hard_errors2, hide_index=True, use_container_width=True)
-                return
-            
-            st.success("✅ All issues resolved! Source data now passes all sanity checks.")
-            # Fall through to mapping & generation below
-        else:
-            return
+    else:
+        st.success("✅ Source data passed all sanity checks!")
     
-    st.success("✅ Source data passed all sanity checks!")
+    # --- AUTO-FIX OPTIONS (always shown, checkbox-based) ---
+    from utils.preprocess_source_data import detect_fixable_issues, apply_auto_fixes
+    fixable = detect_fixable_issues(df_adp, resolved_field_map)
+    
+    has_any_fixable = (fixable['flsa_blank_count'] > 0 or fixable['email_blank_count'] > 0 
+                       or fixable['zip_fixable_count'] > 0 or fixable['hours_blank_count'] > 0)
+    
+    if has_any_fixable:
+        st.markdown("---")
+        st.markdown("### 🔧 Auto-Fix Options")
+        st.markdown("Select which issues you'd like the tool to fix automatically:")
+        
+        fix_flsa = False
+        fix_email = False
+        fix_zip = False
+        fix_hours = False
+        
+        if fixable['flsa_blank_count'] > 0:
+            fix_flsa = st.checkbox(
+                f"**Fix Blank FLSA Classification** — Set based on Pay Type ({fixable['flsa_blank_count']} employee(s) affected)",
+                value=True, key="adp_fix_flsa"
+            )
+        
+        if fixable['email_blank_count'] > 0:
+            fix_email = st.checkbox(
+                f"**Fix Blank Work Email** — Use Personal Email as fallback ({fixable['email_blank_count']} employee(s) affected)",
+                value=True, key="adp_fix_email"
+            )
+        
+        if fixable['zip_fixable_count'] > 0:
+            fix_zip = st.checkbox(
+                f"**Fix Zip Code Issues** — Strip after dash, zero-pad to 5 digits ({fixable['zip_fixable_count']} employee(s) affected)",
+                value=True, key="adp_fix_zip"
+            )
+        
+        if fixable['hours_blank_count'] > 0:
+            label = f"**Fix Blank Working Hours** — Set to 0 ({fixable['hours_blank_count']} employee(s) affected)"
+            if fixable['hours_col_missing']:
+                label = f"**Fix Missing Working Hours Column** — Add column with 0 values ({fixable['hours_blank_count']} employee(s) affected)"
+            fix_hours = st.checkbox(label, value=True, key="adp_fix_hours")
+        
+        if st.button("🔧 Apply Selected Fixes", type="primary", key="adp_autofix_btn"):
+            fixes_to_apply = {
+                'fix_flsa': fix_flsa,
+                'fix_email': fix_email,
+                'fix_zip': fix_zip,
+                'fix_hours': fix_hours
+            }
+            
+            if not any(fixes_to_apply.values()):
+                st.warning("No fixes selected. Please check at least one option above.")
+            else:
+                fixes = apply_auto_fixes(df_adp, resolved_field_map, fixes_to_apply)
+                
+                # Display what was fixed
+                fix_count = 0
+                if not fixes['flsa_fills'].empty:
+                    fix_count += len(fixes['flsa_fills'])
+                    st.info(f"**FLSA Auto-Fill:** {len(fixes['flsa_fills'])} employee(s) had blank FLSA — filled based on Pay Type.")
+                    with st.expander("View FLSA Auto-Fills", expanded=False):
+                        st.dataframe(fixes['flsa_fills'], hide_index=True, use_container_width=True)
+                
+                if not fixes['email_fallbacks'].empty:
+                    fix_count += len(fixes['email_fallbacks'])
+                    st.info(f"**Email Fallback:** {len(fixes['email_fallbacks'])} employee(s) had blank Work Email — filled from Personal Email.")
+                    with st.expander("View Email Fallbacks", expanded=False):
+                        st.dataframe(fixes['email_fallbacks'], hide_index=True, use_container_width=True)
+                
+                if not fixes['zip_corrections'].empty:
+                    fix_count += len(fixes['zip_corrections'])
+                    st.info(f"**Zip Code Corrections:** {len(fixes['zip_corrections'])} employee(s) had zip codes normalized.")
+                    with st.expander("View Zip Corrections", expanded=False):
+                        st.dataframe(fixes['zip_corrections'], hide_index=True, use_container_width=True)
+                
+                if not fixes['hours_fixes'].empty:
+                    fix_count += len(fixes['hours_fixes'])
+                    st.info(f"**Working Hours Fix:** {len(fixes['hours_fixes'])} employee(s) had blank Working Hours set to 0.")
+                    with st.expander("View Working Hours Fixes", expanded=False):
+                        st.dataframe(fixes['hours_fixes'], hide_index=True, use_container_width=True)
+                
+                if fix_count > 0:
+                    st.success(f"✅ {fix_count} fix(es) applied successfully!")
+                    
+                    # Provide corrected source file for download (CSV and XLSX)
+                    st.markdown("**Download Corrected Source File:**")
+                    dl_col1, dl_col2 = st.columns(2)
+                    with dl_col1:
+                        corrected_csv = io.BytesIO()
+                        df_adp.to_csv(corrected_csv, index=False)
+                        corrected_csv.seek(0)
+                        st.download_button(
+                            label="📥 Download Corrected Source (CSV)",
+                            data=corrected_csv.getvalue(),
+                            file_name=f"ADP_Corrected_Source_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+                            mime="text/csv",
+                            key="adp_corrected_csv_dl"
+                        )
+                    with dl_col2:
+                        corrected_xlsx = io.BytesIO()
+                        df_adp.to_excel(corrected_xlsx, index=False, engine='openpyxl')
+                        corrected_xlsx.seek(0)
+                        st.download_button(
+                            label="📥 Download Corrected Source (XLSX)",
+                            data=corrected_xlsx.getvalue(),
+                            file_name=f"ADP_Corrected_Source_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="adp_corrected_xlsx_dl"
+                        )
+                else:
+                    st.warning("No auto-fixable issues were found for the selected options.")
     
     # --- STEP 2: Interactive UI Mapping (persists across reruns) ---
     st.markdown("---")

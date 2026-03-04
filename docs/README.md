@@ -29,6 +29,11 @@ A unified platform for auditing and reconciling data across **Uzio**, **ADP**, a
     *   Audits Federal and State Income Tax withholding setups between ADP and Uzio.
     *   Filters by Active status and validates tax parameters.
 
+6.  **📝 ADP Census Generator** (*New*)
+    *   Converts ADP census exports into the standard Uzio template format.
+    *   **Auto-Fix**: Truncates and zero-pads Zip codes to 5 digits.
+    *   Enforces hard-stop validations for missing critical columns like State and Zip.
+
 ### Paycom Tools
 6.  **🏢 Paycom Census Audit**
     *   Audits Paycom census data against Uzio records.
@@ -44,6 +49,18 @@ A unified platform for auditing and reconciling data across **Uzio**, **ADP**, a
     *   Audits Paycom payment (bank) data against Uzio records.
     *   **Auto-Unpivot**: Automatically converts Paycom's wide format (Net + Dist_1-8) to comparable accounts.
     *   Identifies missing accounts, type mismatches, and amount/percentage discrepancies.
+
+9.  **📝 Paycom Census Generator** (*New*)
+    *   Converts Paycom census exports into the Uzio template format.
+    *   **DSP Owner Detection**: Automatically detects the most common `Supervisor_Primary_Code`, auto-assigns their Position to "DSP Owner", and sorts them to the very top of the generated files.
+    *   **Intelligent Auto-Fixes**: Checkbox UI to auto-fix blank Working Hours, fallback Work Email to Personal Email, and auto-correct FLSA classifications based on Pay Type.
+    *   **Fallback Logic**: Automatically pulls from `Department_Desc` if `Position` is blank.
+    *   Enforces hard-stops on blank `DOL_Status` and `Employee Status`.
+
+10. **⚙️ Paycom Prior Payroll Generator** (*New*)
+    *   Automates the transformation of Paycom prior payroll files into the Uzio format.
+    *   **Smart Auto-Mapping**: Uses string similarity algorithms (`difflib`) to automatically pre-fill mapping dropdowns (e.g., mapping "401k" to "401(k) ER").
+    *   Includes a "Final Mapping Review" summary table before generation for user confidence.
 
 ## 🚀 Getting Started
 
@@ -84,8 +101,11 @@ The application will open in your default browser (usually at `http://localhost:
 *   `paycom_census_audit_app.py`: Logic for Paycom Census Audit.
 *   `paycom_withholding_audit_app.py`: Logic for Paycom Withholding Audit.
 *   `paycom_payment_audit_app.py`: Logic for Paycom Payment Audit.
+*   `paycom_prior_payroll_generator_app.py`: Logic for Paycom Prior Payroll Generator.
 *   `adp_withholding_audit_app.py`: Logic for ADP Withholding Audit.
 *   `withholding_audit_core.py`: Shared logic for Withholding audits.
+*   `apps/adp/census_generator.py`: ADP Census Generator logic.
+*   `apps/paycom/census_generator.py`: Paycom Census Generator logic.
 
 ## 🎨 Features
 *   **Unified Interface**: Single URL for all audit tasks.

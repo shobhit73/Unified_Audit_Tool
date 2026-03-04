@@ -210,6 +210,58 @@ You need a single Excel file with **2 Sheets**:
 
 ---
 
+### I. ADP Census Generator
+**Purpose:** Transforms an unstructured ADP census export into the standard Uzio template format to prepare for system import.
+
+**Input File Preparation:**
+A single Excel or CSV file direct from ADP containing employee demographics.
+
+**Understanding the Process:**
+1. Upload the source file. The system will automatically run **Sanity Checks**.
+2. **Critical Errors:** If columns are missing or values are fundamentally invalid, the tool displays a summary report of errors. You can download these or ignore them (non-blocking).
+3. **Auto-Fix Options:** Uses checkboxes to automatically:
+   * **Fix Zip Codes:** Truncates zip codes after a dash (e.g., `12345-6789` -> `12345`) and zero-pads leading digits (e.g., `123` -> `00123`).
+   * **Missing Work Email Fallback:** Swaps in Personal Email if Work Email is blank.
+   * **Blank Working Hours:** Can automatically set blank schedules to 0.
+4. **Mapping:** Manually map your source Job Titles and Work Locations to the system-allowed list.
+5. Click Generate. The tool outputs a standardized Uzio`.xlsm` file.
+
+---
+
+### J. Paycom Census Generator
+**Purpose:** Transforms a Paycom census export into the standard Uzio template.
+
+**Input File Preparation:**
+A single Excel or CSV file from Paycom.
+
+**Understanding the Process:**
+1. Upload the Paycom source file.
+2. **DSP Owner Detection:** The tool will automatically scan for the most frequent `Supervisor_Primary_Code`. It will display a blue banner identifying the DSP Owner. Leave the checkbox checked to automatically set their Position to `"DSP Owner"` and sort them to the **very top** of both the corrected source file and the final Uzio output template.
+3. **Paycom Specific Validations:**
+   * Enforces hard stops if `DOL_Status` or `Employee Status` are blank.
+   * If `Position` is blank, it automatically checks variations of `Department Description` to use as a fallback. A blue banner will show if this fallback was used.
+4. **Auto-Fix Options:** Similar to ADP, select checkboxes to fix FLSA Statuses, working hours, and zip codes.
+5. Provide mapping for Titles/Locations and Generate.
+
+---
+
+### K. Paycom Prior Payroll Generator
+**Purpose:** Converts a generic Paycom prior payroll CSV/XLSX into the Uzio template format, handling summation and column alignment.
+
+**Input File Preparation:**
+You need **2 files**:
+1. **`Paycom Prior Payroll File`**: The raw export from Paycom.
+2. **`Blank Uzio Template`**: A blank template containing the specific dynamic headers expected for this client.
+
+**Understanding the Process:**
+1. Upload the Paycom file and the blank Uzio Template.
+2. The tool uses intelligent **Auto-Mapping** (`difflib`) to pre-select dropdowns based on string similarity (e.g., it will guess that "401k" maps to "401(k) ER").
+3. Review the dropdowns. You can assign columns to be mapping, auto-summed (for net pay distributions), or "Skipped".
+4. Review the **Final Mapping Review** table.
+5. Click Generate to download the consolidated template. The tool includes built-in logic to ensure `Gross - Taxes - Deductions = Net`.
+
+---
+
 ## 4. Troubleshooting common issues
 *   **"Missing Tabs" Error:** Check that your Excel sheet names match the requirements exactly.
 *   **"Column Missing" Error:** Ensure the Mapping Sheet refers to exact column headers found in the Data sheets.

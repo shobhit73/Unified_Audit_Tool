@@ -263,149 +263,70 @@ def render_ui():
                 label = f"**Fix Missing Working Hours Column** — Add column with 0 values ({fixable['hours_blank_count']} employee(s) affected)"
             fix_hours = st.checkbox(label, value=True, key="adp_fix_hours")
         
-        # --- Optional Mapping Checkboxes ---
-        src_job_col_af = resolved_field_map.get('Job Title')
-        src_loc_col_af = resolved_field_map.get('Work Location')
+        st.markdown("---")
         
-        unique_jobs_af = []
-        if src_job_col_af and src_job_col_af in df_adp.columns:
-            unique_jobs_af = sorted([str(j).strip() for j in df_adp[src_job_col_af].dropna().unique() if str(j).strip()])
+        fixes_to_apply = {
+            'fix_flsa': fix_flsa,
+            'fix_email': fix_email,
+            'fix_zip': fix_zip,
+            'fix_hours': fix_hours
+        }
         
-        unique_locs_af = []
-        if src_loc_col_af and src_loc_col_af in df_adp.columns:
-            unique_locs_af = sorted([str(l).strip() for l in df_adp[src_loc_col_af].dropna().unique() if str(l).strip()])
-        
-        fix_job_mapping = False
-        fix_loc_mapping = False
-        edited_jobs_af = None
-        edited_locs_af = None
-        
-        if unique_jobs_af:
-            fix_job_mapping = st.checkbox(
-                f"**Map Job Titles** — Map {len(unique_jobs_af)} unique Job Title(s) to Uzio format",
-                value=False, key="adp_fix_jobs"
-            )
-        
-        if unique_locs_af:
-            fix_loc_mapping = st.checkbox(
-                f"**Map Work Locations** — Map {len(unique_locs_af)} unique Work Location(s) to Uzio format",
-                value=False, key="adp_fix_locs"
-            )
-        
-        # Show mapping editors if checked
-        if fix_job_mapping:
-            st.write("**Job Title Mapping**")
-            df_job_map_af = pd.DataFrame({"Source Job Title": unique_jobs_af, "Mapped Uzio Job Title": pd.Series([None]*len(unique_jobs_af), dtype="object")})
-            edited_jobs_af = st.data_editor(
-                df_job_map_af,
-                column_config={
-                    "Source Job Title": st.column_config.Column(disabled=True),
-                    "Mapped Uzio Job Title": st.column_config.SelectboxColumn("Select Uzio Role", options=ALLOWED_JOB_TITLES, required=True)
-                },
-                hide_index=True, use_container_width=True, key="adp_af_job_editor"
-            )
-        
-        if fix_loc_mapping:
-            st.write("**Work Location Mapping**")
-            df_loc_map_af = pd.DataFrame({"Source Work Location": unique_locs_af, "Mapped Uzio Work Location": pd.Series([""]*len(unique_locs_af), dtype=str)})
-            edited_locs_af = st.data_editor(
-                df_loc_map_af,
-                column_config={
-                    "Source Work Location": st.column_config.Column(disabled=True),
-                    "Mapped Uzio Work Location": st.column_config.TextColumn("Enter Uzio Location", required=True)
-                },
-                hide_index=True, use_container_width=True, key="adp_af_loc_editor"
-            )
-        
-        if st.button("🔧 Apply Selected Fixes", type="primary", key="adp_autofix_btn"):
-            fixes_to_apply = {
-                'fix_flsa': fix_flsa,
-                'fix_email': fix_email,
-                'fix_zip': fix_zip,
-                'fix_hours': fix_hours
-            }
+        if any(fixes_to_apply.values()):
+            fixes = apply_auto_fixes(df_adp, resolved_field_map, fixes_to_apply)
             
-            if not any(fixes_to_apply.values()):
-                st.warning("No fixes selected. Please check at least one option above.")
-            else:
-                fixes = apply_auto_fixes(df_adp, resolved_field_map, fixes_to_apply)
+            # Display what was fixed
+            fix_count = 0
+            if not fixes['flsa_fills'].empty:
+                fix_count += len(fixes['flsa_fills'])
+                st.success(f"**FLSA Auto-Fill:** {len(fixes['flsa_fills'])} employee(s) had blank FLSA — filled based on Pay Type.")
+            
+            if not fixes['email_fallbacks'].empty:
+                fix_count += len(fixes['email_fallbacks'])
+                st.success(f"**Email Fallback:** {len(fixes['email_fallbacks'])} employee(s) had blank Work Email — filled from Personal Email.")
+            
+            if not fixes['zip_corrections'].empty:
+                fix_count += len(fixes['zip_corrections'])
+                st.success(f"**Zip Code Corrections:** {len(fixes['zip_corrections'])} employee(s) had zip codes normalized.")
+            
+            if not fixes['hours_fixes'].empty:
+                fix_count += len(fixes['hours_fixes'])
+                st.success(f"**Working Hours Fix:** {len(fixes['hours_fixes'])} employee(s) had blank Working Hours set to 0.")
+            
+            if fix_count > 0:
+                st.success(f"✅ {fix_count} total fix(es) actively applied to the data!")
                 
-                # Display what was fixed
-                fix_count = 0
-                if not fixes['flsa_fills'].empty:
-                    fix_count += len(fixes['flsa_fills'])
-                    st.info(f"**FLSA Auto-Fill:** {len(fixes['flsa_fills'])} employee(s) had blank FLSA — filled based on Pay Type.")
-                    with st.expander("View FLSA Auto-Fills", expanded=False):
-                        st.dataframe(fixes['flsa_fills'], hide_index=True, use_container_width=True)
-                
-                if not fixes['email_fallbacks'].empty:
-                    fix_count += len(fixes['email_fallbacks'])
-                    st.info(f"**Email Fallback:** {len(fixes['email_fallbacks'])} employee(s) had blank Work Email — filled from Personal Email.")
-                    with st.expander("View Email Fallbacks", expanded=False):
-                        st.dataframe(fixes['email_fallbacks'], hide_index=True, use_container_width=True)
-                
-                if not fixes['zip_corrections'].empty:
-                    fix_count += len(fixes['zip_corrections'])
-                    st.info(f"**Zip Code Corrections:** {len(fixes['zip_corrections'])} employee(s) had zip codes normalized.")
-                    with st.expander("View Zip Corrections", expanded=False):
-                        st.dataframe(fixes['zip_corrections'], hide_index=True, use_container_width=True)
-                
-                if not fixes['hours_fixes'].empty:
-                    fix_count += len(fixes['hours_fixes'])
-                    st.info(f"**Working Hours Fix:** {len(fixes['hours_fixes'])} employee(s) had blank Working Hours set to 0.")
-                    with st.expander("View Working Hours Fixes", expanded=False):
-                        st.dataframe(fixes['hours_fixes'], hide_index=True, use_container_width=True)
-                
-                # Apply mapping fixes if selected
-                if fix_job_mapping and edited_jobs_af is not None and src_job_col_af and src_job_col_af in df_adp.columns:
-                    job_dict_af = dict(zip(edited_jobs_af['Source Job Title'], edited_jobs_af['Mapped Uzio Job Title']))
-                    stripped_jobs = df_adp[src_job_col_af].astype(str).str.strip()
-                    df_adp[src_job_col_af] = stripped_jobs.map(job_dict_af).fillna(df_adp[src_job_col_af])
-                    fix_count += 1
-                    st.info(f"**Job Title Mapping:** Applied mapping for {len(job_dict_af)} unique job title(s).")
-                
-                if fix_loc_mapping and edited_locs_af is not None and src_loc_col_af and src_loc_col_af in df_adp.columns:
-                    loc_dict_af = dict(zip(edited_locs_af['Source Work Location'], edited_locs_af['Mapped Uzio Work Location']))
-                    stripped_locs = df_adp[src_loc_col_af].astype(str).str.strip()
-                    df_adp[src_loc_col_af] = stripped_locs.map(loc_dict_af).fillna(df_adp[src_loc_col_af])
-                    fix_count += 1
-                    st.info(f"**Work Location Mapping:** Applied mapping for {len(loc_dict_af)} unique location(s).")
-                
-                if fix_count > 0:
-                    st.success(f"✅ {fix_count} fix(es) applied successfully!")
-                    
-                    # Restore original column headers for the download
-                    df_download = df_adp.copy()
-                    restored_cols = [norm_to_orig.get(c, c) for c in df_download.columns]
-                    df_download.columns = restored_cols
-                    
-                    # Provide corrected source file for download (CSV and XLSX)
-                    st.markdown("**Download Corrected Source File:**")
-                    dl_col1, dl_col2 = st.columns(2)
-                    with dl_col1:
-                        corrected_csv = io.BytesIO()
-                        df_download.to_csv(corrected_csv, index=False)
-                        corrected_csv.seek(0)
-                        st.download_button(
-                            label="📥 Download Corrected Source (CSV)",
-                            data=corrected_csv.getvalue(),
-                            file_name=f"ADP_Corrected_Source_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
-                            mime="text/csv",
-                            key="adp_corrected_csv_dl"
-                        )
-                    with dl_col2:
-                        corrected_xlsx = io.BytesIO()
-                        df_download.to_excel(corrected_xlsx, index=False, engine='openpyxl')
-                        corrected_xlsx.seek(0)
-                        st.download_button(
-                            label="📥 Download Corrected Source (XLSX)",
-                            data=corrected_xlsx.getvalue(),
-                            file_name=f"ADP_Corrected_Source_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key="adp_corrected_xlsx_dl"
-                        )
-                else:
-                    st.warning("No auto-fixable issues were found for the selected options.")
+        # --- Download Corrected Source ---
+        st.markdown("### 📥 Download Cleaned Source Data")
+        st.markdown("You can download the partially cleaned source file containing all the fixes applied above.")
+        
+        df_download = df_adp.copy()
+        restored_cols = [norm_to_orig.get(c, c) for c in df_download.columns]
+        df_download.columns = restored_cols
+        
+        dl_col1, dl_col2 = st.columns(2)
+        with dl_col1:
+            corrected_csv = io.BytesIO()
+            df_download.to_csv(corrected_csv, index=False)
+            corrected_csv.seek(0)
+            st.download_button(
+                label="📥 Download Corrected Source (CSV)",
+                data=corrected_csv.getvalue(),
+                file_name=f"ADP_Cleaned_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                key="adp_corrected_csv_dl"
+            )
+        with dl_col2:
+            corrected_xlsx = io.BytesIO()
+            df_download.to_excel(corrected_xlsx, index=False, engine='openpyxl')
+            corrected_xlsx.seek(0)
+            st.download_button(
+                label="📥 Download Corrected Source (XLSX)",
+                data=corrected_xlsx.getvalue(),
+                file_name=f"ADP_Cleaned_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="adp_corrected_xlsx_dl"
+            )
     
     # --- STEP 2: Interactive UI Mapping (persists across reruns) ---
     st.markdown("---")

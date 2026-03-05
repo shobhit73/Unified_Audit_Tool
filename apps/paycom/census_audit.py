@@ -569,13 +569,17 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                         uz_b = norm_blank(uz_val)
                         pc_b = norm_blank(pc_val)
                         
+                        is_terminated_context = "term" in emp_status_context.lower()
+                        
                         # Apply special Employment Status missing logic matching ADP tool
                         f_case = norm_colname(uz_field).casefold()
                         if "employment status" in f_case and pc_b != "":
                             uz_stat = canonical_employment_status(uz_b)
                             pc_stat = canonical_employment_status(pc_b)
                             
-                            if "active" in uz_stat:
+                            if "term" in uz_stat and "inactive" in pc_b.lower():
+                                status = "Data Match"
+                            elif "active" in uz_stat:
                                 status = "Active in Uzio"
                             elif "term" in uz_stat:
                                 status = "Terminated in Uzio"
@@ -587,7 +591,9 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                                 status = "Data Mismatch"
                         else:
                             # Standard missing/mismatch logic
-                            if (uz_b == "" or uz_b is None) and (pc_b != "" and pc_b is not None):
+                            if is_terminated_context:
+                                status = "Data Match"
+                            elif (uz_b == "" or uz_b is None) and (pc_b != "" and pc_b is not None):
                                 status = "Value missing in Uzio (Paycom has value)"
                             elif (uz_b != "" and uz_b is not None) and (pc_b == "" or pc_b is None):
                                 status = "Value missing in Paycom (Uzio has value)"

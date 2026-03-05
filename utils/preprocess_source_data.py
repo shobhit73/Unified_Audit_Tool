@@ -18,7 +18,10 @@ def detect_fixable_issues(df, resolved_field_map):
         'zip_fixable_count': 0,
         'hours_blank_count': 0,
         'hours_col_missing': False,
-        'inactive_status_count': 0
+        'inactive_status_count': 0,
+        'temporary_status_count': 0,
+        'blank_dol_active_count': 0,
+        'blank_dol_term_count': 0
     }
 
     emp_id_col = resolved_field_map.get('Employee ID')
@@ -82,8 +85,22 @@ def detect_fixable_issues(df, resolved_field_map):
     if col_emp_status:
         for _, row in df.iterrows():
             val_emp = row.get(col_emp_status)
-            if pd.notna(val_emp) and str(val_emp).strip().lower() == 'inactive':
-                counts['inactive_status_count'] += 1
+            if pd.notna(val_emp):
+                if str(val_emp).strip().lower() == 'inactive':
+                    counts['inactive_status_count'] += 1
+                elif str(val_emp).strip().lower() == 'temporary':
+                    counts['temporary_status_count'] += 1
+                    
+    col_dol = 'dol_status' if 'dol_status' in df.columns else None
+    if col_dol and col_emp_status:
+        for _, row in df.iterrows():
+            val_dol = row.get(col_dol)
+            if pd.isna(val_dol) or str(val_dol).strip() == "":
+                emp_stat_str = str(row.get(col_emp_status)).strip().lower()
+                if "term" in emp_stat_str:
+                    counts['blank_dol_term_count'] += 1
+                else:
+                    counts['blank_dol_active_count'] += 1
 
     return counts
 
@@ -104,13 +121,22 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
         Each value is a pd.DataFrame of corrections made.
     """
     if fixes_to_apply is None:
-        fixes_to_apply = {'fix_flsa': True, 'fix_email': True, 'fix_zip': True, 'fix_hours': True, 'fix_inactive': True}
+        fixes_to_apply = {
+            'fix_flsa': True, 'fix_email': True, 'fix_zip': True, 'fix_hours': True, 
+            'fix_inactive': True, 'fix_temporary': True, 
+            'fix_blank_dol_active': True, 'fix_blank_dol_term': True
+        }
 
     flsa_fills = []
     email_fallbacks = []
     zip_corrections = []
     hours_fixes = []
     inactive_fixes = []
+    temporary_fixes = []
+    dol_active_fixes = []
+    dol_term_fixes = []
+    
+    rows_to_drop = []
 
     # Resolve column references
     emp_id_col = resolved_field_map.get('Employee ID')
@@ -243,10 +269,55 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
                         'Corrected Status': 'Terminated'
                     })
 
+        # --- FIX 6: Temporary Status → Seasonal ---
+        if fixes_to_apply.get('fix_temporary', False):
+            if col_emp_status:
+                val_emp = row.get(col_emp_status)
+                if pd.notna(val_emp) and str(val_emp).strip().lower() == 'temporary':
+                    df.at[idx, col_emp_status] = 'Seasonal'
+                    temporary_fixes.append({
+                        'Employee ID': emp_ref,
+                        'Original Status': str(val_emp).strip(),
+                        'Corrected Status': 'Seasonal'
+                    })
+                    
+        # --- FIX 7: Blank DOL Status ---
+        col_dol = 'dol_status' if 'dol_status' in df.columns else None
+        if col_dol and col_emp_status:
+            val_dol = row.get(col_dol)
+            if pd.isna(val_dol) or str(val_dol).strip() == "":
+                emp_stat_str = str(row.get(col_emp_status)).strip().lower()
+                if "term" in emp_stat_str:
+                    if fixes_to_apply.get('fix_blank_dol_term', False):
+                        if idx not in rows_to_drop:
+                            rows_to_drop.append(idx)
+                        dol_term_fixes.append({
+                            'Employee ID': emp_ref,
+                            'Original DOL': '(blank)',
+                            'Action': 'Deleted Row (Terminated Employee)'
+                        })
+                else:
+                    if fixes_to_apply.get('fix_blank_dol_active', False):
+                        df.at[idx, col_dol] = 'Full-Time'
+                        dol_active_fixes.append({
+                            'Employee ID': emp_ref,
+                            'Original DOL': '(blank)',
+                            'Action': 'Set to Full-Time (Active Employee)'
+                        })
+
+    if rows_to_drop:
+        df.drop(list(set(rows_to_drop)), inplace=True)
+        # We don't necessarily reset_index because it might mess up other references if they existed,
+        # but the loop is over so it's fine. 
+        df.reset_index(drop=True, inplace=True)
+
     return {
         'flsa_fills': pd.DataFrame(flsa_fills),
         'email_fallbacks': pd.DataFrame(email_fallbacks),
         'zip_corrections': pd.DataFrame(zip_corrections),
         'hours_fixes': pd.DataFrame(hours_fixes),
         'inactive_fixes': pd.DataFrame(inactive_fixes),
+        'temporary_fixes': pd.DataFrame(temporary_fixes),
+        'dol_active_fixes': pd.DataFrame(dol_active_fixes),
+        'dol_term_fixes': pd.DataFrame(dol_term_fixes),
     }

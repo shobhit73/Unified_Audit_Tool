@@ -151,15 +151,21 @@ def render_ui():
             if col_dol:
                 val_dol = row.get(col_dol)
                 if pd.isna(val_dol) or str(val_dol).strip() == "":
-                    custom_missing.append("DOL_Status is blank")
+                    emp_stat_str = str(row.get(col_emp_status)).strip().lower() if col_emp_status else ""
+                    if "term" in emp_stat_str:
+                        custom_missing.append("DOL_Status is blank for Terminated employee (Use Auto-Fix to delete row)")
+                    else:
+                        custom_missing.append("DOL_Status is blank for Active employee (Use Auto-Fix to set to 'Full-Time')")
 
-            # 2. Employee Status blank check & "Inactive" check
+            # 2. Employee Status blank check & "Inactive" / "Temporary" check
             if col_emp_status:
                 val_emp = row.get(col_emp_status)
                 if pd.isna(val_emp) or str(val_emp).strip() == "":
                     custom_missing.append("Employee Status is blank")
                 elif str(val_emp).strip().lower() == "inactive":
                     custom_missing.append("Employee Status is 'Inactive' (Use Auto-Fix to set to 'Terminated')")
+                elif str(val_emp).strip().lower() == "temporary":
+                    custom_missing.append("Employee Status is 'Temporary' (Use Auto-Fix to set to 'Seasonal')")
 
             # 3. Position and Department Desc check
             if col_pos:
@@ -341,7 +347,10 @@ def render_ui():
 
         has_any_fixable = (fixable['flsa_blank_count'] > 0 or fixable['email_blank_count'] > 0 
                            or fixable['zip_fixable_count'] > 0 or fixable['hours_blank_count'] > 0
-                           or fixable.get('inactive_status_count', 0) > 0)
+                           or fixable.get('inactive_status_count', 0) > 0
+                           or fixable.get('temporary_status_count', 0) > 0
+                           or fixable.get('blank_dol_active_count', 0) > 0
+                           or fixable.get('blank_dol_term_count', 0) > 0)
 
         if has_any_fixable:
             st.markdown("---")
@@ -381,6 +390,21 @@ def render_ui():
                     f"**Fix 'Inactive' Employee Status** — Change to 'Terminated' ({fixable['inactive_status_count']} employee(s) affected)",
                     value=True, key="pc_fix_inactive"
                 )
+            if fixable.get('temporary_status_count', 0) > 0:
+                fix_temporary = st.checkbox(
+                    f"**Fix 'Temporary' Employee Status** — Change to 'Seasonal' ({fixable['temporary_status_count']} employee(s) affected)",
+                    value=True, key="pc_fix_temporary"
+                )
+            if fixable.get('blank_dol_active_count', 0) > 0:
+                fix_blank_dol_active = st.checkbox(
+                    f"**Fix Blank 'DOL_Status'** — Set to 'Full-Time' for Active employees ({fixable['blank_dol_active_count']} employee(s) affected)",
+                    value=True, key="pc_fix_blank_dol_active"
+                )
+            if fixable.get('blank_dol_term_count', 0) > 0:
+                fix_blank_dol_term = st.checkbox(
+                    f"**Fix Blank 'DOL_Status'** — Delete Row for Terminated employees ({fixable['blank_dol_term_count']} employee(s) affected)",
+                    value=True, key="pc_fix_blank_dol_term"
+                )
 
         st.markdown("---")
         
@@ -389,7 +413,10 @@ def render_ui():
             'fix_email': fix_email if 'fix_email' in locals() else False,
             'fix_zip': fix_zip if 'fix_zip' in locals() else False,
             'fix_hours': fix_hours if 'fix_hours' in locals() else False,
-            'fix_inactive': fix_inactive if 'fix_inactive' in locals() else False
+            'fix_inactive': fix_inactive if 'fix_inactive' in locals() else False,
+            'fix_temporary': fix_temporary if 'fix_temporary' in locals() else False,
+            'fix_blank_dol_active': fix_blank_dol_active if 'fix_blank_dol_active' in locals() else False,
+            'fix_blank_dol_term': fix_blank_dol_term if 'fix_blank_dol_term' in locals() else False
         }
         
         if any(fixes_to_apply.values()):
@@ -416,6 +443,18 @@ def render_ui():
             if 'inactive_fixes' in fixes and not fixes['inactive_fixes'].empty:
                 fix_count += len(fixes['inactive_fixes'])
                 st.success(f"**Inactive Status Fix:** {len(fixes['inactive_fixes'])} employee(s) had status updated to 'Terminated'.")
+                
+            if 'temporary_fixes' in fixes and not fixes['temporary_fixes'].empty:
+                fix_count += len(fixes['temporary_fixes'])
+                st.success(f"**Temporary Status Fix:** {len(fixes['temporary_fixes'])} employee(s) had status updated to 'Seasonal'.")
+                
+            if 'dol_active_fixes' in fixes and not fixes['dol_active_fixes'].empty:
+                fix_count += len(fixes['dol_active_fixes'])
+                st.success(f"**Blank DOL Fix (Active):** {len(fixes['dol_active_fixes'])} employee(s) set to 'Full-Time'.")
+                
+            if 'dol_term_fixes' in fixes and not fixes['dol_term_fixes'].empty:
+                fix_count += len(fixes['dol_term_fixes'])
+                st.success(f"**Blank DOL Fix (Terminated):** {len(fixes['dol_term_fixes'])} Terminated employee(s) had their entire row deleted from the generated file.")
             
             if fix_count > 0:
                 st.success(f"✅ {fix_count} total fix(es) actively applied to the data!")

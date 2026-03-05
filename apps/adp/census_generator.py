@@ -165,25 +165,17 @@ def render_ui():
     email_fallbacks = validation['email_fallbacks']
     
     # Show soft warnings first (non-blocking)
-    if not flsa_corrections.empty:
-        st.info(f"**FLSA Auto-Corrections:** {len(flsa_corrections)} employee(s) had mismatched FLSA classifications. These have been auto-corrected.")
-        with st.expander("View FLSA Corrections", expanded=False):
-            st.dataframe(flsa_corrections, hide_index=True, use_container_width=True)
-    
-    if not flsa_blanks.empty:
-        st.warning(f"**Blank FLSA Classification:** {len(flsa_blanks)} employee(s) have a Pay Type set but FLSA Classification is blank. Please verify.")
-        with st.expander("View Blank FLSA Details", expanded=False):
-            st.dataframe(flsa_blanks, hide_index=True, use_container_width=True)
-    
-    if not intern_corrections.empty:
-        st.warning(f"**Intern → Part Time:** {len(intern_corrections)} employee(s) had 'Intern' as Worker Category. Employment Type has been changed to **Part Time** in the output.")
-        with st.expander("View Intern Corrections", expanded=False):
-            st.dataframe(intern_corrections, hide_index=True, use_container_width=True)
-    
-    if not email_fallbacks.empty:
-        st.info(f"**Email Fallback:** {len(email_fallbacks)} employee(s) had blank Work Email. Personal Email was used instead.")
-        with st.expander("View Email Fallbacks", expanded=False):
-            st.dataframe(email_fallbacks, hide_index=True, use_container_width=True)
+    has_soft_warnings = not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty
+    if has_soft_warnings:
+        with st.expander("System Auto-Corrections & Minor Warnings", expanded=False):
+            if not flsa_corrections.empty:
+                st.markdown(f"- ℹ️ **FLSA Auto-Corrections:** {len(flsa_corrections)} employee(s) had mismatched FLSA classifications. These have been auto-corrected.")
+            if not flsa_blanks.empty:
+                st.markdown(f"- ⚠️ **Blank FLSA Classification:** {len(flsa_blanks)} employee(s) have a Pay Type set but FLSA Classification is blank.")
+            if not intern_corrections.empty:
+                st.markdown(f"- ⚠️ **Intern → Part Time:** {len(intern_corrections)} employee(s) had 'Intern' as Worker Category. Changed to **Part Time**.")
+            if not email_fallbacks.empty:
+                st.markdown(f"- ℹ️ **Email Fallback:** {len(email_fallbacks)} employee(s) had blank Work Email. Personal Email was used instead.")
     
     # Show hard errors (non-blocking — user can still proceed)
     if not hard_errors.empty:
@@ -253,7 +245,7 @@ def render_ui():
         
         if fixable['zip_fixable_count'] > 0:
             fix_zip = st.checkbox(
-                f"**Fix Zip Code Issues** — Strip after dash, zero-pad to 5 digits ({fixable['zip_fixable_count']} employee(s) affected)",
+                f"**Fix Zip Code Issues** — Strip extra characters after dash or dot ({fixable['zip_fixable_count']} employee(s) affected)",
                 value=True, key="adp_fix_zip"
             )
         
@@ -277,24 +269,27 @@ def render_ui():
             
             # Display what was fixed
             fix_count = 0
+            success_messages = []
+            
             if not fixes['flsa_fills'].empty:
                 fix_count += len(fixes['flsa_fills'])
-                st.success(f"**FLSA Auto-Fill:** {len(fixes['flsa_fills'])} employee(s) had blank FLSA — filled based on Pay Type.")
+                success_messages.append(f"- **FLSA Auto-Fill:** {len(fixes['flsa_fills'])} employee(s)")
             
             if not fixes['email_fallbacks'].empty:
                 fix_count += len(fixes['email_fallbacks'])
-                st.success(f"**Email Fallback:** {len(fixes['email_fallbacks'])} employee(s) had blank Work Email — filled from Personal Email.")
+                success_messages.append(f"- **Email Fallback:** {len(fixes['email_fallbacks'])} employee(s)")
             
             if not fixes['zip_corrections'].empty:
                 fix_count += len(fixes['zip_corrections'])
-                st.success(f"**Zip Code Corrections:** {len(fixes['zip_corrections'])} employee(s) had zip codes normalized.")
+                success_messages.append(f"- **Zip Code Corrections:** {len(fixes['zip_corrections'])} employee(s)")
             
             if not fixes['hours_fixes'].empty:
                 fix_count += len(fixes['hours_fixes'])
-                st.success(f"**Working Hours Fix:** {len(fixes['hours_fixes'])} employee(s) had blank Working Hours set to 0.")
+                success_messages.append(f"- **Working Hours Fix:** {len(fixes['hours_fixes'])} employee(s)")
             
             if fix_count > 0:
-                st.success(f"✅ {fix_count} total fix(es) actively applied to the data!")
+                msg = f"✅ **{fix_count} total fix(es) actively applied to the data!**\n\n" + "\n".join(success_messages)
+                st.success(msg)
                 
         # --- Optional Location Mapping (in Tab 1) ---
         src_loc_col_af = resolved_field_map.get('Work Location')

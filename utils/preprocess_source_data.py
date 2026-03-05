@@ -72,7 +72,7 @@ def detect_fixable_issues(df, resolved_field_map):
                 cleaned = original.split('-')[0].strip()
                 cleaned = cleaned.split('.')[0].strip()
                 digits_only = re.sub(r'[^0-9]', '', cleaned)
-                if digits_only and (len(digits_only) < 5 or '-' in original):
+                if digits_only and digits_only != original:
                     counts['zip_fixable_count'] += 1
                     
     # Count Inactive Employee Statuses
@@ -235,8 +235,6 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
                     cleaned = original_zip.split('-')[0].strip()
                     cleaned = cleaned.split('.')[0].strip()
                     digits_only = re.sub(r'[^0-9]', '', cleaned)
-                    if digits_only and len(digits_only) < 5:
-                        digits_only = digits_only.zfill(5)
                     if digits_only and digits_only != original_zip:
                         df.at[idx, zip_col] = digits_only
                         zip_corrections.append({

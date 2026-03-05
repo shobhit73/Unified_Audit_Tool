@@ -112,6 +112,7 @@ with st.sidebar:
             "ADP - Prior Payroll Audit",
             "ADP - Census Audit",
             "ADP - Census Generator",
+            "ADP - Prior Payroll Generator",
             "ADP - Payment Audit",
             "ADP - Emergency Contact Audit",
             "ADP - Withholding Audit",
@@ -158,6 +159,11 @@ elif tool_option == "ADP - Census Generator":
     from apps.adp import census_generator
     importlib.reload(census_generator)
     census_generator.render_ui()
+
+elif tool_option == "ADP - Prior Payroll Generator":
+    from apps.adp import prior_payroll_generator
+    importlib.reload(prior_payroll_generator)
+    prior_payroll_generator.render_ui()
 
 elif tool_option == "ADP - Payment Audit":
     from apps.adp import payment_audit

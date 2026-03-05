@@ -121,6 +121,8 @@ def validate_source_data(df_source, resolved_field_map):
     personal_email_col = resolved_field_map.get('Personal Email')
     hours_col = resolved_field_map.get('Working Hours')
     state_col = resolved_field_map.get('State')
+    hire_date_col = resolved_field_map.get('Hire Date')
+    term_date_col = resolved_field_map.get('Termination Date')
     
     def get_emp_ref(row, idx):
         ref = f"Row {idx+2}"
@@ -196,6 +198,31 @@ def validate_source_data(df_source, resolved_field_map):
                 sv = str(state_val).strip()
                 if len(sv) > 2:
                     missing.append(f"State ('{sv}' is full name, need 2-char abbreviation)")
+                    
+        # 9. Termination Date vs Hire Date validity (only if Terminated/Inactive)
+        if hire_date_col and hire_date_col in df_source.columns and term_date_col and term_date_col in df_source.columns:
+            hire_val = row.get(hire_date_col)
+            term_val = row.get(term_date_col)
+            
+            # Check if Employee Status is actually terminated or inactive
+            is_terminated = False
+            if status_col and status_col in df_source.columns:
+                emp_status_val = str(row.get(status_col)).strip().lower()
+                if "term" in emp_status_val or "inactive" in emp_status_val:
+                    is_terminated = True
+            
+            if is_terminated and pd.notna(hire_val) and str(hire_val).strip() != "" and pd.notna(term_val) and str(term_val).strip() != "":
+                # Attempt to parse both dates
+                try:
+                    # Using pd.to_datetime with errors='coerce' to safely parse strings to datetimes
+                    parsed_hire = pd.to_datetime(hire_val, errors='coerce')
+                    parsed_term = pd.to_datetime(term_val, errors='coerce')
+                    
+                    if pd.notna(parsed_hire) and pd.notna(parsed_term):
+                        if parsed_term < parsed_hire:
+                            missing.append(f"Date of termination ({parsed_term.strftime('%Y-%m-%d')}) predates date of hire ({parsed_hire.strftime('%Y-%m-%d')})")
+                except Exception:
+                    pass # Ignore if dates are malformed, we just won't flag this specific error
         
         if missing:
             hard_errors.append({

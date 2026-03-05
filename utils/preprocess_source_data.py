@@ -18,6 +18,7 @@ def detect_fixable_issues(df, resolved_field_map):
         'zip_fixable_count': 0,
         'hours_blank_count': 0,
         'hours_col_missing': False,
+        'inactive_status_count': 0
     }
 
     emp_id_col = resolved_field_map.get('Employee ID')
@@ -70,6 +71,19 @@ def detect_fixable_issues(df, resolved_field_map):
                 digits_only = re.sub(r'[^0-9]', '', cleaned)
                 if digits_only and (len(digits_only) < 5 or '-' in original):
                     counts['zip_fixable_count'] += 1
+                    
+    # Count Inactive Employee Statuses
+    col_emp_status = None
+    for cand in ['employee_status', 'employee status', 'employment status', 'status', 'ee status']:
+        if cand in df.columns:
+            col_emp_status = cand
+            break
+            
+    if col_emp_status:
+        for _, row in df.iterrows():
+            val_emp = row.get(col_emp_status)
+            if pd.notna(val_emp) and str(val_emp).strip().lower() == 'inactive':
+                counts['inactive_status_count'] += 1
 
     return counts
 
@@ -86,16 +100,17 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
             If None, all fixes are applied.
 
     Returns:
-        dict with keys: 'flsa_fills', 'email_fallbacks', 'zip_corrections', 'hours_fixes'
+        dict with keys: 'flsa_fills', 'email_fallbacks', 'zip_corrections', 'hours_fixes', 'inactive_fixes'
         Each value is a pd.DataFrame of corrections made.
     """
     if fixes_to_apply is None:
-        fixes_to_apply = {'fix_flsa': True, 'fix_email': True, 'fix_zip': True, 'fix_hours': True}
+        fixes_to_apply = {'fix_flsa': True, 'fix_email': True, 'fix_zip': True, 'fix_hours': True, 'fix_inactive': True}
 
     flsa_fills = []
     email_fallbacks = []
     zip_corrections = []
     hours_fixes = []
+    inactive_fixes = []
 
     # Resolve column references
     emp_id_col = resolved_field_map.get('Employee ID')
@@ -105,6 +120,12 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
     personal_email_col = resolved_field_map.get('Personal Email')
     zip_col = resolved_field_map.get('Zip')
     hours_col = resolved_field_map.get('Working Hours')
+    
+    col_emp_status = None
+    for cand in ['employee_status', 'employee status', 'employment status', 'status', 'ee status']:
+        if cand in df.columns:
+            col_emp_status = cand
+            break
 
     def get_emp_ref(row, idx):
         ref = f"Row {idx + 2}"
@@ -210,9 +231,22 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
                         'Corrected Hours': '0'
                     })
 
+        # --- FIX 5: Inactive Status → Terminated ---
+        if fixes_to_apply.get('fix_inactive', False):
+            if col_emp_status:
+                val_emp = row.get(col_emp_status)
+                if pd.notna(val_emp) and str(val_emp).strip().lower() == 'inactive':
+                    df.at[idx, col_emp_status] = 'Terminated'
+                    inactive_fixes.append({
+                        'Employee ID': emp_ref,
+                        'Original Status': str(val_emp).strip(),
+                        'Corrected Status': 'Terminated'
+                    })
+
     return {
         'flsa_fills': pd.DataFrame(flsa_fills),
         'email_fallbacks': pd.DataFrame(email_fallbacks),
         'zip_corrections': pd.DataFrame(zip_corrections),
         'hours_fixes': pd.DataFrame(hours_fixes),
+        'inactive_fixes': pd.DataFrame(inactive_fixes),
     }

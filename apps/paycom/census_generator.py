@@ -153,11 +153,13 @@ def render_ui():
                 if pd.isna(val_dol) or str(val_dol).strip() == "":
                     custom_missing.append("DOL_Status is blank")
 
-            # 2. Employee Status blank check (Hard stop enforcement)
+            # 2. Employee Status blank check & "Inactive" check
             if col_emp_status:
                 val_emp = row.get(col_emp_status)
                 if pd.isna(val_emp) or str(val_emp).strip() == "":
                     custom_missing.append("Employee Status is blank")
+                elif str(val_emp).strip().lower() == "inactive":
+                    custom_missing.append("Employee Status is 'Inactive' (Use Auto-Fix to set to 'Terminated')")
 
             # 3. Position and Department Desc check
             if col_pos:
@@ -180,6 +182,17 @@ def render_ui():
                             custom_missing.append(f"Position is blank (and fallback '{norm_to_orig.get(col_dep, col_dep)}' is also blank)")
                     else:
                         custom_missing.append("Position is blank")
+                        
+            # 4. Emergency Contact Spanish Characters Check
+            # Look for emergency contact name columns
+            emg_cols = [c for c in df_paycom.columns if 'emergency' in c and ('name' in c or 'contact' in c)]
+            for ec in emg_cols:
+                val_ec = row.get(ec)
+                if pd.notna(val_ec) and str(val_ec).strip():
+                    # Regex to find non-ASCII characters (often Spanish characters like á, é, í, ó, ú, ñ)
+                    import re
+                    if re.search(r'[^\x00-\x7F]', str(val_ec)):
+                        custom_missing.append(f"Special/Spanish character found in {norm_to_orig.get(ec, ec)}: '{str(val_ec)}'. Please correct it.")
 
             if custom_missing:
                 paycom_custom_errors.append({
@@ -327,7 +340,8 @@ def render_ui():
         fixable = detect_fixable_issues(df_paycom, resolved_field_map)
 
         has_any_fixable = (fixable['flsa_blank_count'] > 0 or fixable['email_blank_count'] > 0 
-                           or fixable['zip_fixable_count'] > 0 or fixable['hours_blank_count'] > 0)
+                           or fixable['zip_fixable_count'] > 0 or fixable['hours_blank_count'] > 0
+                           or fixable.get('inactive_status_count', 0) > 0)
 
         if has_any_fixable:
             st.markdown("---")
@@ -362,14 +376,20 @@ def render_ui():
                 if fixable['hours_col_missing']:
                     label = f"**Fix Missing Working Hours Column** — Add column with 0 values ({fixable['hours_blank_count']} employee(s) affected)"
                 fix_hours = st.checkbox(label, value=True, key="pc_fix_hours")
+            if fixable.get('inactive_status_count', 0) > 0:
+                fix_inactive = st.checkbox(
+                    f"**Fix 'Inactive' Employee Status** — Change to 'Terminated' ({fixable['inactive_status_count']} employee(s) affected)",
+                    value=True, key="pc_fix_inactive"
+                )
 
         st.markdown("---")
         
         fixes_to_apply = {
-            'fix_flsa': fix_flsa,
-            'fix_email': fix_email,
-            'fix_zip': fix_zip,
-            'fix_hours': fix_hours
+            'fix_flsa': fix_flsa if 'fix_flsa' in locals() else False,
+            'fix_email': fix_email if 'fix_email' in locals() else False,
+            'fix_zip': fix_zip if 'fix_zip' in locals() else False,
+            'fix_hours': fix_hours if 'fix_hours' in locals() else False,
+            'fix_inactive': fix_inactive if 'fix_inactive' in locals() else False
         }
         
         if any(fixes_to_apply.values()):
@@ -392,6 +412,10 @@ def render_ui():
             if not fixes['hours_fixes'].empty:
                 fix_count += len(fixes['hours_fixes'])
                 st.success(f"**Working Hours Fix:** {len(fixes['hours_fixes'])} employee(s) had blank Working Hours set to 0.")
+                
+            if 'inactive_fixes' in fixes and not fixes['inactive_fixes'].empty:
+                fix_count += len(fixes['inactive_fixes'])
+                st.success(f"**Inactive Status Fix:** {len(fixes['inactive_fixes'])} employee(s) had status updated to 'Terminated'.")
             
             if fix_count > 0:
                 st.success(f"✅ {fix_count} total fix(es) actively applied to the data!")

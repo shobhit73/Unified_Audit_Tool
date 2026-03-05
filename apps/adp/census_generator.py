@@ -219,7 +219,12 @@ def render_ui():
     fixable = detect_fixable_issues(df_adp, resolved_field_map)
     
     has_any_fixable = (fixable['flsa_blank_count'] > 0 or fixable['email_blank_count'] > 0 
-                       or fixable['zip_fixable_count'] > 0 or fixable['hours_blank_count'] > 0)
+                       or fixable['zip_fixable_count'] > 0 or fixable['hours_blank_count'] > 0
+                       or fixable.get('inactive_status_count', 0) > 0
+                       or fixable.get('temporary_status_count', 0) > 0
+                       or fixable.get('blank_dol_active_count', 0) > 0
+                       or fixable.get('blank_dol_term_count', 0) > 0
+                       or fixable.get('invalid_date_count', 0) > 0)
     
     if has_any_fixable:
         st.markdown("---")
@@ -230,6 +235,11 @@ def render_ui():
         fix_email = False
         fix_zip = False
         fix_hours = False
+        fix_inactive = False
+        fix_temporary = False
+        fix_blank_dol_active = False
+        fix_blank_dol_term = False
+        fix_invalid_dates = False
         
         if fixable['flsa_blank_count'] > 0:
             fix_flsa = st.checkbox(
@@ -254,14 +264,45 @@ def render_ui():
             if fixable['hours_col_missing']:
                 label = f"**Fix Missing Working Hours Column** — Add column with 0 values ({fixable['hours_blank_count']} employee(s) affected)"
             fix_hours = st.checkbox(label, value=True, key="adp_fix_hours")
-        
+            
+        if fixable.get('inactive_status_count', 0) > 0:
+            fix_inactive = st.checkbox(
+                f"**Fix 'Inactive' Employee Status** — Change to 'Terminated' ({fixable['inactive_status_count']} employee(s) affected)",
+                value=True, key="adp_fix_inactive"
+            )
+        if fixable.get('temporary_status_count', 0) > 0:
+            fix_temporary = st.checkbox(
+                f"**Fix 'Temporary' Employee Status** — Change to 'Seasonal' ({fixable['temporary_status_count']} employee(s) affected)",
+                value=True, key="adp_fix_temporary"
+            )
+        if fixable.get('blank_dol_active_count', 0) > 0:
+            fix_blank_dol_active = st.checkbox(
+                f"**Fix Blank 'DOL_Status'** — Set to 'Full-Time' for Active employees ({fixable['blank_dol_active_count']} employee(s) affected)",
+                value=True, key="adp_fix_blank_dol_active"
+            )
+        if fixable.get('blank_dol_term_count', 0) > 0:
+            fix_blank_dol_term = st.checkbox(
+                f"**Fix Blank 'DOL_Status'** — Delete Row for Terminated employees ({fixable['blank_dol_term_count']} employee(s) affected)",
+                value=True, key="adp_fix_blank_dol_term"
+            )
+        if fixable.get('invalid_date_count', 0) > 0:
+            fix_invalid_dates = st.checkbox(
+                f"**Fix Invalid Dates** — Blank out '00/00/0000' values ({fixable['invalid_date_count']} instance(s) affected)",
+                value=True, key="adp_fix_invalid_dates"
+            )
+
         st.markdown("---")
         
         fixes_to_apply = {
             'fix_flsa': fix_flsa,
             'fix_email': fix_email,
             'fix_zip': fix_zip,
-            'fix_hours': fix_hours
+            'fix_hours': fix_hours,
+            'fix_inactive': fix_inactive,
+            'fix_temporary': fix_temporary,
+            'fix_blank_dol_active': fix_blank_dol_active,
+            'fix_blank_dol_term': fix_blank_dol_term,
+            'fix_invalid_dates': fix_invalid_dates
         }
         
         if any(fixes_to_apply.values()):
@@ -286,6 +327,26 @@ def render_ui():
             if not fixes['hours_fixes'].empty:
                 fix_count += len(fixes['hours_fixes'])
                 success_messages.append(f"- **Working Hours Fix:** {len(fixes['hours_fixes'])} employee(s)")
+                
+            if 'inactive_fixes' in fixes and not fixes['inactive_fixes'].empty:
+                fix_count += len(fixes['inactive_fixes'])
+                success_messages.append(f"- **Inactive Status Fix:** {len(fixes['inactive_fixes'])} employee(s)")
+                
+            if 'temporary_fixes' in fixes and not fixes['temporary_fixes'].empty:
+                fix_count += len(fixes['temporary_fixes'])
+                success_messages.append(f"- **Temporary Status Fix:** {len(fixes['temporary_fixes'])} employee(s)")
+                
+            if 'dol_active_fixes' in fixes and not fixes['dol_active_fixes'].empty:
+                fix_count += len(fixes['dol_active_fixes'])
+                success_messages.append(f"- **Blank DOL Fix (Active):** {len(fixes['dol_active_fixes'])} employee(s)")
+                
+            if 'dol_term_fixes' in fixes and not fixes['dol_term_fixes'].empty:
+                fix_count += len(fixes['dol_term_fixes'])
+                success_messages.append(f"- **Blank DOL Fix (Terminated):** {len(fixes['dol_term_fixes'])} employee(s) deleted")
+                
+            if 'invalid_date_fixes' in fixes and not fixes['invalid_date_fixes'].empty:
+                fix_count += len(fixes['invalid_date_fixes'])
+                success_messages.append(f"- **Invalid Dates Blanked:** {len(fixes['invalid_date_fixes'])} dates corrected")
             
             if fix_count > 0:
                 msg = f"✅ **{fix_count} total fix(es) actively applied to the data!**\n\n" + "\n".join(success_messages)

@@ -21,7 +21,8 @@ def detect_fixable_issues(df, resolved_field_map):
         'inactive_status_count': 0,
         'temporary_status_count': 0,
         'blank_dol_active_count': 0,
-        'blank_dol_term_count': 0
+        'blank_dol_term_count': 0,
+        'invalid_date_count': 0
     }
 
     emp_id_col = resolved_field_map.get('Employee ID')
@@ -102,6 +103,13 @@ def detect_fixable_issues(df, resolved_field_map):
                 else:
                     counts['blank_dol_active_count'] += 1
 
+    # Count invalid 00/00/0000 dates across all columns
+    for col in df.columns:
+        # Optimization: skip columns that don't have strings or objects if performance is an issue, 
+        # but 00/00/0000 will be stored as a string.
+        if df[col].astype(str).str.contains('00/00/0000', regex=False).any():
+            counts['invalid_date_count'] += df[col].astype(str).str.count('00/00/0000').sum()
+
     return counts
 
 
@@ -124,7 +132,8 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
         fixes_to_apply = {
             'fix_flsa': True, 'fix_email': True, 'fix_zip': True, 'fix_hours': True, 
             'fix_inactive': True, 'fix_temporary': True, 
-            'fix_blank_dol_active': True, 'fix_blank_dol_term': True
+            'fix_blank_dol_active': True, 'fix_blank_dol_term': True,
+            'fix_invalid_dates': True
         }
 
     flsa_fills = []
@@ -135,6 +144,7 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
     temporary_fixes = []
     dol_active_fixes = []
     dol_term_fixes = []
+    invalid_date_fixes = []
     
     rows_to_drop = []
 
@@ -303,6 +313,21 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
                             'Action': 'Set to Full-Time (Active Employee)'
                         })
 
+        # --- FIX 8: Invalid Dates (00/00/0000) ---
+        if fixes_to_apply.get('fix_invalid_dates', False):
+            for col in df.columns:
+                val = row.get(col)
+                if pd.notna(val) and '00/00/0000' in str(val):
+                    # Replace with blank/NaN (if it's exactly 00/00/0000) or just strip it out
+                    fixed_val = str(val).replace('00/00/0000', '').strip()
+                    df.at[idx, col] = fixed_val
+                    invalid_date_fixes.append({
+                        'Employee ID': emp_ref,
+                        'Column': col,
+                        'Original Value': str(val),
+                        'Action': 'Blanked invalid date'
+                    })
+
     if rows_to_drop:
         df.drop(list(set(rows_to_drop)), inplace=True)
         # We don't necessarily reset_index because it might mess up other references if they existed,
@@ -318,4 +343,5 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
         'temporary_fixes': pd.DataFrame(temporary_fixes),
         'dol_active_fixes': pd.DataFrame(dol_active_fixes),
         'dol_term_fixes': pd.DataFrame(dol_term_fixes),
+        'invalid_date_fixes': pd.DataFrame(invalid_date_fixes),
     }

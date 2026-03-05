@@ -671,11 +671,10 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         "FLSA Classification (Uzio)", "Issue"
     ])
 
-    # ---------- Active Employees Missing in Uzio (5th sheet) ----------
-    # Find employees in Paycom but NOT in Uzio who are Active / On Leave
-    paycom_only_emps = set(paycom_idx.keys()) - set(uzio_idx.keys())
-
-    # Locate Paycom columns for name, status, hire date
+    # ---------- Data Quality Issues (00/00/0000 dates) ----------
+    dq_rows = []
+    
+    # Locate Emp ID and Name columns again for context
     pc_fname_col = find_col(paycom.columns, "Legal_Firstname", "Legal Firstname", "First Name", "FirstName")
     if pc_fname_col is None:
         for c in paycom.columns:
@@ -684,6 +683,47 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 pc_fname_col = c
                 break
     pc_lname_col = find_col(paycom.columns, "Legal_Lastname", "Legal Lastname", "Last Name", "LastName")
+    if pc_lname_col is None:
+        for c in paycom.columns:
+            cl = norm_colname(c).casefold()
+            if "last" in cl and "name" in cl:
+                pc_lname_col = c
+                break
+
+    for eid in paycom_idx.keys():
+        p_i = paycom_idx.get(eid)
+        if p_i is not None:
+            # Check all columns for this row
+            for col in paycom.columns:
+                val = paycom.loc[p_i, col]
+                if pd.notna(val) and '00/00/0000' in str(val):
+                    fname = str(norm_blank(paycom.loc[p_i, pc_fname_col]) or "") if pc_fname_col else ""
+                    lname = str(norm_blank(paycom.loc[p_i, pc_lname_col]) or "") if pc_lname_col else ""
+                    emp_name = f"{fname} {lname}".strip()
+                    pc_raw_id = paycom_orig_keys.loc[p_i] if p_i in paycom_orig_keys.index else eid
+                    
+                    dq_rows.append({
+                        "Employee ID": str(pc_raw_id).strip(),
+                        "Employee Name": emp_name,
+                        "Column": col,
+                        "Invalid Value Found": str(val)
+                    })
+                    
+    dq_issues = pd.DataFrame(dq_rows, columns=[
+        "Employee ID", "Employee Name", "Column", "Invalid Value Found"
+    ])
+
+    # ---------- Active Employees Missing in Uzio (5th sheet) ----------
+    # Find employees in Paycom but NOT in Uzio who are Active / On Leave
+    paycom_only_emps = set(paycom_idx.keys()) - set(uzio_idx.keys())
+
+    # (Already located above for DQ checks, but redeclared here if needed, safe to keep as is)
+    if pc_fname_col is None:
+        for c in paycom.columns:
+            cl = norm_colname(c).casefold()
+            if "first" in cl and "name" in cl:
+                pc_fname_col = c
+                break
     if pc_lname_col is None:
         for c in paycom.columns:
             cl = norm_colname(c).casefold()
@@ -805,6 +845,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         field_summary_by_status.to_excel(writer, sheet_name="Field_Summary_By_Status", index=False)
         comparison_detail.to_excel(writer, sheet_name="Comparison_Detail_AllFields", index=False)
         flsa_issues.to_excel(writer, sheet_name="FLSA_Compliance_Issues", index=False)
+        dq_issues.to_excel(writer, sheet_name="Data_Quality_Issues", index=False)
         active_missing_in_uzio.to_excel(writer, sheet_name="Active_Missing_In_Uzio", index=False)
 
     return out.getvalue()

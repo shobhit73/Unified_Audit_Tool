@@ -711,24 +711,10 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         "FLSA Classification (Uzio)", "Issue"
     ])
 
-    # ---------- Active Employees Missing in Uzio (5th sheet) ----------
-    # Find employees in ADP but NOT in Uzio who are Active
-    adp_only_keys = adp_keys - uzio_keys
-
-    # Locate ADP columns for status, name, hire date
-    adp_status_col = None
-    for c in adp.columns:
-        cl = norm_colname(c).casefold()
-        if cl in {"position status", "employment status", "employee status"}:
-            adp_status_col = c
-            break
-    if adp_status_col is None:
-        for c in adp.columns:
-            cl = norm_colname(c).casefold()
-            if "status" in cl and ("position" in cl or "employment" in cl):
-                adp_status_col = c
-                break
-
+    # ---------- Data Quality Issues (00/00/0000 dates) ----------
+    dq_rows = []
+    
+    # Locate ADP columns for name to use as context
     adp_fname_col = None
     for c in adp.columns:
         cl = norm_colname(c).casefold()
@@ -754,6 +740,47 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             if "last" in cl and "name" in cl:
                 adp_lname_col = c
                 break
+
+    for emp_id in adp_idx.index:
+        # Check all columns for this row
+        for col in adp.columns:
+            val = adp_idx.at[emp_id, col]
+            if pd.notna(val) and '00/00/0000' in str(val):
+                fname = str(norm_blank(adp_idx.at[emp_id, adp_fname_col]) or "") if adp_fname_col else ""
+                lname = str(norm_blank(adp_idx.at[emp_id, adp_lname_col]) or "") if adp_lname_col else ""
+                emp_name = f"{fname} {lname}".strip()
+                
+                dq_rows.append({
+                    "Employee ID": str(emp_id).strip(),
+                    "Employee Name": emp_name,
+                    "Column": col,
+                    "Invalid Value Found": str(val)
+                })
+                
+    dq_issues = pd.DataFrame(dq_rows, columns=[
+        "Employee ID", "Employee Name", "Column", "Invalid Value Found"
+    ])
+
+    # ---------- Active Employees Missing in Uzio (5th sheet) ----------
+    # Find employees in ADP but NOT in Uzio who are Active
+    adp_only_keys = adp_keys - uzio_keys
+
+    # Locate ADP columns for status, name, hire date
+    adp_status_col = None
+    for c in adp.columns:
+        cl = norm_colname(c).casefold()
+        if cl in {"position status", "employment status", "employee status"}:
+            adp_status_col = c
+            break
+    if adp_status_col is None:
+        for c in adp.columns:
+            cl = norm_colname(c).casefold()
+            if "status" in cl and ("position" in cl or "employment" in cl):
+                adp_status_col = c
+                break
+
+    # Name columns already located above for Data Quality check.
+    # We can reuse adp_fname_col and adp_lname_col
 
     adp_hire_col = None
     for c in adp.columns:
@@ -837,7 +864,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         "Employee ID Not Found in Uzio",
         "Employee ID Not Found in ADP",
         "Column Missing in ADP Sheet",
-        "Column Missing in Uzio Sheet",
+        "Column Missing in Uzio Sheet"
     ]]
 
     # ---------- Summary metrics ----------
@@ -853,7 +880,8 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             "Total comparison rows (employees x mapped fields)",
             "Total NOT OK rows",
             "FLSA Compliance Issues",
-            "Active in ADP but Missing in Uzio"
+            "Active in ADP but Missing in Uzio",
+            "Data Quality Issues (00/00/0000)"
         ],
         "Value": [
             len(uzio_keys),
@@ -866,7 +894,8 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             comparison_detail.shape[0],
             mismatches_only.shape[0],
             len(flsa_rows),
-            len(active_missing_rows)
+            len(active_missing_rows),
+            len(dq_rows)
         ]
     })
 
@@ -877,6 +906,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         field_summary_by_status.to_excel(writer, sheet_name="Field_Summary_By_Status", index=False)
         comparison_detail.to_excel(writer, sheet_name="Comparison_Detail_AllFields", index=False)
         flsa_issues.to_excel(writer, sheet_name="FLSA_Compliance_Issues", index=False)
+        dq_issues.to_excel(writer, sheet_name="Data_Quality_Issues", index=False)
         active_missing_in_uzio.to_excel(writer, sheet_name="Active_Missing_In_Uzio", index=False)
 
     return out.getvalue()
@@ -893,6 +923,7 @@ def render_ui():
     - **Comparison**: Discrepancies between Uzio and ADP.
     - **FLSA_Compliance_Issues**: Invalid Pay Type/FLSA Classification.
     - **Active_Missing_In_Uzio**: Active employees in ADP not found in Uzio.
+    - **Data_Quality_Issues**: Identifies dates with '00/00/0000'.
     """)
 
     client_name = st.text_input("Client Name", value="Client", key="adp_census_client")

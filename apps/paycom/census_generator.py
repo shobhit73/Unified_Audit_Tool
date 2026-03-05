@@ -339,7 +339,8 @@ def render_ui():
                            or fixable.get('inactive_status_count', 0) > 0
                            or fixable.get('temporary_status_count', 0) > 0
                            or fixable.get('blank_dol_active_count', 0) > 0
-                           or fixable.get('blank_dol_term_count', 0) > 0)
+                           or fixable.get('blank_dol_term_count', 0) > 0
+                           or fixable.get('invalid_date_count', 0) > 0)
 
         if has_any_fixable:
             st.markdown("---")
@@ -394,6 +395,11 @@ def render_ui():
                     f"**Fix Blank 'DOL_Status'** — Delete Row for Terminated employees ({fixable['blank_dol_term_count']} employee(s) affected)",
                     value=True, key="pc_fix_blank_dol_term"
                 )
+            if fixable.get('invalid_date_count', 0) > 0:
+                fix_invalid_dates = st.checkbox(
+                    f"**Fix Invalid Dates** — Blank out '00/00/0000' values ({fixable['invalid_date_count']} instance(s) affected)",
+                    value=True, key="pc_fix_invalid_dates"
+                )
 
         st.markdown("---")
         
@@ -405,7 +411,8 @@ def render_ui():
             'fix_inactive': fix_inactive if 'fix_inactive' in locals() else False,
             'fix_temporary': fix_temporary if 'fix_temporary' in locals() else False,
             'fix_blank_dol_active': fix_blank_dol_active if 'fix_blank_dol_active' in locals() else False,
-            'fix_blank_dol_term': fix_blank_dol_term if 'fix_blank_dol_term' in locals() else False
+            'fix_blank_dol_term': fix_blank_dol_term if 'fix_blank_dol_term' in locals() else False,
+            'fix_invalid_dates': fix_invalid_dates if 'fix_invalid_dates' in locals() else False,
         }
         
         if any(fixes_to_apply.values()):
@@ -446,6 +453,10 @@ def render_ui():
             if 'dol_term_fixes' in fixes and not fixes['dol_term_fixes'].empty:
                 fix_count += len(fixes['dol_term_fixes'])
                 success_messages.append(f"- **Blank DOL Fix (Terminated):** {len(fixes['dol_term_fixes'])} employee(s) deleted")
+                
+            if 'invalid_date_fixes' in fixes and not fixes['invalid_date_fixes'].empty:
+                fix_count += len(fixes['invalid_date_fixes'])
+                success_messages.append(f"- **Invalid Dates Blanked:** {len(fixes['invalid_date_fixes'])} dates corrected")
             
             if fix_count > 0:
                 msg = f"✅ **{fix_count} total fix(es) actively applied to the data!**\n\n" + "\n".join(success_messages)

@@ -396,6 +396,43 @@ def render_ui():
             if fix_count > 0:
                 st.success(f"✅ {fix_count} total fix(es) actively applied to the data!")
                 
+        # --- Optional Location Mapping (in Tab 1) ---
+        src_loc_col_af = resolved_field_map.get('Work Location')
+        unique_locs_af = []
+        if src_loc_col_af and src_loc_col_af in df_paycom.columns:
+            unique_locs_af = sorted([str(l).strip() for l in df_paycom[src_loc_col_af].dropna().unique() if str(l).strip()])
+
+        fix_loc_mapping = False
+        edited_locs_af = None
+
+        if unique_locs_af:
+            st.markdown("---")
+            fix_loc_mapping = st.checkbox(
+                f"**Map Work Locations (Optional)** — Map {len(unique_locs_af)} unique Work Location(s) directly in the source data",
+                value=False, key="pc_fix_locs"
+            )
+
+        if fix_loc_mapping:
+            df_loc_map_af = pd.DataFrame({"Source Work Location": unique_locs_af, "Mapped Work Location": pd.Series([""]*len(unique_locs_af), dtype=str)})
+            edited_locs_af = st.data_editor(
+                df_loc_map_af,
+                column_config={
+                    "Source Work Location": st.column_config.Column(disabled=True),
+                    "Mapped Work Location": st.column_config.TextColumn("Enter Standardized Location", required=True)
+                },
+                hide_index=True, use_container_width=True, key="pc_af_loc_editor"
+            )
+            
+            # Immediately apply this mapping to df_paycom so the download includes it
+            if edited_locs_af is not None and not edited_locs_af.empty:
+                # Only applying mappings that are actually filled out
+                valid_maps = edited_locs_af[edited_locs_af['Mapped Work Location'].str.strip() != ""]
+                if not valid_maps.empty:
+                    loc_dict_af = dict(zip(valid_maps['Source Work Location'], valid_maps['Mapped Work Location']))
+                    stripped_locs = df_paycom[src_loc_col_af].astype(str).str.strip()
+                    df_paycom[src_loc_col_af] = stripped_locs.map(loc_dict_af).fillna(df_paycom[src_loc_col_af])
+                    st.success(f"**Work Location Mapping:** Applied mapping for {len(loc_dict_af)} unique location(s).")
+                
         # --- Download Corrected Source ---
         st.markdown("### 📥 Download Cleaned Source Data")
         st.markdown("You can download the partially cleaned source file containing all the fixes applied above.")

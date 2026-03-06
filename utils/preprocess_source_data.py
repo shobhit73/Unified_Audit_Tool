@@ -34,11 +34,28 @@ def detect_fixable_issues(df, resolved_field_map):
     hours_col = resolved_field_map.get('Working Hours')
 
     # Check if Working Hours column exists at all
+    # NEW LOGIC: if not, check for "Standard Hours"
+    std_hours_cand = None
+    for cand in df.columns:
+        if str(cand).strip().lower() == "standard hours":
+            std_hours_cand = cand
+            break
+
     if not hours_col or hours_col not in df.columns:
-        counts['hours_col_missing'] = True
-        counts['hours_blank_count'] = len(df)
+        if std_hours_cand:
+            # We have Standard Hours. We will use that as base.
+            # Only count blanks in Standard Hours as needing fixes.
+            for _, row in df.iterrows():
+                hrs_val = row.get(std_hours_cand)
+                if pd.isna(hrs_val) or str(hrs_val).strip() == "" or str(hrs_val).strip().lower() == 'nan':
+                    counts['hours_blank_count'] += 1
+            # We will also need to rename/create the canonical column, which triggers the missing logic
+            counts['hours_col_missing'] = True 
+        else:
+            counts['hours_col_missing'] = True
+            counts['hours_blank_count'] = len(df)
     else:
-        # Count blank working hours
+        # Count blank working hours normally
         for _, row in df.iterrows():
             hrs_val = row.get(hours_col)
             if pd.isna(hrs_val) or str(hrs_val).strip() == "" or str(hrs_val).strip().lower() == 'nan':
@@ -176,16 +193,30 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
         # Always use a canonical column name for the fix
         canonical_hours_col = 'Working Hours Per Week'
         
+        # Check for Standard Hours fallback
+        std_hours_cand = None
+        for cand in df.columns:
+            if str(cand).strip().lower() == "standard hours":
+                std_hours_cand = cand
+                break
+        
         if not hours_col or hours_col not in df.columns:
-            # Column is missing entirely — add it with "0" values
-            df[canonical_hours_col] = "0"
-            resolved_field_map['Working Hours'] = canonical_hours_col
-            hours_col = canonical_hours_col
-            hours_fixes.append({
-                'Employee ID': '(All Employees)',
-                'Original Hours': '(Column Missing)',
-                'Corrected Hours': '0'
-            })
+            if std_hours_cand:
+                # Fallback to Standard Hours
+                df[canonical_hours_col] = df[std_hours_cand].copy()
+                resolved_field_map['Working Hours'] = canonical_hours_col
+                hours_col = canonical_hours_col
+                # Don't add to hours_fixes here; let the row-by-row blank check catch any missing values next.
+            else:
+                # Column is missing entirely and no Standard Hours — add it with "0" values
+                df[canonical_hours_col] = "0"
+                resolved_field_map['Working Hours'] = canonical_hours_col
+                hours_col = canonical_hours_col
+                hours_fixes.append({
+                    'Employee ID': '(All Employees)',
+                    'Original Hours': '(Column Missing)',
+                    'Corrected Hours': '0'
+                })
         else:
             # Column exists but may have blank values — create a new canonical column
             # Copy existing values, then fill blanks with 0

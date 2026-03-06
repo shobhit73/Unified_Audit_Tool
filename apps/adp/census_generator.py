@@ -365,40 +365,39 @@ def render_ui():
                 st.success(msg)
                 
         # --- DSP OWNER DETECTION (ADP) ---
-        col_job_title = resolved_field_map.get('Job Title')
+        col_sup_code = resolved_field_map.get('Reports To ID')
+        if not col_sup_code or col_sup_code not in df_adp.columns:
+            # Maybe it wasn't mapped, try to find 'Reports To Associate ID' directly as a fallback
+            if 'Reports To Associate ID' in df_adp.columns:
+                col_sup_code = 'Reports To Associate ID'
+
         detected_dsp_id = None
         detected_dsp_name = ""
         
-        if col_job_title and col_job_title in df_adp.columns:
-            # Filter for rows where job title contains 'dsp owner'
-            # First, clean the text for matching
-            job_title_str = df_adp[col_job_title].astype(str).str.strip().str.lower()
-            dsp_mask = job_title_str.str.contains('dsp owner', na=False)
-            
-            valid_dsps = df_adp[dsp_mask]
-            
-            if not valid_dsps.empty:
-                # Take the first matched DSP Owner row
-                row_idx = valid_dsps.index[0]
-                emp_code_col = resolved_field_map.get('Employee ID')
-                
-                if emp_code_col and emp_code_col in df_adp.columns:
-                    emp_val = df_adp.at[row_idx, emp_code_col]
-                    if pd.notna(emp_val) and str(emp_val).strip() != "":
-                        detected_dsp_id = str(emp_val).strip()
-                
-                # Try to get their name
-                fn = df_adp.at[row_idx, resolved_field_map.get('First Name', '')] if resolved_field_map.get('First Name') in df_adp.columns else ''
-                ln = df_adp.at[row_idx, resolved_field_map.get('Last Name', '')] if resolved_field_map.get('Last Name') in df_adp.columns else ''
-                if pd.notna(fn) and pd.notna(ln):
-                    detected_dsp_name = f"{str(fn).strip()} {str(ln).strip()}".strip()
+        if col_sup_code and col_sup_code in df_adp.columns:
+            # Filter out blanks
+            valid_sups = df_adp[df_adp[col_sup_code].notna() & (df_adp[col_sup_code].astype(str).str.strip() != "")]
+            if not valid_sups.empty:
+                sup_counts = valid_sups[col_sup_code].value_counts()
+                if not sup_counts.empty:
+                    detected_dsp_id = str(sup_counts.index[0]).strip()
+                    
+                    # Try to get their name
+                    emp_code_col = resolved_field_map.get('Employee ID')
+                    if emp_code_col and emp_code_col in df_adp.columns:
+                        match = df_adp[df_adp[emp_code_col].astype(str).str.strip() == detected_dsp_id]
+                        if not match.empty:
+                            fn = match.iloc[0].get(resolved_field_map.get('First Name'), '')
+                            ln = match.iloc[0].get(resolved_field_map.get('Last Name'), '')
+                            if pd.notna(fn) and pd.notna(ln):
+                                detected_dsp_name = f"{str(fn).strip()} {str(ln).strip()}".strip()
 
         st.markdown("---")
         
         set_dsp_owner = False
         if detected_dsp_id:
             name_disp = f" ({detected_dsp_name})" if detected_dsp_name else ""
-            st.info(f"**DSP Owner Detected:** Employee **{detected_dsp_id}**{name_disp} was identified as the DSP Owner.")
+            st.info(f"**DSP Owner Detected:** Employee **{detected_dsp_id}**{name_disp} supervises the most employees.")
             set_dsp_owner = st.checkbox(
                 f"Automatically set Job Title to **'DSP Owner'** for Employee {detected_dsp_id} and move them to the **very top** of all generated files.",
                 value=True, key="adp_set_dsp_owner"

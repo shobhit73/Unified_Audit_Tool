@@ -125,8 +125,7 @@ REQUIRED_ADP_COLUMNS = [
     'Legal / Preferred Address: City (Personal Profile)',
     'Legal / Preferred Address: Zip / Postal Code (Personal Profile)',
     'Legal / Preferred Address: State / Territory Code (Personal Profile)',
-    'Pronouns (Personal Profile)',
-    'T-Shirt size (Personal Profile)'
+    'Pronouns (Personal Profile)'
 ]
 
 def norm_colname(c: str) -> str:

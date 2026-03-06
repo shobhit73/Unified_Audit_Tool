@@ -22,29 +22,29 @@ ADP_FIELD_MAP = {
     'Last Name': 'Legal Last Name',
     'Middle Initial': 'Legal Middle Name',
     'Employment Status': 'Position Status',
-    'Hire Date': 'Hire/Rehire Date',
+    'Hire Date': 'Hire Date',
     'Original Hire Date': 'Hire Date',
     'Termination Date': 'Termination Date',
     'Termination Reason': 'Termination Reason Description',
     'Pay Type': 'Regular Pay Rate Description',
     'Annual Salary': 'Annual Salary',
     'Hourly Pay Rate': 'Regular Pay Rate Amount',
-    'Working Hours': 'Regular Hours', # Was 'Working Hours Per Week'
+    'Working Hours': 'Standard Hours',
     'Job Title': 'Job Title Description',
     'Department': 'Department Description',
-    'Work Email': 'Work Contact: Work Email', # Not found in sample, keep as optional/missing?
+    'Work Email': 'Work Contact: Work Email',
     'Personal Email': 'Personal Contact: Personal Email',
-    'Phone Number': '', # 'Personal Contact: Personal Mobile' NOT FOUND. Leave blank to avoid key error?
+    'Phone Number': 'Personal Contact: Personal Mobile',
     'SSN': 'Tax ID (SSN)',
     'DOB': 'Birth Date',
-    'Gender': 'Gender (Self-ID)',
+    'Gender': 'Sex',
     'Tobacco User': 'Tobacco User',
-    'FLSA Classification': 'FLSA Description', # Was 'FLSA Classification'. Header has 'FLSA Description' and 'FLSA Code'
+    'FLSA Classification': 'FLSA Description',
     'Address Line 1': 'Primary Address: Address Line 1',
     'Address Line 2': 'Primary Address: Address Line 2',
     'City': 'Primary Address: City',
-    'Zip': 'Legal / Preferred Address: Zip / Postal Code',
-    'State': 'Primary Address: State / Territory Code', # Was '.../ Province / ...'
+    'Zip': 'Primary Address: Zip / Postal Code',
+    'State': 'Primary Address: State / Territory Code',
     'Mailing Address Line 1': 'Legal / Preferred Address: Address Line 1',
     'Mailing Address Line 2': 'Legal / Preferred Address: Address Line 2',
     'Mailing City': 'Legal / Preferred Address: City',
@@ -53,8 +53,8 @@ ADP_FIELD_MAP = {
     # Additional
     'Reports To ID': 'Reports To Associate ID',
     'Protected Veteran Status': 'Protected Veteran Status',
-    'EEO Job Category': 'EEOC Job Classification', # Was 'EEO Job Category EEO Job Classifcation'
-    'Ethnicity': 'Ethnicity', # Mapping says Race/Ethnicity -> Ethnicity
+    'EEO Job Category': 'EEOC Job Classification',
+    'Ethnicity': 'Race Description',
     'SOC Code': 'SOC Code'
 }
 
@@ -64,6 +64,8 @@ def norm_colname(c: str) -> str:
         return ""
     c = str(c).replace("\n", " ").replace("\r", " ")
     c = c.replace("\u00A0", " ")
+    # Remove bracketed suffixes like (Personal Profile) or (Employment Profile - Pay Rates)
+    c = re.sub(r'\(.*?\)', '', c)
     c = re.sub(r"\s+", " ", c).strip()
     c = c.replace("*", "")
     c = c.strip('"').strip("'")

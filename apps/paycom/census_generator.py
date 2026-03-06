@@ -59,6 +59,8 @@ def norm_colname(c: str) -> str:
     c = str(c).replace("\n", " ").replace("\r", " ")
     c = c.replace("\u00A0", " ")
     c = c.replace("\u2019", "'").replace("\u201C", '"').replace("\u201D", '"')
+    # Remove bracketed suffixes like (Personal Profile) or (Employment Profile - Pay Rates)
+    c = re.sub(r'\(.*?\)', '', c)
     c = re.sub(r"\s+", " ", c).strip()
     c = c.replace("*", "")
     c = c.strip('"').strip("'")

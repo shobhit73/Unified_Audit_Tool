@@ -14,29 +14,29 @@ ADP_FIELD_MAP = {
     'Middle Initial': ['Legal Middle Name', 'Middle Name', 'Middle Initial'],
     'Employment Status': ['Position Status', 'Worker Status', 'Status'],
     'Employment Type': ['Worker Category Description', 'Worker Category', 'Employment Type'],
-    'Hire Date': ['Hire/Rehire Date', 'Hire Date', 'Most Recent Hire Date'],
+    'Hire Date': ['Hire Date', 'Hire/Rehire Date', 'Most Recent Hire Date'],
     'Original Hire Date': ['Hire Date', 'Original Hire Date'],
     'Termination Date': ['Termination Date'],
     'Termination Reason': ['Termination Reason Description', 'Termination Reason'],
     'Pay Type': ['Regular Pay Rate Description', 'Pay Type'],
     'Annual Salary': ['Annual Salary'],
     'Hourly Pay Rate': ['Regular Pay Rate Amount', 'Hourly Rate'],
-    'Working Hours': ['Working Hours Per Week', 'Working Hours Per week', 'Regular Hours', 'Standard Hours'],
-    'Job Title': ['Job Title Description', 'Job Title', 'Department Description'],
-    'Department': ['Department Description', 'Department'],
+    'Working Hours': ['Standard Hours', 'Regular Hours', 'Working Hours Per Week'],
+    'Job Title': ['Job Title Description', 'Job Title Code', 'Job Title'],
+    'Department': ['Department Description', 'Department Number', 'Home Department Code', 'Department'],
     'Work Email': ['Work Contact: Work Email', 'Work Email'],
     'Personal Email': ['Personal Contact: Personal Email', 'Personal Email'],
-    'Phone Number': ['Personal Contact: Personal Mobile', 'Primary Mobile', 'Mobile', 'Phone Number'],
+    'Phone Number': ['Personal Contact: Personal Mobile', 'Personal Contact: Home Phone', 'Work Contact: Work Mobile', 'Work Contact: Work Phone', 'Phone Number'],
     'SSN': ['Tax ID (SSN)', 'SSN'],
     'DOB': ['Birth Date', 'Date of Birth', 'DOB'],
     'Gender': ['Sex', 'Gender (Self-ID)', 'Gender'],
     'Tobacco User': ['Tobacco User'],
-    'FLSA Classification': ['FLSA Description', 'FLSA Status'],
+    'FLSA Classification': ['FLSA Description', 'FLSA Code', 'FLSA Status'],
     'Address Line 1': ['Primary Address: Address Line 1', 'Address Line 1'],
     'Address Line 2': ['Primary Address: Address Line 2', 'Address Line 2'],
     'City': ['Primary Address: City', 'City'],
-    'Zip': ['Primary Address: Zip / Postal Code', 'Legal / Preferred Address: Zip / Postal Code', 'Zip Code'],
-    'State': ['Primary Address: State / Territory Code (Personal Profile)', 'Primary Address: State / Territory Code', 'State'],
+    'Zip': ['Primary Address: Zip / Postal Code', 'Zip Code'],
+    'State': ['Primary Address: State / Territory Code', 'State'],
     'Mailing Address Line 1': ['Legal / Preferred Address: Address Line 1'],
     'Mailing Address Line 2': ['Legal / Preferred Address: Address Line 2'],
     'Mailing City': ['Legal / Preferred Address: City'],
@@ -45,7 +45,7 @@ ADP_FIELD_MAP = {
     'Reports To ID': ['Reports To Associate ID', 'Reports To'],
     'Protected Veteran Status': ['Protected Veteran Status'],
     'EEO Job Category': ['EEOC Job Classification'],
-    'Ethnicity': ['Ethnicity'],
+    'Ethnicity': ['Race Description', 'Ethnicity'],
     'SOC Code': ['SOC Code'],
     'Work Location': ['Location', 'Location Description', 'Work Location']
 }
@@ -59,80 +59,15 @@ ALLOWED_JOB_TITLES = [
     'Non-DSP Related', 'Driver -Major Appliance'
 ]
 
-REQUIRED_ADP_COLUMNS = [
-    'Legal First Name (Personal Profile)',
-    'Legal Middle Name (Personal Profile)',
-    'Legal Last Name (Personal Profile)',
-    'Generation Suffix Code (Personal Profile)',
-    'Generation Suffix Description (Personal Profile)',
-    'Associate ID (Employment Profile)',
-    'Position ID (Employment Profile)',
-    'Birth Date (Personal Profile)',
-    'Tax ID (SSN) (Personal Profile)',
-    'Hire Date (Employment Profile)',
-    'Hire/Rehire Date (Employment Profile)',
-    'Termination Date (Employment Profile)',
-    'Termination Reason Code (Employment Profile)',
-    'Termination Reason Description (Employment Profile)',
-    'Tobacco User (Personal Profile)',
-    'Gender / Sex (Self-ID) (Personal Profile)',
-    'Marital Status Code (Personal Profile)',
-    'Marital Status Description (Personal Profile)',
-    'FLSA Description (Employment Profile)',
-    'FLSA Code (Employment Profile)',
-    'Worker category description (Employment Profile)',
-    'Annual Salary (Employment Profile - Pay Rates)',
-    'Job Title Description (Employment Profile)',
-    'Position Start Date (Employment Profile)',
-    'Reports To Associate ID (Employment Profile)',
-    'EEOC Job Classification (Employment Profile)',
-    'Race Description (Personal Profile)',
-    'Primary Address: Address Line 1 (Personal Profile)',
-    'Primary Address: Address Line 2 (Personal Profile)',
-    'Primary Address: Address Line 3 (Personal Profile)',
-    'Primary Address: City (Personal Profile)',
-    'Primary Address: Country Code (Personal Profile)',
-    'Primary Address: Country (Personal Profile)',
-    'Primary Address: County (Personal Profile)',
-    'Primary Address: State / Territory Code (Personal Profile)',
-    'Primary Address: State / Territory Description (Personal Profile)',
-    'Personal Contact: Personal Email (Personal Profile)',
-    'Protected Veteran Status (Statutory Compliance)',
-    'Disabled Veteran (Statutory Compliance)',
-    'Work Address: Address Line 1 (Personal Profile)',
-    'Work Address: Address Line 2 (Personal Profile)',
-    'Work Address: City (Personal Profile)',
-    'Work Address: State / Territory Code (Personal Profile)',
-    'Work Address: Zip / Postal Code (Personal Profile)',
-    'Location Description (Employment Profile)',
-    'SOC Code (Tax Withholdings)',
-    'SOC Description (Tax Withholdings)',
-    'Compensation Information',
-    'Pay Frequency (Employment Profile - Pay Rates)',
-    'Payroll Name (Personal Profile)',
-    'Standard Hours (Employment Profile - Pay Rates)',
-    '# of Dependents (Personal Profile)',
-    'Work Contact: Work Email (Personal Profile)',
-    'Regular Pay Rate Code (Employment Profile - Pay Rates)',
-    'Regular Pay Rate Description (Employment Profile - Pay Rates)',
-    'Regular Pay Rate',
-    'Position Status (Employment Profile)',
-    "NAICS Workers' Comp Code (Employment Profile)",
-    "NAICS Workers' Comp Description (Employment Profile)",
-    "NAICS Workers' Comp",
-    'Legal / Preferred Address: Address Line 1 (Personal Profile)',
-    'Legal / Preferred Address: Address Line 2 (Personal Profile)',
-    'Legal / Preferred Address: City (Personal Profile)',
-    'Legal / Preferred Address: Zip / Postal Code (Personal Profile)',
-    'Legal / Preferred Address: State / Territory Code (Personal Profile)',
-    'Pronouns (Personal Profile)'
-]
+
 
 def norm_colname(c: str) -> str:
     import re
     if c is None: return ""
     c = str(c).replace("\n", " ").replace("\r", " ")
     c = c.replace("\u00A0", " ")
+    # Remove bracketed suffixes like (Personal Profile) or (Employment Profile - Pay Rates)
+    c = re.sub(r'\(.*?\)', '', c)
     c = re.sub(r"\s+", " ", c).strip()
     c = c.replace("*", "")
     c = c.strip('"').strip("'")
@@ -172,22 +107,7 @@ def render_ui():
     # Build mapping: normalized -> original (for restoring headers on download)
     norm_to_orig = dict(zip(df_adp.columns, original_columns))
     
-    # --- CHECK: Required mandatory columns ---
-    missing_required = []
-    adp_cols_normalized = set(df_adp.columns)
-    
-    for req_col in REQUIRED_ADP_COLUMNS:
-        req_norm = norm_colname(req_col)
-        if req_norm not in adp_cols_normalized:
-            missing_required.append(req_col)
-            
-    if missing_required:
-        st.error(f"**⛔ Halting Process: {len(missing_required)} Mandatory Column(s) Missing!**")
-        st.markdown("Your uploaded ADP file is missing the following required standard columns:")
-        for mc in missing_required:
-            st.markdown(f"- `{mc}`")
-        st.info("Please correct your ADP reporting template to include these columns and upload the file again.")
-        return
+
     
     # Resolve field map
     resolved_field_map = {}

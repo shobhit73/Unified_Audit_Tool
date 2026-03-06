@@ -22,10 +22,12 @@ def detect_fixable_issues(df, resolved_field_map):
         'temporary_status_count': 0,
         'blank_dol_active_count': 0,
         'blank_dol_term_count': 0,
-        'invalid_date_count': 0
+        'invalid_date_count': 0,
+        'type_blank_count': 0
     }
 
     emp_id_col = resolved_field_map.get('Employee ID')
+    type_col = resolved_field_map.get('Employment Type')
     pay_type_col = resolved_field_map.get('Pay Type')
     flsa_col = resolved_field_map.get('FLSA Classification')
     work_email_col = resolved_field_map.get('Work Email')
@@ -127,6 +129,13 @@ def detect_fixable_issues(df, resolved_field_map):
         if df[col].astype(str).str.contains('00/00/0000', regex=False).any():
             counts['invalid_date_count'] += df[col].astype(str).str.count('00/00/0000').sum()
 
+    # Count blank Employment Type / Worker Category
+    if type_col and type_col in df.columns:
+        for _, row in df.iterrows():
+            type_val = row.get(type_col)
+            if pd.isna(type_val) or str(type_val).strip() == "":
+                counts['type_blank_count'] += 1
+
     return counts
 
 
@@ -150,7 +159,7 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
             'fix_flsa': True, 'fix_email': True, 'fix_zip': True, 'fix_hours': True, 
             'fix_inactive': True, 'fix_temporary': True, 
             'fix_blank_dol_active': True, 'fix_blank_dol_term': True,
-            'fix_invalid_dates': True
+            'fix_invalid_dates': True, 'fix_type_blanks': True
         }
 
     flsa_fills = []
@@ -162,11 +171,13 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
     dol_active_fixes = []
     dol_term_fixes = []
     invalid_date_fixes = []
+    type_blank_fixes = []
     
     rows_to_drop = []
 
     # Resolve column references
     emp_id_col = resolved_field_map.get('Employee ID')
+    type_col = resolved_field_map.get('Employment Type')
     pay_type_col = resolved_field_map.get('Pay Type')
     flsa_col = resolved_field_map.get('FLSA Classification')
     work_email_col = resolved_field_map.get('Work Email')
@@ -359,6 +370,18 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
                         'Action': 'Blanked invalid date'
                     })
 
+        # --- FIX 9: Blank Worker Category / Employment Type ---
+        if fixes_to_apply.get('fix_type_blanks', False):
+            if type_col and type_col in df.columns:
+                type_val = row.get(type_col)
+                if pd.isna(type_val) or str(type_val).strip() == "":
+                    df.at[idx, type_col] = 'Part Time'
+                    type_blank_fixes.append({
+                        'Employee ID': emp_ref,
+                        'Original Worker Category': '(blank)',
+                        'Corrected Value': 'Part Time'
+                    })
+
     if rows_to_drop:
         df.drop(list(set(rows_to_drop)), inplace=True)
         # We don't necessarily reset_index because it might mess up other references if they existed,
@@ -375,4 +398,5 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
         'dol_active_fixes': pd.DataFrame(dol_active_fixes),
         'dol_term_fixes': pd.DataFrame(dol_term_fixes),
         'invalid_date_fixes': pd.DataFrame(invalid_date_fixes),
+        'type_blank_fixes': pd.DataFrame(type_blank_fixes)
     }

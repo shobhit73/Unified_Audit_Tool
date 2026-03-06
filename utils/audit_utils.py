@@ -105,6 +105,7 @@ def validate_source_data(df_source, resolved_field_map):
     hard_errors = []
     flsa_corrections = []
     flsa_blanks = []
+    type_blanks = []
     intern_corrections = []
     email_fallbacks = []
     
@@ -138,17 +139,27 @@ def validate_source_data(df_source, resolved_field_map):
         # --- HARD STOP CHECKS ---
         missing = []
         
+        # 0. Blank SSN
+        ssn_col = resolved_field_map.get('SSN')
+        if ssn_col and ssn_col in df_source.columns:
+            ssn_val = row.get(ssn_col)
+            if pd.isna(ssn_val) or str(ssn_val).strip() == "":
+                missing.append("SSN (blank)")
+
         # 1. Blank Employment Status
         if status_col and status_col in df_source.columns:
             val = row.get(status_col)
             if pd.isna(val) or str(val).strip() == "":
                 missing.append("Employment Status")
         
-        # 2. Blank Employment Type
+        # 2. Blank Employment Type -> moved to soft warning
         if type_col and type_col in df_source.columns:
             val = row.get(type_col)
             if pd.isna(val) or str(val).strip() == "":
-                missing.append("Employment Type")
+                type_blanks.append({
+                    'Employee ID': emp_ref,
+                    'Original Employment Type': '(blank)'
+                })
         
         # 3. Blank Pay Type
         pay_val = ""
@@ -295,6 +306,7 @@ def validate_source_data(df_source, resolved_field_map):
         'hard_errors': pd.DataFrame(hard_errors),
         'flsa_corrections': pd.DataFrame(flsa_corrections),
         'flsa_blanks': pd.DataFrame(flsa_blanks),
+        'type_blanks': pd.DataFrame(type_blanks),
         'intern_corrections': pd.DataFrame(intern_corrections),
         'email_fallbacks': pd.DataFrame(email_fallbacks)
     }

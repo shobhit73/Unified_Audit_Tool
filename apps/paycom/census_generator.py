@@ -400,6 +400,11 @@ def render_ui():
                     f"**Fix Invalid Dates** — Blank out '00/00/0000' values ({fixable['invalid_date_count']} instance(s) affected)",
                     value=True, key="pc_fix_invalid_dates"
                 )
+            if fixable.get('type_blank_count', 0) > 0:
+                fix_type_blanks = st.checkbox(
+                    f"**Fix Blank Worker Category (Employment Type)** — Set to 'Part Time' ({fixable['type_blank_count']} employee(s) affected)",
+                    value=True, key="pc_fix_type_blanks"
+                )
 
         st.markdown("---")
         
@@ -413,6 +418,7 @@ def render_ui():
             'fix_blank_dol_active': fix_blank_dol_active if 'fix_blank_dol_active' in locals() else False,
             'fix_blank_dol_term': fix_blank_dol_term if 'fix_blank_dol_term' in locals() else False,
             'fix_invalid_dates': fix_invalid_dates if 'fix_invalid_dates' in locals() else False,
+            'fix_type_blanks': fix_type_blanks if 'fix_type_blanks' in locals() else False,
         }
         
         if any(fixes_to_apply.values()):
@@ -457,6 +463,10 @@ def render_ui():
             if 'invalid_date_fixes' in fixes and not fixes['invalid_date_fixes'].empty:
                 fix_count += len(fixes['invalid_date_fixes'])
                 success_messages.append(f"- **Invalid Dates Blanked:** {len(fixes['invalid_date_fixes'])} dates corrected")
+                
+            if 'type_blank_fixes' in fixes and not fixes['type_blank_fixes'].empty:
+                fix_count += len(fixes['type_blank_fixes'])
+                success_messages.append(f"- **Worker Category Auto-Fill:** {len(fixes['type_blank_fixes'])} employee(s) set to Part Time")
             
             if fix_count > 0:
                 msg = f"✅ **{fix_count} total fix(es) actively applied to the data!**\n\n" + "\n".join(success_messages)

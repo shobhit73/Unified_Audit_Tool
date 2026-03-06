@@ -224,7 +224,8 @@ def render_ui():
                        or fixable.get('temporary_status_count', 0) > 0
                        or fixable.get('blank_dol_active_count', 0) > 0
                        or fixable.get('blank_dol_term_count', 0) > 0
-                       or fixable.get('invalid_date_count', 0) > 0)
+                       or fixable.get('invalid_date_count', 0) > 0
+                       or fixable.get('type_blank_count', 0) > 0)
     
     if has_any_fixable:
         st.markdown("---")
@@ -240,6 +241,7 @@ def render_ui():
         fix_blank_dol_active = False
         fix_blank_dol_term = False
         fix_invalid_dates = False
+        fix_type_blanks = False
         
         if fixable['flsa_blank_count'] > 0:
             fix_flsa = st.checkbox(
@@ -290,6 +292,11 @@ def render_ui():
                 f"**Fix Invalid Dates** — Blank out '00/00/0000' values ({fixable['invalid_date_count']} instance(s) affected)",
                 value=True, key="adp_fix_invalid_dates"
             )
+        if fixable.get('type_blank_count', 0) > 0:
+            fix_type_blanks = st.checkbox(
+                f"**Fix Blank Worker Category (Employment Type)** — Set to 'Part Time' ({fixable['type_blank_count']} employee(s) affected)",
+                value=True, key="adp_fix_type_blanks"
+            )
 
         st.markdown("---")
         
@@ -302,7 +309,8 @@ def render_ui():
             'fix_temporary': fix_temporary,
             'fix_blank_dol_active': fix_blank_dol_active,
             'fix_blank_dol_term': fix_blank_dol_term,
-            'fix_invalid_dates': fix_invalid_dates
+            'fix_invalid_dates': fix_invalid_dates,
+            'fix_type_blanks': fix_type_blanks
         }
         
         if any(fixes_to_apply.values()):
@@ -347,11 +355,55 @@ def render_ui():
             if 'invalid_date_fixes' in fixes and not fixes['invalid_date_fixes'].empty:
                 fix_count += len(fixes['invalid_date_fixes'])
                 success_messages.append(f"- **Invalid Dates Blanked:** {len(fixes['invalid_date_fixes'])} dates corrected")
+                
+            if 'type_blank_fixes' in fixes and not fixes['type_blank_fixes'].empty:
+                fix_count += len(fixes['type_blank_fixes'])
+                success_messages.append(f"- **Worker Category Auto-Fill:** {len(fixes['type_blank_fixes'])} employee(s) set to Part Time")
             
             if fix_count > 0:
                 msg = f"✅ **{fix_count} total fix(es) actively applied to the data!**\n\n" + "\n".join(success_messages)
                 st.success(msg)
                 
+        # --- DSP OWNER DETECTION (ADP) ---
+        col_job_title = resolved_field_map.get('Job Title')
+        detected_dsp_id = None
+        detected_dsp_name = ""
+        
+        if col_job_title and col_job_title in df_adp.columns:
+            # Filter for rows where job title contains 'dsp owner'
+            # First, clean the text for matching
+            job_title_str = df_adp[col_job_title].astype(str).str.strip().str.lower()
+            dsp_mask = job_title_str.str.contains('dsp owner', na=False)
+            
+            valid_dsps = df_adp[dsp_mask]
+            
+            if not valid_dsps.empty:
+                # Take the first matched DSP Owner row
+                row_idx = valid_dsps.index[0]
+                emp_code_col = resolved_field_map.get('Employee ID')
+                
+                if emp_code_col and emp_code_col in df_adp.columns:
+                    emp_val = df_adp.at[row_idx, emp_code_col]
+                    if pd.notna(emp_val) and str(emp_val).strip() != "":
+                        detected_dsp_id = str(emp_val).strip()
+                
+                # Try to get their name
+                fn = df_adp.at[row_idx, resolved_field_map.get('First Name', '')] if resolved_field_map.get('First Name') in df_adp.columns else ''
+                ln = df_adp.at[row_idx, resolved_field_map.get('Last Name', '')] if resolved_field_map.get('Last Name') in df_adp.columns else ''
+                if pd.notna(fn) and pd.notna(ln):
+                    detected_dsp_name = f"{str(fn).strip()} {str(ln).strip()}".strip()
+
+        st.markdown("---")
+        
+        set_dsp_owner = False
+        if detected_dsp_id:
+            name_disp = f" ({detected_dsp_name})" if detected_dsp_name else ""
+            st.info(f"**DSP Owner Detected:** Employee **{detected_dsp_id}**{name_disp} was identified as the DSP Owner.")
+            set_dsp_owner = st.checkbox(
+                f"Automatically set Job Title to **'DSP Owner'** for Employee {detected_dsp_id} and move them to the **very top** of all generated files.",
+                value=True, key="adp_set_dsp_owner"
+            )
+
         # --- Optional Location Mapping (in Tab 1) ---
         src_loc_col_af = resolved_field_map.get('Work Location')
         unique_locs_af = []
@@ -394,6 +446,22 @@ def render_ui():
         st.markdown("You can download the partially cleaned source file containing all the fixes applied above.")
         
         df_download = df_adp.copy()
+        
+        # Move DSP owner to the top if requested
+        if set_dsp_owner and detected_dsp_id:
+            emp_id_col = resolved_field_map.get('Employee ID')
+            if emp_id_col and emp_id_col in df_download.columns:
+                df_dl_id_str = df_download[emp_id_col].astype(str).str.strip()
+                dsp_mask = df_dl_id_str == detected_dsp_id
+                if dsp_mask.any():
+                    # Set Job Title Definition for DSP Owner
+                    j_col = resolved_field_map.get('Job Title')
+                    if j_col and j_col in df_download.columns:
+                        df_download.loc[dsp_mask, j_col] = 'DSP Owner'
+                    dsp_rows = df_download[dsp_mask]
+                    other_rows = df_download[~dsp_mask]
+                    df_download = pd.concat([dsp_rows, other_rows], ignore_index=True)
+                    
         restored_cols = [norm_to_orig.get(c, c) for c in df_download.columns]
         df_download.columns = restored_cols
         
@@ -498,6 +566,17 @@ def render_ui():
                     loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
                     stripped_locs = df_adp[src_loc_col].astype(str).str.strip()
                     df_uzio['Work Location'] = stripped_locs.map(loc_dict).fillna(df_adp[src_loc_col])
+                    
+                # Setup DSP Owner at the top of the Uzio sheet
+                if set_dsp_owner and detected_dsp_id:
+                    # 'Employee ID' is Uzio column Name
+                    df_dl_id_str = df_uzio['Employee ID'].astype(str).str.strip()
+                    dsp_mask = df_dl_id_str == detected_dsp_id
+                    if dsp_mask.any():
+                        df_uzio.loc[dsp_mask, 'Job Title'] = 'DSP Owner'
+                        dsp_rows = df_uzio[dsp_mask]
+                        other_rows = df_uzio[~dsp_mask]
+                        df_uzio = pd.concat([dsp_rows, other_rows], ignore_index=True)
                 
                 # Validate Uzio Data
                 from utils.audit_utils import validate_uzio_data

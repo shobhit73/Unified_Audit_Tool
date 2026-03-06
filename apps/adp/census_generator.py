@@ -56,8 +56,77 @@ ALLOWED_JOB_TITLES = [
     'Recruiter', 'Office Personnel', 'Payroll Assistant', 'Finance', 
     'Dispatch', 'Management', 'Admin', 'Survey', 'Warehouse', 'Walker', 
     'Driver', 'Helper', 'Driver-Lite', 'Driver-Step Van', 
-    'Driver-Unscheduled', 'Lead Driver', 'DDU Dedicated', 'DDU Shared', 
     'Non-DSP Related', 'Driver -Major Appliance'
+]
+
+REQUIRED_ADP_COLUMNS = [
+    'Legal First Name (Personal Profile)',
+    'Legal Middle Name (Personal Profile)',
+    'Legal Last Name (Personal Profile)',
+    'Generation Suffix Code (Personal Profile)',
+    'Generation Suffix Description (Personal Profile)',
+    'Associate ID (Employment Profile)',
+    'Position ID (Employment Profile)',
+    'Birth Date (Personal Profile)',
+    'Tax ID (SSN) (Personal Profile)',
+    'Hire Date (Employment Profile)',
+    'Hire/Rehire Date (Employment Profile)',
+    'Termination Date (Employment Profile)',
+    'Termination Reason Code (Employment Profile)',
+    'Termination Reason Description (Employment Profile)',
+    'Tobacco User (Personal Profile)',
+    'Gender / Sex (Self-ID) (Personal Profile)',
+    'Marital Status Code (Personal Profile)',
+    'Marital Status Description (Personal Profile)',
+    'FLSA Description (Employment Profile)',
+    'FLSA Code (Employment Profile)',
+    'Worker category description (Employment Profile)',
+    'Annual Salary (Employment Profile - Pay Rates)',
+    'Job Title Description (Employment Profile)',
+    'Position Start Date (Employment Profile)',
+    'Reports To Associate ID (Employment Profile)',
+    'EEOC Job Classification (Employment Profile)',
+    'Race Description (Personal Profile)',
+    'Primary Address: Address Line 1 (Personal Profile)',
+    'Primary Address: Address Line 2 (Personal Profile)',
+    'Primary Address: Address Line 3 (Personal Profile)',
+    'Primary Address: City (Personal Profile)',
+    'Primary Address: Country Code (Personal Profile)',
+    'Primary Address: Country (Personal Profile)',
+    'Primary Address: County (Personal Profile)',
+    'Primary Address: State / Territory Code (Personal Profile)',
+    'Primary Address: State / Territory Description (Personal Profile)',
+    'Personal Contact: Personal Email (Personal Profile)',
+    'Protected Veteran Status (Statutory Compliance)',
+    'Disabled Veteran (Statutory Compliance)',
+    'Work Address: Address Line 1 (Personal Profile)',
+    'Work Address: Address Line 2 (Personal Profile)',
+    'Work Address: City (Personal Profile)',
+    'Work Address: State / Territory Code (Personal Profile)',
+    'Work Address: Zip / Postal Code (Personal Profile)',
+    'Location Description (Employment Profile)',
+    'SOC Code (Tax Withholdings)',
+    'SOC Description (Tax Withholdings)',
+    'Compensation Information',
+    'Pay Frequency (Employment Profile - Pay Rates)',
+    'Payroll Name (Personal Profile)',
+    'Standard Hours (Employment Profile - Pay Rates)',
+    '# of Dependents (Personal Profile)',
+    'Work Contact: Work Email (Personal Profile)',
+    'Regular Pay Rate Code (Employment Profile - Pay Rates)',
+    'Regular Pay Rate Description (Employment Profile - Pay Rates)',
+    'Regular Pay Rate',
+    'Position Status (Employment Profile)',
+    "NAICS Workers' Comp Code (Employment Profile)",
+    "NAICS Workers' Comp Description (Employment Profile)",
+    "NAICS Workers' Comp",
+    'Legal / Preferred Address: Address Line 1 (Personal Profile)',
+    'Legal / Preferred Address: Address Line 2 (Personal Profile)',
+    'Legal / Preferred Address: City (Personal Profile)',
+    'Legal / Preferred Address: Zip / Postal Code (Personal Profile)',
+    'Legal / Preferred Address: State / Territory Code (Personal Profile)',
+    'Pronouns (Personal Profile)',
+    'T-Shirt size (Personal Profile)'
 ]
 
 def norm_colname(c: str) -> str:
@@ -103,6 +172,23 @@ def render_ui():
     
     # Build mapping: normalized -> original (for restoring headers on download)
     norm_to_orig = dict(zip(df_adp.columns, original_columns))
+    
+    # --- CHECK: Required mandatory columns ---
+    missing_required = []
+    adp_cols_normalized = set(df_adp.columns)
+    
+    for req_col in REQUIRED_ADP_COLUMNS:
+        req_norm = norm_colname(req_col)
+        if req_norm not in adp_cols_normalized:
+            missing_required.append(req_col)
+            
+    if missing_required:
+        st.error(f"**⛔ Halting Process: {len(missing_required)} Mandatory Column(s) Missing!**")
+        st.markdown("Your uploaded ADP file is missing the following required standard columns:")
+        for mc in missing_required:
+            st.markdown(f"- `{mc}`")
+        st.info("Please correct your ADP reporting template to include these columns and upload the file again.")
+        return
     
     # Resolve field map
     resolved_field_map = {}

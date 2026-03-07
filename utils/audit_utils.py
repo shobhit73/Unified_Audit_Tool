@@ -204,17 +204,19 @@ def validate_source_data(df_source, resolved_field_map):
                 sal_val = row.get(salary_col)
                 if pd.isna(sal_val) or str(sal_val).strip() == "" or str(sal_val).strip() == "0":
                     missing.append("Annual Salary (required for Salaried)")
-            
-            # Additional Check: Salaried Driver Exception
+        
+        # 6b. Salaried Driver Exception — always check, irrespective of salary value
+        if pay_val and ("salary" in pay_val or "salaried" in pay_val):
             if job_title_col and job_title_col in df_source.columns:
-                jt_val = str(row.get(job_title_col)).strip().lower()
-                if pd.notna(jt_val) and jt_val != "":
+                jt_raw = row.get(job_title_col)
+                jt_val = str(jt_raw).strip().lower() if pd.notna(jt_raw) else ""
+                if jt_val and jt_val != "nan":
                     if jt_val == "driver" or jt_val == "lead driver" or jt_val.endswith("driver"):
-                        missing.append(f"Salaried Driver Exception (Job Title '{row.get(job_title_col)}' cannot be Salaried)")
+                        missing.append(f"Salaried Driver Exception (Job Title '{str(jt_raw).strip()}' cannot be Salaried — Uzio will force Hourly/Non-Exempt)")
                         salaried_drivers.append({
                             'Employee ID': emp_ref,
-                            'Job Title': str(row.get(job_title_col)).strip(),
-                            'Pay Type': str(row.get(pay_type_col)).strip()
+                            'Job Title': str(jt_raw).strip(),
+                            'Pay Type': str(row.get(pay_type_col, '')).strip()
                         })
         
         # 7. Blank Working Hours

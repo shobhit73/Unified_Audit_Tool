@@ -81,6 +81,33 @@ def norm_col(c):
     if c is None: return ""
     return str(c).strip().replace("\n", " ").strip()
 
+# --- Job Titles that Uzio ALWAYS treats as Hourly/Non-Exempt ---
+# Any salaried employee with one of these job titles must be flagged.
+HOURLY_ONLY_JOB_TITLES = {
+    "driver",
+    "lead driver",
+    "walker",
+    "helper",
+    "driver-lite",
+    "driver-step van",
+    "driver-unscheduled",
+    "ddu dedicated",
+    "ddu shared",
+    "delivery associate",
+    "delivery associates",
+    "driver -major appliance",
+}
+
+def is_hourly_only_job_title(jt_val: str) -> bool:
+    """Return True if this job title is always Hourly in Uzio."""
+    jt = jt_val.strip().lower()
+    if jt in HOURLY_ONLY_JOB_TITLES:
+        return True
+    # Also catch any title ending with 'driver' (e.g. 'amazon driver', 'flex driver')
+    if jt.endswith("driver"):
+        return True
+    return False
+
 def clean_money_val(x):
     """Parse money/percentage strings to float. Returns original string if not a number."""
     if pd.isna(x) or x == "":
@@ -205,14 +232,14 @@ def validate_source_data(df_source, resolved_field_map):
                 if pd.isna(sal_val) or str(sal_val).strip() == "" or str(sal_val).strip() == "0":
                     missing.append("Annual Salary (required for Salaried)")
         
-        # 6b. Salaried Driver Exception — always check, irrespective of salary value
+        # 6b. Salaried Hourly-Only Job Title Exception — always check, irrespective of salary value
         if pay_val and ("salary" in pay_val or "salaried" in pay_val):
             if job_title_col and job_title_col in df_source.columns:
                 jt_raw = row.get(job_title_col)
                 jt_val = str(jt_raw).strip().lower() if pd.notna(jt_raw) else ""
                 if jt_val and jt_val != "nan":
-                    if jt_val == "driver" or jt_val == "lead driver" or jt_val.endswith("driver"):
-                        missing.append(f"Salaried Driver Exception (Job Title '{str(jt_raw).strip()}' cannot be Salaried — Uzio will force Hourly/Non-Exempt)")
+                    if is_hourly_only_job_title(jt_val):
+                        missing.append(f"Salaried Hourly-Only Exception (Job Title '{str(jt_raw).strip()}' must be Hourly/Non-Exempt in Uzio)")
                         salaried_drivers.append({
                             'Employee ID': emp_ref,
                             'Job Title': str(jt_raw).strip(),

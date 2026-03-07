@@ -6,7 +6,10 @@ from datetime import datetime, date
 import numpy as np
 import pandas as pd
 import streamlit as st
-from utils.audit_utils import read_uzio_raw_file
+from utils.audit_utils import (
+    read_uzio_raw_file,
+    HOURLY_ONLY_JOB_TITLES, is_hourly_only_job_title
+)
 
 # =========================================================
 # Paycom vs UZIO – Census Audit Tool
@@ -638,9 +641,10 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         for idx_label, row in paycom.iterrows():
             pay_val = str(row[pc_pay_type_col]).strip().lower()
             if "salary" in pay_val or "salaried" in pay_val:
-                jt_val = str(row[pc_job_title_col]).strip().lower()
-                if pd.notna(jt_val) and jt_val != "":
-                    if jt_val == "driver" or jt_val == "lead driver" or jt_val.endswith("driver"):
+                jt_raw = row[pc_job_title_col]
+                jt_val = str(jt_raw).strip().lower() if pd.notna(jt_raw) else ""
+                if jt_val and jt_val != "nan":
+                    if is_hourly_only_job_title(jt_val):
                         emp_id = str(row[PAYCOM_KEY]).strip()
 
                         # --- Paycom values ---
@@ -665,8 +669,8 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
 
                         # --- Build smart Comment ---
                         comment_parts = [
-                            f"Paycom lists this employee as '{str(row[pc_job_title_col]).strip()}' with Pay Type '{pc_pay_type_val}'.",
-                            "Uzio cannot accept a Salaried Driver — drivers must be Hourly/Non-Exempt.",
+                            f"Paycom lists this employee as '{str(jt_raw).strip()}' with Pay Type '{pc_pay_type_val}'.",
+                            "Uzio requires this job title to be Hourly/Non-Exempt — a Salaried assignment will cause a conflict.",
                         ]
                         if uz_emp_status_val:
                             comment_parts.append(f"Uzio status: {uz_emp_status_val}.")

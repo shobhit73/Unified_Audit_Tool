@@ -503,7 +503,12 @@ def run_comparison(uzio_file, adp_file) -> bytes:
     salaried_drivers_audit = []
     adp_pay_type_col = norm_colname(ADP_FIELD_MAP.get('Pay Type', ''))
     adp_job_title_col = norm_colname(ADP_FIELD_MAP.get('Job Title', ''))
-    
+    adp_flsa_col = norm_colname(ADP_FIELD_MAP.get('FLSA Classification', ''))
+    adp_emp_status_col = norm_colname(ADP_FIELD_MAP.get('Employment Status', ''))
+    uzio_emp_status_col_str = 'Employment Status'
+    uzio_pay_type_col_str = 'Pay Type'
+    uzio_flsa_col_str = 'FLSA Classification'
+
     if adp_pay_type_col in adp_idx.columns and adp_job_title_col in adp_idx.columns:
         for emp_id, row in adp_idx.iterrows():
             pay_val = str(row[adp_pay_type_col]).strip().lower()
@@ -511,10 +516,55 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                 jt_val = str(row[adp_job_title_col]).strip().lower()
                 if pd.notna(jt_val) and jt_val != "":
                     if jt_val == "driver" or jt_val == "lead driver" or jt_val.endswith("driver"):
+                        # --- ADP values ---
+                        adp_pay_type_val = str(row[adp_pay_type_col]).strip()
+                        adp_emp_status_val = ""
+                        if adp_emp_status_col and adp_emp_status_col in adp_idx.columns:
+                            adp_emp_status_val = str(norm_blank(row.get(adp_emp_status_col, "")) or "").strip()
+                        adp_flsa_val = ""
+                        if adp_flsa_col and adp_flsa_col in adp_idx.columns:
+                            adp_flsa_val = str(norm_blank(row.get(adp_flsa_col, "")) or "").strip()
+
+                        # --- Uzio values ---
+                        uz_exists = emp_id in uzio_idx.index
+                        uz_pay_type_val = ""
+                        uz_emp_status_val = ""
+                        uz_flsa_val = ""
+                        if uz_exists:
+                            if uzio_pay_type_col_str in uzio_idx.columns:
+                                uz_pay_type_val = str(norm_blank(uzio_idx.at[emp_id, uzio_pay_type_col_str]) or "").strip()
+                            if uzio_emp_status_col_str in uzio_idx.columns:
+                                uz_emp_status_val = str(norm_blank(uzio_idx.at[emp_id, uzio_emp_status_col_str]) or "").strip()
+                            if uzio_flsa_col_str in uzio_idx.columns:
+                                uz_flsa_val = str(norm_blank(uzio_idx.at[emp_id, uzio_flsa_col_str]) or "").strip()
+
+                        # --- Build smart Comment ---
+                        comment_parts = [
+                            f"ADP lists this employee as '{str(row[adp_job_title_col]).strip()}' with Pay Type '{adp_pay_type_val}'.",
+                            "Uzio cannot accept a Salaried Driver — drivers must be Hourly/Non-Exempt.",
+                        ]
+                        if uz_emp_status_val:
+                            comment_parts.append(f"Uzio status: {uz_emp_status_val}.")
+                        if adp_emp_status_val:
+                            comment_parts.append(f"ADP status: {adp_emp_status_val}.")
+                        if uz_flsa_val:
+                            comment_parts.append(f"Uzio FLSA: {uz_flsa_val}.")
+                        if adp_flsa_val:
+                            comment_parts.append(f"ADP FLSA: {adp_flsa_val}.")
+                        if not uz_exists:
+                            comment_parts.append("Employee NOT found in Uzio — will need to be added as Hourly.")
+                        comment = " ".join(comment_parts)
+
                         salaried_drivers_audit.append({
                             'Employee ID': emp_id,
-                            'Job Title': str(row[adp_job_title_col]).strip(),
-                            'Pay Type': str(row[adp_pay_type_col]).strip()
+                            'Job Title (ADP)': str(row[adp_job_title_col]).strip(),
+                            'Pay Type (ADP)': adp_pay_type_val,
+                            'Pay Type (Uzio)': uz_pay_type_val if uz_pay_type_val else "Not in Uzio",
+                            'Employment Status (ADP)': adp_emp_status_val if adp_emp_status_val else "Blank",
+                            'Employment Status (Uzio)': uz_emp_status_val if uz_emp_status_val else "Not in Uzio" if not uz_exists else "Blank",
+                            'FLSA Classification (ADP)': adp_flsa_val if adp_flsa_val else "Blank",
+                            'FLSA Classification (Uzio)': uz_flsa_val if uz_flsa_val else "Blank" if uz_exists else "Not in Uzio",
+                            'Comment': comment
                         })
     df_salaried_drivers = pd.DataFrame(salaried_drivers_audit)
     # We check if the mapped ADP column exists in adp df

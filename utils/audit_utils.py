@@ -115,6 +115,7 @@ def validate_source_data(df_source, resolved_field_map):
     type_col = resolved_field_map.get('Employment Type')
     pay_type_col = resolved_field_map.get('Pay Type')
     job_title_col = resolved_field_map.get('Job Title')
+    location_col = resolved_field_map.get('Work Location')
     zip_col = resolved_field_map.get('Zip')
     salary_col = resolved_field_map.get('Annual Salary')
     flsa_col = resolved_field_map.get('FLSA Classification')
@@ -152,10 +153,11 @@ def validate_source_data(df_source, resolved_field_map):
             if pd.isna(val) or str(val).strip() == "":
                 missing.append("Employment Status")
         
-        # 2. Blank Employment Type -> moved to soft warning
+        # 2. Blank Employment Type -> Added to hard errors as per user request
         if type_col and type_col in df_source.columns:
             val = row.get(type_col)
             if pd.isna(val) or str(val).strip() == "":
+                missing.append("Employment Type")
                 type_blanks.append({
                     'Employee ID': emp_ref,
                     'Original Employment Type': '(blank)'
@@ -176,6 +178,12 @@ def validate_source_data(df_source, resolved_field_map):
             val = row.get(job_title_col)
             if pd.isna(val) or str(val).strip() == "":
                 missing.append("Job Title")
+                
+        # 4b. Blank Work Location
+        if location_col and location_col in df_source.columns:
+            val = row.get(location_col)
+            if pd.isna(val) or str(val).strip() == "":
+                missing.append("Work Location")
         
         # 5. Invalid Zip Code (must be 5 digits)
         if zip_col and zip_col in df_source.columns:

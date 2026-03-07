@@ -691,4 +691,8 @@ def render_ui():
                         mime="application/vnd.ms-excel.sheet.macroEnabled.12"
                     )
                 except Exception as e:
-                    st.error(f"Error generating template: {e}")
+                    import traceback
+                    error_traceback = traceback.format_exc()
+                    st.error(f"**Error generating template:** {e}")
+                    with st.expander("View Detailed Error Log (Traceback)", expanded=False):
+                        st.code(error_traceback, language="python")

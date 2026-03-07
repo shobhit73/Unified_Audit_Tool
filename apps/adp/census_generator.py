@@ -159,175 +159,179 @@ def render_ui():
     if not reports_col or reports_col not in df_adp.columns:
         st.warning("**Reports To Associate ID column not found** in the source file. This field will be blank in the output.")
     
-    # --- PRE-GENERATION SANITY CHECKS ---
-    from utils.audit_utils import validate_source_data
-    validation = validate_source_data(df_adp, resolved_field_map)
+    # --- UI TABS (MATCHING PAYCOM) ---
+    tab_sanity, tab_gen = st.tabs(['🩺 Sanity Check & Auto-Fix', '⚙️ Uzio Template Generator'])
     
-    hard_errors = validation['hard_errors']
-    flsa_corrections = validation['flsa_corrections']
-    flsa_blanks = validation['flsa_blanks']
-    intern_corrections = validation['intern_corrections']
-    email_fallbacks = validation['email_fallbacks']
-    
-    # Show soft warnings first (non-blocking)
-    has_soft_warnings = not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty
-    if has_soft_warnings:
-        with st.expander("System Auto-Corrections & Minor Warnings", expanded=False):
-            if not flsa_corrections.empty:
-                st.markdown(f"- ℹ️ **FLSA Auto-Corrections:** {len(flsa_corrections)} employee(s) had mismatched FLSA classifications. These have been auto-corrected.")
-            if not flsa_blanks.empty:
-                st.markdown(f"- ⚠️ **Blank FLSA Classification:** {len(flsa_blanks)} employee(s) have a Pay Type set but FLSA Classification is blank.")
-            if not intern_corrections.empty:
-                st.markdown(f"- ⚠️ **Intern → Part Time:** {len(intern_corrections)} employee(s) had 'Intern' as Worker Category. Changed to **Part Time**.")
-            if not email_fallbacks.empty:
-                st.markdown(f"- ℹ️ **Email Fallback:** {len(email_fallbacks)} employee(s) had blank Work Email. Personal Email was used instead.")
-    
-    # Show hard errors (non-blocking — user can still proceed)
-    if not hard_errors.empty:
-        st.error(f"**⛔ {len(hard_errors)} Critical Error(s) Found in Source Data!** You can fix these manually, use Auto-Fix below, or proceed as-is.")
+    with tab_sanity:
+        # --- PRE-GENERATION SANITY CHECKS ---
+        from utils.audit_utils import validate_source_data
+        validation = validate_source_data(df_adp, resolved_field_map)
         
-        # --- Summary breakdown by issue type ---
-        all_issues = []
-        for issues_str in hard_errors['Issue']:
-            for issue in str(issues_str).split(", "):
-                import re
-                clean = re.sub(r"\s*\(.*?\)", "", issue).strip()
-                if clean:
-                    all_issues.append(clean)
+        hard_errors = validation['hard_errors']
+        flsa_corrections = validation['flsa_corrections']
+        flsa_blanks = validation['flsa_blanks']
+        intern_corrections = validation['intern_corrections']
+        email_fallbacks = validation['email_fallbacks']
         
-        from collections import Counter
-        issue_counts = Counter(all_issues)
+        # Show soft warnings first (non-blocking)
+        has_soft_warnings = not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty
+        if has_soft_warnings:
+            with st.expander("System Auto-Corrections & Minor Warnings", expanded=False):
+                if not flsa_corrections.empty:
+                    st.markdown(f"- ℹ️ **FLSA Auto-Corrections:** {len(flsa_corrections)} employee(s) had mismatched FLSA classifications. These have been auto-corrected.")
+                if not flsa_blanks.empty:
+                    st.markdown(f"- ⚠️ **Blank FLSA Classification:** {len(flsa_blanks)} employee(s) have a Pay Type set but FLSA Classification is blank.")
+                if not intern_corrections.empty:
+                    st.markdown(f"- ⚠️ **Intern → Part Time:** {len(intern_corrections)} employee(s) had 'Intern' as Worker Category. Changed to **Part Time**.")
+                if not email_fallbacks.empty:
+                    st.markdown(f"- ℹ️ **Email Fallback:** {len(email_fallbacks)} employee(s) had blank Work Email. Personal Email was used instead.")
         
-        st.markdown("**Summary:**")
-        for issue, count in issue_counts.most_common():
-            st.markdown(f"- **{count}** employee(s): {issue}")
-        
-        # Full details in expander
-        with st.expander(f"View All {len(hard_errors)} Error Details", expanded=False):
-            st.dataframe(hard_errors, hide_index=True, use_container_width=True)
-        
-        err_csv = io.BytesIO()
-        hard_errors.to_csv(err_csv, index=False)
-        err_csv.seek(0)
-        st.download_button(
-            label="Download Error Report (CSV)",
-            data=err_csv.getvalue(),
-            file_name=f"Source_Validation_Errors_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
-            mime="text/csv",
-            key="adp_hard_err_dl"
-        )
-    else:
-        st.success("✅ Source data passed all sanity checks!")
-    
-    # --- AUTO-FIX OPTIONS (always shown, checkbox-based) ---
-    from utils.preprocess_source_data import detect_fixable_issues, apply_auto_fixes
-    fixable = detect_fixable_issues(df_adp, resolved_field_map)
-    
-    has_any_fixable = (fixable['flsa_blank_count'] > 0 or fixable['email_blank_count'] > 0 
-                       or fixable['zip_fixable_count'] > 0 or fixable['hours_blank_count'] > 0
-                       or fixable.get('inactive_status_count', 0) > 0
-                       or fixable.get('temporary_status_count', 0) > 0
-                       or fixable.get('blank_dol_active_count', 0) > 0
-                       or fixable.get('blank_dol_term_count', 0) > 0
-                       or fixable.get('invalid_date_count', 0) > 0
-                       or fixable.get('type_blank_count', 0) > 0)
-    
-    if has_any_fixable:
-        st.markdown("---")
-        st.markdown("### 🔧 Auto-Fix Options")
-        st.markdown("Select which issues you'd like the tool to fix automatically:")
-        
-        fix_flsa = False
-        fix_email = False
-        fix_zip = False
-        fix_hours = False
-        fix_inactive = False
-        fix_temporary = False
-        fix_blank_dol_active = False
-        fix_blank_dol_term = False
-        fix_invalid_dates = False
-        fix_type_blanks = False
-        
-        if fixable['flsa_blank_count'] > 0:
-            fix_flsa = st.checkbox(
-                f"**Fix Blank FLSA Classification** — Set based on Pay Type ({fixable['flsa_blank_count']} employee(s) affected)",
-                value=True, key="adp_fix_flsa"
-            )
-        
-        if fixable['email_blank_count'] > 0:
-            fix_email = st.checkbox(
-                f"**Fix Blank Work Email** — Use Personal Email as fallback ({fixable['email_blank_count']} employee(s) affected)",
-                value=True, key="adp_fix_email"
-            )
-        
-        if fixable['zip_fixable_count'] > 0:
-            fix_zip = st.checkbox(
-                f"**Fix Zip Code Issues** — Strip extra characters after dash or dot ({fixable['zip_fixable_count']} employee(s) affected)",
-                value=True, key="adp_fix_zip"
-            )
-        
-        if fixable['hours_blank_count'] > 0:
-            label = f"**Fix Blank Working Hours** — Set to 0 ({fixable['hours_blank_count']} employee(s) affected)"
-            if fixable['hours_col_missing']:
-                label = f"**Fix Missing Working Hours Column** — Add column with 0 values ({fixable['hours_blank_count']} employee(s) affected)"
-            fix_hours = st.checkbox(label, value=True, key="adp_fix_hours")
+        # Show hard errors (non-blocking — user can still proceed)
+        if not hard_errors.empty:
+            st.error(f"**⛔ {len(hard_errors)} Critical Error(s) Found in Source Data!** You can fix these manually, use Auto-Fix below, or proceed as-is.")
             
-        if fixable.get('inactive_status_count', 0) > 0:
-            fix_inactive = st.checkbox(
-                f"**Fix 'Inactive' Employee Status** — Change to 'Terminated' ({fixable['inactive_status_count']} employee(s) affected)",
-                value=True, key="adp_fix_inactive"
-            )
-        if fixable.get('temporary_status_count', 0) > 0:
-            fix_temporary = st.checkbox(
-                f"**Fix 'Temporary' Employee Status** — Change to 'Seasonal' ({fixable['temporary_status_count']} employee(s) affected)",
-                value=True, key="adp_fix_temporary"
-            )
-        if fixable.get('blank_dol_active_count', 0) > 0:
-            fix_blank_dol_active = st.checkbox(
-                f"**Fix Blank 'DOL_Status'** — Set to 'Full-Time' for Active employees ({fixable['blank_dol_active_count']} employee(s) affected)",
-                value=True, key="adp_fix_blank_dol_active"
-            )
-        if fixable.get('blank_dol_term_count', 0) > 0:
-            fix_blank_dol_term = st.checkbox(
-                f"**Fix Blank 'DOL_Status'** — Delete Row for Terminated employees ({fixable['blank_dol_term_count']} employee(s) affected)",
-                value=True, key="adp_fix_blank_dol_term"
-            )
-        if fixable.get('invalid_date_count', 0) > 0:
-            fix_invalid_dates = st.checkbox(
-                f"**Fix Invalid Dates** — Blank out '00/00/0000' values ({fixable['invalid_date_count']} instance(s) affected)",
-                value=True, key="adp_fix_invalid_dates"
-            )
-        if fixable.get('type_blank_count', 0) > 0:
-            fix_type_blanks = st.checkbox(
-                f"**Fix Blank Worker Category (Employment Type)** — Set to 'Part Time' ({fixable['type_blank_count']} employee(s) affected)",
-                value=True, key="adp_fix_type_blanks"
-            )
-
-        st.markdown("---")
-        
-        fixes_to_apply = {
-            'fix_flsa': fix_flsa,
-            'fix_email': fix_email,
-            'fix_zip': fix_zip,
-            'fix_hours': fix_hours,
-            'fix_inactive': fix_inactive,
-            'fix_temporary': fix_temporary,
-            'fix_blank_dol_active': fix_blank_dol_active,
-            'fix_blank_dol_term': fix_blank_dol_term,
-            'fix_invalid_dates': fix_invalid_dates,
-            'fix_type_blanks': fix_type_blanks
-        }
-        
-        if any(fixes_to_apply.values()):
-            fixes = apply_auto_fixes(df_adp, resolved_field_map, fixes_to_apply)
+            # --- Summary breakdown by issue type ---
+            all_issues = []
+            for issues_str in hard_errors['Issue']:
+                for issue in str(issues_str).split(", "):
+                    import re
+                    clean = re.sub(r"\s*\(.*?\)", "", issue).strip()
+                    if clean:
+                        all_issues.append(clean)
             
-            # Display what was fixed
-            fix_count = 0
-            success_messages = []
+            from collections import Counter
+            issue_counts = Counter(all_issues)
             
-            if not fixes['flsa_fills'].empty:
-                fix_count += len(fixes['flsa_fills'])
-                success_messages.append(f"- **FLSA Auto-Fill:** {len(fixes['flsa_fills'])} employee(s)")
+            st.markdown("**Summary:**")
+            for issue, count in issue_counts.most_common():
+                st.markdown(f"- **{count}** employee(s): {issue}")
+            
+            # Full details in expander
+            with st.expander(f"View All {len(hard_errors)} Error Details", expanded=False):
+                st.dataframe(hard_errors, hide_index=True, use_container_width=True)
+            
+            err_csv = io.BytesIO()
+            hard_errors.to_csv(err_csv, index=False)
+            err_csv.seek(0)
+            st.download_button(
+                label="Download Error Report (CSV)",
+                data=err_csv.getvalue(),
+                file_name=f"Source_Validation_Errors_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                key="adp_hard_err_dl"
+            )
+        else:
+            st.success("✅ Source data passed all sanity checks!")
+    
+        # --- AUTO-FIX OPTIONS (always shown, checkbox-based) ---
+        from utils.preprocess_source_data import detect_fixable_issues, apply_auto_fixes
+        fixable = detect_fixable_issues(df_adp, resolved_field_map)
+        
+        has_any_fixable = (fixable['flsa_blank_count'] > 0 or fixable['email_blank_count'] > 0 
+                           or fixable['zip_fixable_count'] > 0 or fixable['hours_blank_count'] > 0
+                           or fixable.get('inactive_status_count', 0) > 0
+                           or fixable.get('temporary_status_count', 0) > 0
+                           or fixable.get('blank_dol_active_count', 0) > 0
+                           or fixable.get('blank_dol_term_count', 0) > 0
+                           or fixable.get('invalid_date_count', 0) > 0
+                           or fixable.get('type_blank_count', 0) > 0)
+        
+        if has_any_fixable:
+            st.markdown("---")
+            st.markdown("### 🔧 Auto-Fix Options")
+            st.markdown("Select which issues you'd like the tool to fix automatically:")
+            
+            fix_flsa = False
+            fix_email = False
+            fix_zip = False
+            fix_hours = False
+            fix_inactive = False
+            fix_temporary = False
+            fix_blank_dol_active = False
+            fix_blank_dol_term = False
+            fix_invalid_dates = False
+            fix_type_blanks = False
+            
+            if fixable['flsa_blank_count'] > 0:
+                fix_flsa = st.checkbox(
+                    f"**Fix Blank FLSA Classification** — Set based on Pay Type ({fixable['flsa_blank_count']} employee(s) affected)",
+                    value=True, key="adp_fix_flsa"
+                )
+            
+            if fixable['email_blank_count'] > 0:
+                fix_email = st.checkbox(
+                    f"**Fix Blank Work Email** — Use Personal Email as fallback ({fixable['email_blank_count']} employee(s) affected)",
+                    value=True, key="adp_fix_email"
+                )
+            
+            if fixable['zip_fixable_count'] > 0:
+                fix_zip = st.checkbox(
+                    f"**Fix Zip Code Issues** — Strip extra characters after dash or dot ({fixable['zip_fixable_count']} employee(s) affected)",
+                    value=True, key="adp_fix_zip"
+                )
+            
+            if fixable['hours_blank_count'] > 0:
+                label = f"**Fix Blank Working Hours** — Set to 0 ({fixable['hours_blank_count']} employee(s) affected)"
+                if fixable['hours_col_missing']:
+                    label = f"**Fix Missing Working Hours Column** — Add column with 0 values ({fixable['hours_blank_count']} employee(s) affected)"
+                fix_hours = st.checkbox(label, value=True, key="adp_fix_hours")
+                
+            if fixable.get('inactive_status_count', 0) > 0:
+                fix_inactive = st.checkbox(
+                    f"**Fix 'Inactive' Employee Status** — Change to 'Terminated' ({fixable['inactive_status_count']} employee(s) affected)",
+                    value=True, key="adp_fix_inactive"
+                )
+            if fixable.get('temporary_status_count', 0) > 0:
+                fix_temporary = st.checkbox(
+                    f"**Fix 'Temporary' Employee Status** — Change to 'Seasonal' ({fixable['temporary_status_count']} employee(s) affected)",
+                    value=True, key="adp_fix_temporary"
+                )
+            if fixable.get('blank_dol_active_count', 0) > 0:
+                fix_blank_dol_active = st.checkbox(
+                    f"**Fix Blank 'DOL_Status'** — Set to 'Full-Time' for Active employees ({fixable['blank_dol_active_count']} employee(s) affected)",
+                    value=True, key="adp_fix_blank_dol_active"
+                )
+            if fixable.get('blank_dol_term_count', 0) > 0:
+                fix_blank_dol_term = st.checkbox(
+                    f"**Fix Blank 'DOL_Status'** — Delete Row for Terminated employees ({fixable['blank_dol_term_count']} employee(s) affected)",
+                    value=True, key="adp_fix_blank_dol_term"
+                )
+            if fixable.get('invalid_date_count', 0) > 0:
+                fix_invalid_dates = st.checkbox(
+                    f"**Fix Invalid Dates** — Blank out '00/00/0000' values ({fixable['invalid_date_count']} instance(s) affected)",
+                    value=True, key="adp_fix_invalid_dates"
+                )
+            if fixable.get('type_blank_count', 0) > 0:
+                fix_type_blanks = st.checkbox(
+                    f"**Fix Blank Worker Category (Employment Type)** — Set to 'Part Time' ({fixable['type_blank_count']} employee(s) affected)",
+                    value=True, key="adp_fix_type_blanks"
+                )
+    
+            st.markdown("---")
+        
+            fixes_to_apply = {
+                'fix_flsa': fix_flsa,
+                'fix_email': fix_email,
+                'fix_zip': fix_zip,
+                'fix_hours': fix_hours,
+                'fix_inactive': fix_inactive,
+                'fix_temporary': fix_temporary,
+                'fix_blank_dol_active': fix_blank_dol_active,
+                'fix_blank_dol_term': fix_blank_dol_term,
+                'fix_invalid_dates': fix_invalid_dates,
+                'fix_type_blanks': fix_type_blanks
+            }
+            
+            if any(fixes_to_apply.values()):
+                fixes = apply_auto_fixes(df_adp, resolved_field_map, fixes_to_apply)
+                
+                # Display what was fixed
+                fix_count = 0
+                success_messages = []
+                
+                if not fixes['flsa_fills'].empty:
+                    fix_count += len(fixes['flsa_fills'])
+                    success_messages.append(f"- **FLSA Auto-Fill:** {len(fixes['flsa_fills'])} employee(s)")
             
             if not fixes['email_fallbacks'].empty:
                 fix_count += len(fixes['email_fallbacks'])
@@ -375,7 +379,7 @@ def render_ui():
             # Maybe it wasn't mapped, try to find 'Reports To Associate ID' directly as a fallback
             if 'Reports To Associate ID' in df_adp.columns:
                 col_sup_code = 'Reports To Associate ID'
-
+    
         detected_dsp_id = None
         detected_dsp_name = ""
         
@@ -396,7 +400,7 @@ def render_ui():
                             ln = match.iloc[0].get(resolved_field_map.get('Last Name'), '')
                             if pd.notna(fn) and pd.notna(ln):
                                 detected_dsp_name = f"{str(fn).strip()} {str(ln).strip()}".strip()
-
+    
         st.markdown("---")
         
         set_dsp_owner = False
@@ -407,23 +411,23 @@ def render_ui():
                 f"Automatically set Job Title to **'DSP Owner'** for Employee {detected_dsp_id} and move them to the **very top** of all generated files.",
                 value=True, key="adp_set_dsp_owner"
             )
-
+    
         # --- Optional Location Mapping (in Tab 1) ---
         src_loc_col_af = resolved_field_map.get('Work Location')
         unique_locs_af = []
         if src_loc_col_af and src_loc_col_af in df_adp.columns:
             unique_locs_af = sorted([str(l).strip() for l in df_adp[src_loc_col_af].dropna().unique() if str(l).strip()])
-
+    
         fix_loc_mapping = False
         edited_locs_af = None
-
+    
         if unique_locs_af:
             st.markdown("---")
             fix_loc_mapping = st.checkbox(
                 f"**Map Work Locations (Optional)** — Map {len(unique_locs_af)} unique Work Location(s) directly in the source data",
                 value=False, key="adp_fix_locs"
             )
-
+    
         if fix_loc_mapping:
             df_loc_map_af = pd.DataFrame({"Source Work Location": unique_locs_af, "Mapped Work Location": pd.Series([""]*len(unique_locs_af), dtype=str)})
             edited_locs_af = st.data_editor(
@@ -493,128 +497,135 @@ def render_ui():
                 key="adp_corrected_xlsx_dl"
             )
     
-    # --- STEP 2: Interactive UI Mapping (persists across reruns) ---
-    st.markdown("---")
-    st.markdown("### Step 2: Map Data to Uzio Format")
-    st.markdown("Please map the unique Job Titles and Work Locations found in your source file to the acceptable Uzio formats.")
-    
-    src_job_col = resolved_field_map.get('Job Title')
-    src_loc_col = resolved_field_map.get('Work Location')
-    
-    # Extract unique Jobs
-    unique_jobs = []
-    if src_job_col and src_job_col in df_adp.columns:
-        unique_jobs = sorted([str(j).strip() for j in df_adp[src_job_col].dropna().unique() if str(j).strip()])
+    with tab_gen:
+        # --- STEP 2: Interactive UI Mapping (persists across reruns) ---
+        st.markdown("---")
+        st.markdown("### Step 2: Map Data to Uzio Format")
+        st.markdown("Please map the unique Job Titles and Work Locations found in your source file to the acceptable Uzio formats.")
         
-    # Extract unique Locations
-    unique_locs = []
-    if src_loc_col and src_loc_col in df_adp.columns:
-        unique_locs = sorted([str(l).strip() for l in df_adp[src_loc_col].dropna().unique() if str(l).strip()])
+        src_job_col = resolved_field_map.get('Job Title')
+        src_loc_col = resolved_field_map.get('Work Location')
         
-    # Create mapping dataframes for the editor
-    df_job_map = pd.DataFrame({"Source Job Title": unique_jobs, "Mapped Uzio Job Title": pd.Series([None]*len(unique_jobs), dtype="object")})
-    df_loc_map = pd.DataFrame({"Source Work Location": unique_locs, "Mapped Uzio Work Location": pd.Series([""]*len(unique_locs), dtype=str)})
-
-    col1, col2 = st.columns(2)
+        # Extract unique Jobs
+        unique_jobs = []
+        if src_job_col and src_job_col in df_adp.columns:
+            unique_jobs = sorted([str(j).strip() for j in df_adp[src_job_col].dropna().unique() if str(j).strip()])
+            
+        # Extract unique Locations
+        unique_locs = []
+        if src_loc_col and src_loc_col in df_adp.columns:
+            unique_locs = sorted([str(l).strip() for l in df_adp[src_loc_col].dropna().unique() if str(l).strip()])
+            
+        # Create mapping dataframes for the editor
+        df_job_map = pd.DataFrame({"Source Job Title": unique_jobs, "Mapped Uzio Job Title": pd.Series([None]*len(unique_jobs), dtype="object")})
+        df_loc_map = pd.DataFrame({"Source Work Location": unique_locs, "Mapped Uzio Work Location": pd.Series([""]*len(unique_locs), dtype=str)})
     
-    with col1:
-        st.write("**Job Title Mapping**")
-        edited_jobs = st.data_editor(
-            df_job_map, 
-            column_config={
-                "Source Job Title": st.column_config.Column(disabled=True),
-                "Mapped Uzio Job Title": st.column_config.SelectboxColumn("Select Uzio Role", options=ALLOWED_JOB_TITLES, required=True)
-            },
-            hide_index=True,
-            use_container_width=True,
-            key="adp_job_editor"
-        )
-    
-    with col2:
-        st.write("**Work Location Mapping**")
-        edited_locs = st.data_editor(
-            df_loc_map,
-            column_config={
-                "Source Work Location": st.column_config.Column(disabled=True),
-                "Mapped Uzio Work Location": st.column_config.TextColumn("Enter Uzio Location", required=True)
-            },
-            hide_index=True,
-            use_container_width=True,
-            key="adp_loc_editor"
-        )
-    
-    # Check if mapping is completely filled out
-    job_map_complete = not edited_jobs['Mapped Uzio Job Title'].isna().any() if not edited_jobs.empty else True
-    loc_map_complete = not edited_locs['Mapped Uzio Work Location'].isna().any() and not (edited_locs['Mapped Uzio Work Location'] == "").any() if not edited_locs.empty else True
-    
-    if not job_map_complete or not loc_map_complete:
-        st.warning("Please fill out all mappings in the tables above before generating the template.")
-        return
-    
-    # --- STEP 3: Generate Template (only on button click) ---
-    st.markdown("---")
-    if st.button("Generate Uzio Template", type="primary", key="adp_gen_btn"):
-        with st.spinner("Generating..."):
-            try:
-                # Generate Uzio Template
-                df_uzio = generate_uzio_template(df_adp, resolved_field_map)
-                
-                # Apply Job Title Mapping
-                if src_job_col and src_job_col in df_adp.columns:
-                    job_dict = dict(zip(edited_jobs['Source Job Title'], edited_jobs['Mapped Uzio Job Title']))
-                    stripped_jobs = df_adp[src_job_col].astype(str).str.strip()
-                    df_uzio['Job Title'] = stripped_jobs.map(job_dict).fillna(df_adp[src_job_col])
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("**Job Title Mapping**")
+            edited_jobs = st.data_editor(
+                df_job_map, 
+                column_config={
+                    "Source Job Title": st.column_config.Column(disabled=True),
+                    "Mapped Uzio Job Title": st.column_config.SelectboxColumn("Select Uzio Role", options=ALLOWED_JOB_TITLES, required=True)
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="adp_job_editor"
+            )
+        
+        with col2:
+            st.write("**Work Location Mapping**")
+            edited_locs = st.data_editor(
+                df_loc_map,
+                column_config={
+                    "Source Work Location": st.column_config.Column(disabled=True),
+                    "Mapped Uzio Work Location": st.column_config.TextColumn("Enter Uzio Location", required=True)
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="adp_loc_editor"
+            )
+        
+        # Check if mapping is completely filled out
+        job_map_complete = not edited_jobs['Mapped Uzio Job Title'].isna().any() if not edited_jobs.empty else True
+        loc_map_complete = not edited_locs['Mapped Uzio Work Location'].isna().any() and not (edited_locs['Mapped Uzio Work Location'] == "").any() if not edited_locs.empty else True
+        
+        if not job_map_complete or not loc_map_complete:
+            st.warning("Please fill out all mappings in the tables above before generating the template.")
+            return
+        
+        # --- STEP 3: Generate Template (only on button click) ---
+        st.markdown("---")
+        if st.button("Generate Uzio Template", type="primary", key="adp_gen_btn"):
+            with st.spinner("Generating..."):
+                try:
+                    # Generate Uzio Template
+                    df_uzio = generate_uzio_template(df_adp, resolved_field_map)
                     
-                # Apply Work Location Mapping
-                if src_loc_col and src_loc_col in df_adp.columns:
-                    loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
-                    stripped_locs = df_adp[src_loc_col].astype(str).str.strip()
-                    df_uzio['Work Location'] = stripped_locs.map(loc_dict).fillna(df_adp[src_loc_col])
+                    # Apply Job Title Mapping
+                    if src_job_col and src_job_col in df_adp.columns:
+                        job_dict = dict(zip(edited_jobs['Source Job Title'], edited_jobs['Mapped Uzio Job Title']))
+                        stripped_jobs = df_adp[src_job_col].astype(str).str.strip()
+                        df_uzio['Job Title'] = stripped_jobs.map(job_dict).fillna(df_adp[src_job_col])
+                        
+                    # Apply Work Location Mapping
+                    if src_loc_col and src_loc_col in df_adp.columns:
+                        loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
+                        stripped_locs = df_adp[src_loc_col].astype(str).str.strip()
+                        df_uzio['Work Location'] = stripped_locs.map(loc_dict).fillna(df_adp[src_loc_col])
+                        
+                    # Setup DSP Owner at the top of the Uzio sheet
+                    if set_dsp_owner and detected_dsp_id:
+                        # 'Employee ID' is Uzio column Name
+                        df_dl_id_str = df_uzio['Employee ID'].astype(str).str.strip()
+                        dsp_mask = df_dl_id_str == detected_dsp_id
+                        if dsp_mask.any():
+                            df_uzio.loc[dsp_mask, 'Job Title'] = 'DSP Owner'
+                            dsp_rows = df_uzio[dsp_mask]
+                            other_rows = df_uzio[~dsp_mask]
+                            df_uzio = pd.concat([dsp_rows, other_rows], ignore_index=True)
                     
-                # Setup DSP Owner at the top of the Uzio sheet
-                if set_dsp_owner and detected_dsp_id:
-                    # 'Employee ID' is Uzio column Name
-                    df_dl_id_str = df_uzio['Employee ID'].astype(str).str.strip()
-                    dsp_mask = df_dl_id_str == detected_dsp_id
-                    if dsp_mask.any():
-                        df_uzio.loc[dsp_mask, 'Job Title'] = 'DSP Owner'
-                        dsp_rows = df_uzio[dsp_mask]
-                        other_rows = df_uzio[~dsp_mask]
-                        df_uzio = pd.concat([dsp_rows, other_rows], ignore_index=True)
-                
-                # Validate Uzio Data
-                from utils.audit_utils import validate_uzio_data
-                df_errors = validate_uzio_data(df_uzio)
-                
-                if not df_errors.empty:
-                    st.warning("Some mandatory fields are blank or missing in the generated census. Please download the Validation Errors report.")
-                    err_out = io.BytesIO()
-                    df_errors.to_csv(err_out, index=False)
-                    err_out.seek(0)
+                    # Validate Uzio Data
+                    from utils.audit_utils import validate_uzio_data
+                    df_errors = validate_uzio_data(df_uzio)
+                    
+                    if not df_errors.empty:
+                        st.warning("Some mandatory fields are blank or missing in the generated census. Please download the Validation Errors report.")
+                        err_out = io.BytesIO()
+                        df_errors.to_csv(err_out, index=False)
+                        err_out.seek(0)
+                        
+                        st.download_button(
+                            label="Download Validation Errors (CSV)",
+                            data=err_out.getvalue(),
+                            file_name=f"Validation_Errors_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+                            mime="text/csv"
+                        )
+    
+                    # Inject into formatted template
+                    template_path = "templates/Uzio_Census_Template.xlsm"
+                    wb = inject_into_uzio_template(df_uzio, template_path)
+                    
+                    # Save to BytesIO for download
+                    output = io.BytesIO()
+                    wb.save(output)
+                    output.seek(0)
+                    
+                    st.success("✅ Template generated successfully!")
                     
                     st.download_button(
-                        label="Download Validation Errors (CSV)",
-                        data=err_out.getvalue(),
-                        file_name=f"Validation_Errors_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
-                        mime="text/csv"
+                        label="📥 Download Generated Uzio Census",
+                        data=output.getvalue(),
+                        file_name=f"Uzio_Census_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsm",
+                        mime="application/vnd.ms-excel.sheet.macroEnabled.12",
+                        key="adp_final_dl"
                     )
-                
-                # Inject into the Master Template
-                from utils.audit_utils import inject_into_uzio_template
-                wb = inject_into_uzio_template(df_uzio, template_path="templates/Uzio_Census_Template.xlsm")
-                
-                # Write to buffer
-                out = io.BytesIO()
-                wb.save(out)
-                out.seek(0)
                     
-                st.success("Uzio Template Generated Successfully!")
-                timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
-                st.download_button(
-                    label="Download Uzio Template",
-                    data=out.getvalue(),
-                    file_name=f"Uzio_Census_Template_ADP_{timestamp}.xlsm",
-                    mime="application/vnd.ms-excel.sheet.macroEnabled.12"
-                )
-            except Exception as e:
-                st.error(f"Error generating template: {e}")
+                except Exception as e:
+                    import traceback
+                    error_traceback = traceback.format_exc()
+                    st.error(f"**Error generating template:** {e}")
+                    with st.expander("View Detailed Error Log (Traceback)", expanded=False):
+                        st.code(error_traceback, language="python")

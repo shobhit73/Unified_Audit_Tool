@@ -298,11 +298,14 @@ def render_ui():
         else:
             st.success("✅ Source data passed all sanity checks!")
             
-        fix_remove_drivers = False
+        fix_convert_drivers = False
         if not salaried_drivers.empty:
             st.markdown("---")
-            st.error(f"**🚨 Salaried Driver Exception:** Found {len(salaried_drivers)} employee(s) with Job Title 'Driver' but Pay Type 'Salaried'. Uzio requires drivers to be Hourly.")
-            fix_remove_drivers = st.checkbox(f"**Remove {len(salaried_drivers)} Salaried Driver(s)** from the dataset entirely so you can cleanly proceed.", value=False, key="pc_remove_drivers")
+            st.error(f"**\U0001f6a8 Salaried Hourly-Only Exception:** Found {len(salaried_drivers)} employee(s) with an hourly-only Job Title (Driver, Walker, Helper, etc.) but Pay Type set to Salaried. Uzio requires these roles to be Hourly/Non-Exempt.")
+            fix_convert_drivers = st.checkbox(
+                f"**Auto-Fix {len(salaried_drivers)} employee(s):** Convert Pay Type to **Hourly** and FLSA Classification to **Non-Exempt** for these employee(s).",
+                value=True, key="pc_convert_drivers"
+            )
 
         # --- DSP OWNER DETECTION ---
         col_sup_code = None
@@ -485,13 +488,19 @@ def render_ui():
                 msg = f"✅ **{fix_count} total fix(es) actively applied to the data!**\n\n" + "\n".join(success_messages)
                 st.success(msg)
 
-        # Remove Drivers if checked
-        if fix_remove_drivers and not salaried_drivers.empty:
+        # Convert Salaried Hourly-Only employees to Hourly + Non-Exempt if checked
+        if fix_convert_drivers and not salaried_drivers.empty:
             emp_id_col = resolved_field_map.get('Employee ID')
+            pay_type_col = resolved_field_map.get('Pay Type')
+            flsa_col = resolved_field_map.get('FLSA Classification')
             if emp_id_col and emp_id_col in df_paycom.columns:
                 bad_ids = salaried_drivers['Employee ID'].astype(str).str.strip().tolist()
-                df_paycom = df_paycom[~df_paycom[emp_id_col].astype(str).str.strip().isin(bad_ids)]
-                st.success(f"**✅ Removed:** Filtered out {len(bad_ids)} Salaried Driver(s) from the source data.")
+                mask = df_paycom[emp_id_col].astype(str).str.strip().isin(bad_ids)
+                if pay_type_col and pay_type_col in df_paycom.columns:
+                    df_paycom.loc[mask, pay_type_col] = 'Hourly'
+                if flsa_col and flsa_col in df_paycom.columns:
+                    df_paycom.loc[mask, flsa_col] = 'Non-Exempt'
+                st.success(f"**\u2705 Converted:** {mask.sum()} employee(s) updated \u2014 Pay Type set to **Hourly**, FLSA Classification set to **Non-Exempt**.")
 
         # --- Optional Location Mapping (in Tab 1) ---
         src_loc_col_af = resolved_field_map.get('Work Location')

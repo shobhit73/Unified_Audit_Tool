@@ -108,6 +108,7 @@ def validate_source_data(df_source, resolved_field_map):
     type_blanks = []
     intern_corrections = []
     email_fallbacks = []
+    salaried_drivers = []
     
     # Resolve column references
     emp_id_col = resolved_field_map.get('Employee ID')
@@ -203,6 +204,18 @@ def validate_source_data(df_source, resolved_field_map):
                 sal_val = row.get(salary_col)
                 if pd.isna(sal_val) or str(sal_val).strip() == "" or str(sal_val).strip() == "0":
                     missing.append("Annual Salary (required for Salaried)")
+            
+            # Additional Check: Salaried Driver Exception
+            if job_title_col and job_title_col in df_source.columns:
+                jt_val = str(row.get(job_title_col)).strip().lower()
+                if pd.notna(jt_val) and jt_val != "":
+                    if jt_val == "driver" or jt_val == "lead driver" or jt_val.endswith("driver"):
+                        missing.append(f"Salaried Driver Exception (Job Title '{row.get(job_title_col)}' cannot be Salaried)")
+                        salaried_drivers.append({
+                            'Employee ID': emp_ref,
+                            'Job Title': str(row.get(job_title_col)).strip(),
+                            'Pay Type': str(row.get(pay_type_col)).strip()
+                        })
         
         # 7. Blank Working Hours
         if hours_col and hours_col in df_source.columns:
@@ -316,7 +329,8 @@ def validate_source_data(df_source, resolved_field_map):
         'flsa_blanks': pd.DataFrame(flsa_blanks),
         'type_blanks': pd.DataFrame(type_blanks),
         'intern_corrections': pd.DataFrame(intern_corrections),
-        'email_fallbacks': pd.DataFrame(email_fallbacks)
+        'email_fallbacks': pd.DataFrame(email_fallbacks),
+        'salaried_drivers': pd.DataFrame(salaried_drivers)
     }
 
 def generate_uzio_template(df_source, vendor_field_map):

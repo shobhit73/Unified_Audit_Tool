@@ -22,7 +22,7 @@ ADP_FIELD_MAP = {
     'Last Name': 'Legal Last Name',
     'Middle Initial': 'Legal Middle Name',
     'Employment Status': 'Position Status',
-    'Hire Date': 'Hire Date',
+    'Hire Date': 'Hire/Rehire Date',
     'Original Hire Date': 'Hire Date',
     'Termination Date': 'Termination Date',
     'Termination Reason': 'Termination Reason Description',
@@ -498,6 +498,25 @@ def run_comparison(uzio_file, adp_file) -> bytes:
     mapped_fields = [f for f in ADP_FIELD_MAP.keys() if f != UZIO_KEY] # Internal Standard Keys
 
     # Identify fields missing in ADP
+    
+    # ---------------- Salaried Driver Exceptions ----------------
+    salaried_drivers_audit = []
+    adp_pay_type_col = norm_colname(ADP_FIELD_MAP.get('Pay Type', ''))
+    adp_job_title_col = norm_colname(ADP_FIELD_MAP.get('Job Title', ''))
+    
+    if adp_pay_type_col in adp_idx.columns and adp_job_title_col in adp_idx.columns:
+        for emp_id, row in adp_idx.iterrows():
+            pay_val = str(row[adp_pay_type_col]).strip().lower()
+            if "salary" in pay_val or "salaried" in pay_val:
+                jt_val = str(row[adp_job_title_col]).strip().lower()
+                if pd.notna(jt_val) and jt_val != "":
+                    if jt_val == "driver" or jt_val == "lead driver" or jt_val.endswith("driver"):
+                        salaried_drivers_audit.append({
+                            'Employee ID': emp_id,
+                            'Job Title': str(row[adp_job_title_col]).strip(),
+                            'Pay Type': str(row[adp_pay_type_col]).strip()
+                        })
+    df_salaried_drivers = pd.DataFrame(salaried_drivers_audit)
     # We check if the mapped ADP column exists in adp df
     mapping_missing_adp_col = [] # List of fields
 
@@ -883,7 +902,8 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             "Total NOT OK rows",
             "FLSA Compliance Issues",
             "Active in ADP but Missing in Uzio",
-            "Data Quality Issues (00/00/0000)"
+            "Data Quality Issues (00/00/0000)",
+            "Salaried Driver Exceptions"
         ],
         "Value": [
             len(uzio_keys),
@@ -897,7 +917,8 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             mismatches_only.shape[0],
             len(flsa_rows),
             len(active_missing_rows),
-            len(dq_rows)
+            len(dq_rows),
+            len(df_salaried_drivers)
         ]
     })
 
@@ -910,6 +931,8 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         flsa_issues.to_excel(writer, sheet_name="FLSA_Compliance_Issues", index=False)
         dq_issues.to_excel(writer, sheet_name="Data_Quality_Issues", index=False)
         active_missing_in_uzio.to_excel(writer, sheet_name="Active_Missing_In_Uzio", index=False)
+        if not df_salaried_drivers.empty:
+            df_salaried_drivers.to_excel(writer, sheet_name="Salaried_Driver_Exceptions", index=False)
 
     return out.getvalue()
 
@@ -926,6 +949,7 @@ def render_ui():
     - **FLSA_Compliance_Issues**: Invalid Pay Type/FLSA Classification.
     - **Active_Missing_In_Uzio**: Active employees in ADP not found in Uzio.
     - **Data_Quality_Issues**: Identifies dates with '00/00/0000'.
+    - **Salaried_Driver_Exceptions**: Employees mapped as salaried drivers, which are incompatible.
     """)
 
     client_name = st.text_input("Client Name", value="Client", key="adp_census_client")

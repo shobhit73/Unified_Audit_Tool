@@ -14,7 +14,7 @@ ADP_FIELD_MAP = {
     'Middle Initial': ['Legal Middle Name', 'Middle Name', 'Middle Initial'],
     'Employment Status': ['Position Status', 'Worker Status', 'Status'],
     'Employment Type': ['Worker Category Description', 'Worker Category', 'Employment Type'],
-    'Hire Date': ['Hire Date', 'Hire/Rehire Date', 'Most Recent Hire Date'],
+    'Hire Date': ['Hire/Rehire Date', 'Most Recent Hire Date', 'Hire Date'],
     'Original Hire Date': ['Hire Date', 'Original Hire Date'],
     'Termination Date': ['Termination Date'],
     'Termination Reason': ['Termination Reason Description', 'Termination Reason'],
@@ -172,6 +172,7 @@ def render_ui():
         flsa_blanks = validation['flsa_blanks']
         intern_corrections = validation['intern_corrections']
         email_fallbacks = validation['email_fallbacks']
+        salaried_drivers = validation.get('salaried_drivers', pd.DataFrame())
         
         # Show soft warnings first (non-blocking)
         has_soft_warnings = not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty
@@ -210,18 +211,27 @@ def render_ui():
             with st.expander(f"View All {len(hard_errors)} Error Details", expanded=False):
                 st.dataframe(hard_errors, hide_index=True, use_container_width=True)
             
-            err_csv = io.BytesIO()
-            hard_errors.to_csv(err_csv, index=False)
-            err_csv.seek(0)
+            err_xlsx = io.BytesIO()
+            with pd.ExcelWriter(err_xlsx, engine='openpyxl') as writer:
+                hard_errors.to_excel(writer, sheet_name="Critical Errors", index=False)
+                if not salaried_drivers.empty:
+                    salaried_drivers.to_excel(writer, sheet_name="Salaried Driver Exceptions", index=False)
+            err_xlsx.seek(0)
             st.download_button(
-                label="Download Error Report (CSV)",
-                data=err_csv.getvalue(),
-                file_name=f"Source_Validation_Errors_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv",
+                label="Download Error Report (XLSX)",
+                data=err_xlsx.getvalue(),
+                file_name=f"Source_Validation_Errors_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="adp_hard_err_dl"
             )
         else:
             st.success("✅ Source data passed all sanity checks!")
+            
+        fix_remove_drivers = False
+        if not salaried_drivers.empty:
+            st.markdown("---")
+            st.error(f"**🚨 Salaried Driver Exception:** Found {len(salaried_drivers)} employee(s) with Job Title 'Driver' but Pay Type 'Salaried'. Uzio requires drivers to be Hourly.")
+            fix_remove_drivers = st.checkbox(f"**Remove {len(salaried_drivers)} Salaried Driver(s)** from the dataset entirely so you can cleanly proceed.", value=False, key="adp_remove_drivers")
     
         # --- AUTO-FIX OPTIONS (always shown, checkbox-based) ---
         from utils.preprocess_source_data import detect_fixable_issues, apply_auto_fixes
@@ -372,6 +382,14 @@ def render_ui():
             if fix_count > 0:
                 msg = f"✅ **{fix_count} total fix(es) actively applied to the data!**\n\n" + "\n".join(success_messages)
                 st.success(msg)
+                
+        # Remove Drivers if checked
+        if fix_remove_drivers and not salaried_drivers.empty:
+            emp_id_col = resolved_field_map.get('Employee ID')
+            if emp_id_col and emp_id_col in df_adp.columns:
+                bad_ids = salaried_drivers['Employee ID'].astype(str).str.strip().tolist()
+                df_adp = df_adp[~df_adp[emp_id_col].astype(str).str.strip().isin(bad_ids)]
+                st.success(f"**✅ Removed:** Filtered out {len(bad_ids)} Salaried Driver(s) from the source data.")
                 
         # --- DSP OWNER DETECTION (ADP) ---
         col_sup_code = resolved_field_map.get('Reports To ID')

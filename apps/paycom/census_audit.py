@@ -882,6 +882,45 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
     uzio_emps = set(uzio[UZIO_KEY].dropna().map(str))
     paycom_emps = set(paycom[PAYCOM_KEY].dropna().map(str))
 
+    # ---------- High Hourly Rate Anomalies (> $100/hr for hourly-only roles) ----------
+    pc_hourly_rate_col = norm_colname(PAYCOM_FIELD_MAP.get('Hourly Pay Rate', ''))
+    pc_job_col_hr = norm_colname(PAYCOM_FIELD_MAP.get('Job Title', ''))
+    pc_fname_hr = norm_colname(PAYCOM_FIELD_MAP.get('First Name', ''))
+    pc_lname_hr = norm_colname(PAYCOM_FIELD_MAP.get('Last Name', ''))
+    HOURLY_RATE_THRESHOLD = 100.0
+    high_rate_rows_pc = []
+
+    if pc_hourly_rate_col in paycom.columns and pc_job_col_hr in paycom.columns:
+        for idx_label, row in paycom.iterrows():
+            jt_raw = row.get(pc_job_col_hr, '')
+            jt_str = str(jt_raw).strip().lower() if pd.notna(jt_raw) else ""
+            if not jt_str or jt_str == "nan":
+                continue
+            if is_hourly_only_job_title(jt_str):
+                rate_raw = row.get(pc_hourly_rate_col, '')
+                try:
+                    rate = float(str(rate_raw).replace('$', '').replace(',', '').strip())
+                except (ValueError, TypeError):
+                    continue
+                if rate > HOURLY_RATE_THRESHOLD:
+                    emp_id = str(row[PAYCOM_KEY]).strip()
+                    fname = str(norm_blank(row.get(pc_fname_hr, '')) or '').strip()
+                    lname = str(norm_blank(row.get(pc_lname_hr, '')) or '').strip()
+                    emp_name = f"{fname} {lname}".strip()
+                    uz_i = uzio_idx.get(emp_id)
+                    uz_rate = ""
+                    if uz_i is not None and 'Hourly Pay Rate' in uzio.columns:
+                        uz_rate = str(norm_blank(uzio.loc[uz_i, 'Hourly Pay Rate']) or '').strip()
+                    high_rate_rows_pc.append({
+                        'Employee ID': emp_id,
+                        'Employee Name': emp_name,
+                        'Job Title (Paycom)': str(jt_raw).strip(),
+                        'Hourly Pay Rate (Paycom)': f"${rate:.2f}",
+                        'Hourly Pay Rate (Uzio)': f"${float(uz_rate):.2f}" if uz_rate else "Not in Uzio",
+                        'Comment': f"Hourly rate ${rate:.2f}/hr exceeds the ${HOURLY_RATE_THRESHOLD:.0f}/hr threshold for a '{str(jt_raw).strip()}' role. Please verify this is not a data entry error."
+                    })
+    df_high_rate_pc = pd.DataFrame(high_rate_rows_pc)
+
     summary = pd.DataFrame(
         {
             "Metric": [
@@ -896,7 +935,8 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 "Total Comparisons (field-level rows)",
                 "FLSA Compliance Issues",
                 "Active in Paycom but Missing in Uzio",
-                "Salaried Driver Exceptions",
+                "Salaried Hourly-Only Exceptions",
+                "High Hourly Rate Anomalies (>$100/hr)",
             ],
             "Value": [
                 len(uzio_emps),
@@ -911,6 +951,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 len(flsa_rows),
                 len(active_missing_rows),
                 len(df_salaried_drivers_pc),
+                len(df_high_rate_pc),
             ],
         }
     )
@@ -925,6 +966,8 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         active_missing_in_uzio.to_excel(writer, sheet_name="Active_Missing_In_Uzio", index=False)
         if not df_salaried_drivers_pc.empty:
             df_salaried_drivers_pc.to_excel(writer, sheet_name="Salaried_Driver_Exceptions", index=False)
+        if not df_high_rate_pc.empty:
+            df_high_rate_pc.to_excel(writer, sheet_name="High_Hourly_Rate_Anomalies", index=False)
 
     return out.getvalue()
 

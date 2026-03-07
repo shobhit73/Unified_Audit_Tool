@@ -942,6 +942,43 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         "Column Missing in Uzio Sheet"
     ]]
 
+    # ---------- High Hourly Rate Anomalies (> $100/hr for hourly-only roles) ----------
+    high_rate_rows = []
+    adp_hourly_rate_col = norm_colname(ADP_FIELD_MAP.get('Hourly Pay Rate', ''))
+    adp_job_col_hr = norm_colname(ADP_FIELD_MAP.get('Job Title', ''))
+    adp_fname_hr = norm_colname(ADP_FIELD_MAP.get('First Name', ''))
+    adp_lname_hr = norm_colname(ADP_FIELD_MAP.get('Last Name', ''))
+    HOURLY_RATE_THRESHOLD = 100.0
+
+    if adp_hourly_rate_col in adp_idx.columns and adp_job_col_hr in adp_idx.columns:
+        for emp_id, row in adp_idx.iterrows():
+            jt_raw = row.get(adp_job_col_hr, '')
+            jt_str = str(jt_raw).strip().lower() if pd.notna(jt_raw) else ""
+            if not jt_str or jt_str == "nan":
+                continue
+            if is_hourly_only_job_title(jt_str):
+                rate_raw = row.get(adp_hourly_rate_col, '')
+                try:
+                    rate = float(str(rate_raw).replace('$', '').replace(',', '').strip())
+                except (ValueError, TypeError):
+                    continue
+                if rate > HOURLY_RATE_THRESHOLD:
+                    fname = str(norm_blank(row.get(adp_fname_hr, '')) or '').strip()
+                    lname = str(norm_blank(row.get(adp_lname_hr, '')) or '').strip()
+                    emp_name = f"{fname} {lname}".strip()
+                    uz_rate = ""
+                    if emp_id in uzio_idx.index and 'Hourly Pay Rate' in uzio_idx.columns:
+                        uz_rate = str(norm_blank(uzio_idx.at[emp_id, 'Hourly Pay Rate']) or '').strip()
+                    high_rate_rows.append({
+                        'Employee ID': emp_id,
+                        'Employee Name': emp_name,
+                        'Job Title (ADP)': str(jt_raw).strip(),
+                        'Hourly Pay Rate (ADP)': f"${rate:.2f}",
+                        'Hourly Pay Rate (Uzio)': f"${float(uz_rate):.2f}" if uz_rate else "Not in Uzio",
+                        'Comment': f"Hourly rate ${rate:.2f}/hr exceeds the ${HOURLY_RATE_THRESHOLD:.0f}/hr threshold for a '{str(jt_raw).strip()}' role. Please verify this is not a data entry error."
+                    })
+    df_high_rate = pd.DataFrame(high_rate_rows)
+
     # ---------- Summary metrics ----------
     summary = pd.DataFrame({
         "Metric": [
@@ -957,7 +994,8 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             "FLSA Compliance Issues",
             "Active in ADP but Missing in Uzio",
             "Data Quality Issues (00/00/0000)",
-            "Salaried Driver Exceptions"
+            "Salaried Hourly-Only Exceptions",
+            "High Hourly Rate Anomalies (>$100/hr)"
         ],
         "Value": [
             len(uzio_keys),
@@ -972,7 +1010,8 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             len(flsa_rows),
             len(active_missing_rows),
             len(dq_rows),
-            len(df_salaried_drivers)
+            len(df_salaried_drivers),
+            len(df_high_rate)
         ]
     })
 
@@ -987,6 +1026,8 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         active_missing_in_uzio.to_excel(writer, sheet_name="Active_Missing_In_Uzio", index=False)
         if not df_salaried_drivers.empty:
             df_salaried_drivers.to_excel(writer, sheet_name="Salaried_Driver_Exceptions", index=False)
+        if not df_high_rate.empty:
+            df_high_rate.to_excel(writer, sheet_name="High_Hourly_Rate_Anomalies", index=False)
 
     return out.getvalue()
 

@@ -629,7 +629,11 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
     salaried_drivers_pc = []
     pc_pay_type_col = norm_colname(PAYCOM_FIELD_MAP.get('Pay Type', ''))
     pc_job_title_col = norm_colname(PAYCOM_FIELD_MAP.get('Job Title', ''))
-    
+    pc_flsa_col = norm_colname(PAYCOM_FIELD_MAP.get('FLSA Classification', ''))
+    uzio_flsa_col_str = 'FLSA Classification'
+    uzio_pay_type_col_str = 'Pay Type'
+    uzio_emp_status_col_str = 'Employment Status'
+
     if pc_pay_type_col in paycom.columns and pc_job_title_col in paycom.columns:
         for idx_label, row in paycom.iterrows():
             pay_val = str(row[pc_pay_type_col]).strip().lower()
@@ -637,10 +641,55 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 jt_val = str(row[pc_job_title_col]).strip().lower()
                 if pd.notna(jt_val) and jt_val != "":
                     if jt_val == "driver" or jt_val == "lead driver" or jt_val.endswith("driver"):
+                        emp_id = str(row[PAYCOM_KEY]).strip()
+
+                        # --- Paycom values ---
+                        pc_pay_type_val = str(row[pc_pay_type_col]).strip()
+                        pc_emp_status_val = str(paycom_status_map.get(emp_id, "Not Found")).strip()
+                        pc_flsa_val = ""
+                        if pc_flsa_col and pc_flsa_col in paycom.columns:
+                            pc_flsa_val = str(norm_blank(row.get(pc_flsa_col, "")) or "").strip()
+
+                        # --- Uzio values (look up via index) ---
+                        uz_i = uzio_idx.get(emp_id)
+                        uz_pay_type_val = ""
+                        uz_emp_status_val = ""
+                        uz_flsa_val = ""
+                        if uz_i is not None:
+                            if uzio_pay_type_col_str in uzio.columns:
+                                uz_pay_type_val = str(norm_blank(uzio.loc[uz_i, uzio_pay_type_col_str]) or "").strip()
+                            if uzio_emp_status_col_str in uzio.columns:
+                                uz_emp_status_val = str(norm_blank(uzio.loc[uz_i, uzio_emp_status_col_str]) or "").strip()
+                            if uzio_flsa_col_str in uzio.columns:
+                                uz_flsa_val = str(norm_blank(uzio.loc[uz_i, uzio_flsa_col_str]) or "").strip()
+
+                        # --- Build smart Comment ---
+                        comment_parts = [
+                            f"Paycom lists this employee as '{str(row[pc_job_title_col]).strip()}' with Pay Type '{pc_pay_type_val}'.",
+                            "Uzio cannot accept a Salaried Driver — drivers must be Hourly/Non-Exempt.",
+                        ]
+                        if uz_emp_status_val:
+                            comment_parts.append(f"Uzio status: {uz_emp_status_val}.")
+                        if pc_emp_status_val and pc_emp_status_val != "Not Found":
+                            comment_parts.append(f"Paycom status: {pc_emp_status_val}.")
+                        if uz_flsa_val:
+                            comment_parts.append(f"Uzio FLSA: {uz_flsa_val}.")
+                        if pc_flsa_val:
+                            comment_parts.append(f"Paycom FLSA: {pc_flsa_val}.")
+                        if not uz_emp_status_val and uz_i is None:
+                            comment_parts.append("Employee NOT found in Uzio — will need to be added as Hourly.")
+                        comment = " ".join(comment_parts)
+
                         salaried_drivers_pc.append({
-                            'Employee ID': str(row[PAYCOM_KEY]).strip(),
-                            'Job Title': str(row[pc_job_title_col]).strip(),
-                            'Pay Type': str(row[pc_pay_type_col]).strip()
+                            'Employee ID': emp_id,
+                            'Job Title (Paycom)': str(row[pc_job_title_col]).strip(),
+                            'Pay Type (Paycom)': pc_pay_type_val,
+                            'Pay Type (Uzio)': uz_pay_type_val if uz_pay_type_val else "Not in Uzio",
+                            'Employment Status (Paycom)': pc_emp_status_val,
+                            'Employment Status (Uzio)': uz_emp_status_val if uz_emp_status_val else "Not in Uzio",
+                            'FLSA Classification (Paycom)': pc_flsa_val if pc_flsa_val else "Blank",
+                            'FLSA Classification (Uzio)': uz_flsa_val if uz_flsa_val else "Blank" if uz_i is not None else "Not in Uzio",
+                            'Comment': comment
                         })
     df_salaried_drivers_pc = pd.DataFrame(salaried_drivers_pc)
 

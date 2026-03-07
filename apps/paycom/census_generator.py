@@ -13,6 +13,7 @@ PAYCOM_FIELD_MAP = {
     'Employment Status': ['Employee_Status', 'Status', 'EE Status', 'Employment Status'],
     'Employment Type': ['Employment Type', 'EE Type', 'Employee Type'],
     'Hire Date': ['Most_Recent_Hire_Date', 'Hire Date', 'Recent Hire Date'],
+    'Original Hire Date': ['Original_Hire_Date', 'Hire Date', 'Original Hire Date'],
     'Termination Date': ['Termination_Date', 'Termination Date'],
     'Termination Reason': ['Termination_Reason', 'Termination Reason', 'Term Reason', 'Reason'],
     'Pay Type': ['Pay_Type', 'Pay Type'],
@@ -240,6 +241,7 @@ def render_ui():
         flsa_blanks = validation['flsa_blanks']
         intern_corrections = validation['intern_corrections']
         email_fallbacks = validation['email_fallbacks']
+        salaried_drivers = validation.get('salaried_drivers', pd.DataFrame())
 
         # Show soft warnings first (non-blocking)
         has_soft_warnings = paycom_pos_fixes or not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty
@@ -280,18 +282,27 @@ def render_ui():
             with st.expander(f"View All {len(hard_errors)} Error Details", expanded=False):
                 st.dataframe(hard_errors, hide_index=True, use_container_width=True)
 
-            err_csv = io.BytesIO()
-            hard_errors.to_csv(err_csv, index=False)
-            err_csv.seek(0)
+            err_xlsx = io.BytesIO()
+            with pd.ExcelWriter(err_xlsx, engine='openpyxl') as writer:
+                hard_errors.to_excel(writer, sheet_name="Critical Errors", index=False)
+                if not salaried_drivers.empty:
+                    salaried_drivers.to_excel(writer, sheet_name="Salaried Driver Exceptions", index=False)
+            err_xlsx.seek(0)
             st.download_button(
-                label="Download Error Report (CSV)",
-                data=err_csv.getvalue(),
-                file_name=f"Source_Validation_Errors_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv",
+                label="Download Error Report (XLSX)",
+                data=err_xlsx.getvalue(),
+                file_name=f"Source_Validation_Errors_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="pc_hard_err_dl"
             )
         else:
             st.success("✅ Source data passed all sanity checks!")
+            
+        fix_remove_drivers = False
+        if not salaried_drivers.empty:
+            st.markdown("---")
+            st.error(f"**🚨 Salaried Driver Exception:** Found {len(salaried_drivers)} employee(s) with Job Title 'Driver' but Pay Type 'Salaried'. Uzio requires drivers to be Hourly.")
+            fix_remove_drivers = st.checkbox(f"**Remove {len(salaried_drivers)} Salaried Driver(s)** from the dataset entirely so you can cleanly proceed.", value=False, key="pc_remove_drivers")
 
         # --- DSP OWNER DETECTION ---
         col_sup_code = None
@@ -473,7 +484,15 @@ def render_ui():
             if fix_count > 0:
                 msg = f"✅ **{fix_count} total fix(es) actively applied to the data!**\n\n" + "\n".join(success_messages)
                 st.success(msg)
-                
+
+        # Remove Drivers if checked
+        if fix_remove_drivers and not salaried_drivers.empty:
+            emp_id_col = resolved_field_map.get('Employee ID')
+            if emp_id_col and emp_id_col in df_paycom.columns:
+                bad_ids = salaried_drivers['Employee ID'].astype(str).str.strip().tolist()
+                df_paycom = df_paycom[~df_paycom[emp_id_col].astype(str).str.strip().isin(bad_ids)]
+                st.success(f"**✅ Removed:** Filtered out {len(bad_ids)} Salaried Driver(s) from the source data.")
+
         # --- Optional Location Mapping (in Tab 1) ---
         src_loc_col_af = resolved_field_map.get('Work Location')
         unique_locs_af = []

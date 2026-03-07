@@ -24,7 +24,7 @@ PAYCOM_FIELD_MAP = {
     'Middle Initial': 'Legal_Middle_Name',
     'Employment Status': 'Employee_Status',
     'Hire Date': 'Most_Recent_Hire_Date',
-    'Original Hire Date': 'Most_Recent_Hire_Date', # Fallback to Most Recent if Original not found? Mapping said Original DOH -> Hire_Date but we found none.
+    'Original Hire Date': 'Hire Date',
     'Termination Date': 'Termination_Date',
     # 'Termination Reason': 'Termination_Reason', # Not in sample file
     'Pay Type': 'Pay_Type',
@@ -625,6 +625,25 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         ],
     )
 
+    # ---------------- Salaried Driver Exceptions ----------------
+    salaried_drivers_pc = []
+    pc_pay_type_col = norm_colname(PAYCOM_FIELD_MAP.get('Pay Type', ''))
+    pc_job_title_col = norm_colname(PAYCOM_FIELD_MAP.get('Job Title', ''))
+    
+    if pc_pay_type_col in paycom.columns and pc_job_title_col in paycom.columns:
+        for idx_label, row in paycom.iterrows():
+            pay_val = str(row[pc_pay_type_col]).strip().lower()
+            if "salary" in pay_val or "salaried" in pay_val:
+                jt_val = str(row[pc_job_title_col]).strip().lower()
+                if pd.notna(jt_val) and jt_val != "":
+                    if jt_val == "driver" or jt_val == "lead driver" or jt_val.endswith("driver"):
+                        salaried_drivers_pc.append({
+                            'Employee ID': str(row[PAYCOM_KEY]).strip(),
+                            'Job Title': str(row[pc_job_title_col]).strip(),
+                            'Pay Type': str(row[pc_pay_type_col]).strip()
+                        })
+    df_salaried_drivers_pc = pd.DataFrame(salaried_drivers_pc)
+
     # ---------- FLSA Compliance Issues (4th sheet) ----------
     flsa_rows = []
     if uzio_flsa_col is not None:
@@ -824,6 +843,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 "Total Comparisons (field-level rows)",
                 "FLSA Compliance Issues",
                 "Active in Paycom but Missing in Uzio",
+                "Salaried Driver Exceptions",
             ],
             "Value": [
                 len(uzio_emps),
@@ -837,6 +857,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 int(comparison_detail.shape[0]),
                 len(flsa_rows),
                 len(active_missing_rows),
+                len(df_salaried_drivers_pc),
             ],
         }
     )
@@ -849,6 +870,8 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         flsa_issues.to_excel(writer, sheet_name="FLSA_Compliance_Issues", index=False)
         dq_issues.to_excel(writer, sheet_name="Data_Quality_Issues", index=False)
         active_missing_in_uzio.to_excel(writer, sheet_name="Active_Missing_In_Uzio", index=False)
+        if not df_salaried_drivers_pc.empty:
+            df_salaried_drivers_pc.to_excel(writer, sheet_name="Salaried_Driver_Exceptions", index=False)
 
     return out.getvalue()
 
@@ -862,8 +885,10 @@ def render_ui():
     
     **Output Reports**:
     - **Comparison**: Discrepancies between Uzio and Paycom.
-    - **FLSA_Compliance_Issues**: Invalid Pay Type/FLSA Classification.
-    - **Active_Missing_In_Uzio**: Active employees in Paycom not found in Uzio.
+    - **FLSA_Compliance_Issues**: Flags employees where 'FLSA Status' does not match their assigned 'Pay Type' constraints.
+    - **Active_Missing_In_Uzio**: Active employees found in Paycom but genuinely missing from the Uzio census entirely.
+    - **Data_Quality_Issues**: Identifies unexpected placeholder dates such as '00/00/0000'.
+    - **Salaried_Driver_Exceptions**: Employees mapped as salaried drivers, which are incompatible.
     """)
 
     uzio_file = st.file_uploader("Upload Uzio Census Export (.xlsm)", type=["xlsm"])

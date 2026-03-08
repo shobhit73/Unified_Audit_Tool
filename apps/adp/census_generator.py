@@ -643,6 +643,7 @@ def render_ui():
                         )
     
                     # Inject into formatted template
+                    from utils.audit_utils import inject_into_uzio_template
                     template_path = "templates/Uzio_Census_Template.xlsm"
                     wb = inject_into_uzio_template(df_uzio, template_path)
                     

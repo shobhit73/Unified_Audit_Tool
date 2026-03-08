@@ -92,6 +92,12 @@ Single Excel file with **3 Sheets**:
 *   **Sheet:** `Comparison_Detail_AllFields`
 *   **Sheet:** `FLSA_Compliance_Issues` (*New*)
     *   Identifies invalid combinations like **Hourly** Pay Type with **Exempt** FLSA Classification.
+*   **Sheet:** `Salaried_Driver_Exceptions` (*New*)
+    *   Flags employees in hourly-only roles (Driver, Walker, Helper, etc.) who are listed as Salaried.
+    *   Includes enriched columns: Pay Type, Status, and FLSA from **both** ADP and Uzio.
+    *   Includes a smart **Comment** summarizing the conflict.
+*   **Sheet:** `High_Hourly_Rate_Anomalies` (*New*)
+    *   Flags employees in hourly roles with a pay rate **>$100/hr**.
 *   **Sheet:** `Active_Missing_In_Uzio` (*New*)
     *   Lists employees active in ADP but typically missing from Uzio (useful for catching new hires not yet entered).
 *   **Status Column:** `ADP_SourceOfTruth_Status`
@@ -138,6 +144,8 @@ Single Excel file with **3 Sheets**:
 **Understanding the Report:**
 *   **Sheet:** `Comparison_Detail_AllFields`
 *   **Sheet:** `FLSA_Compliance_Issues`: Checks generally for Pay Type vs FLSA mismatches.
+*   **Sheet:** `Salaried_Driver_Exceptions`: Flags hourly-only roles listed as Salaried with detailed system comparisons.
+*   **Sheet:** `High_Hourly_Rate_Anomalies`: Detects rates **>$100/hr** for hourly-only roles.
 *   **Sheet:** `Active_Missing_In_Uzio`: Lists active Paycom employees not found in Uzio.
 *   **Key Logic:**
     *   Paycom "On Leave" is treated as "Active".
@@ -222,6 +230,7 @@ A single Excel or CSV file direct from ADP containing employee demographics.
 3. **Auto-Fix Options:** Uses checkboxes to automatically:
    * **Fix Zip Codes:** Truncates zip codes after a dash (e.g., `12345-6789` -> `12345`) and zero-pads leading digits (e.g., `123` -> `00123`).
    * **Missing Work Email Fallback:** Swaps in Personal Email if Work Email is blank.
+   * **Salaried Hourly-Only Conversion:** Detects "Salaried" employees in roles like Driver, Walker, or Helper and automatically converts them to **Hourly/Non-Exempt** to prevent Uzio import errors.
    * **Blank Working Hours:** Can automatically set blank schedules to 0.
 4. **Mapping:** Manually map your source Job Titles and Work Locations to the system-allowed list.
 5. Click Generate. The tool outputs a standardized Uzio`.xlsm` file.
@@ -240,7 +249,7 @@ A single Excel or CSV file from Paycom.
 3. **Paycom Specific Validations:**
    * Enforces hard stops if `DOL_Status` or `Employee Status` are blank.
    * If `Position` is blank, it automatically checks variations of `Department Description` to use as a fallback. A blue banner will show if this fallback was used.
-4. **Auto-Fix Options:** Similar to ADP, select checkboxes to fix FLSA Statuses, working hours, and zip codes.
+4. **Auto-Fix Options:** Similar to ADP, select checkboxes to fix FLSA Statuses, working hours, zip codes, and **Convert Salaried Hourly-Only roles** to Hourly/Non-Exempt.
 5. Provide mapping for Titles/Locations and Generate.
 
 ---

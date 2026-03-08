@@ -14,11 +14,14 @@ A unified platform for auditing and reconciling data across **Uzio**, **ADP**, a
 2.  **💰 Prior Payroll Audit**
     *   Analyzes "Prior Payroll Input" files.
     *   Transforms input data into a grouped, wide-format report suitable for payroll validation.
+    *   **New:** Integrated into sidebar under ADP Tools for easy access.
 
 3.  **👥 Census Audit**
     *   Reconciles employee census data between Uzio and ADP.
     *   Checks for discrepancies in demographics, employment status, and more.
     *   **New:** Detailed FLSA Compliance Checks (Pay Type vs Classification).
+    *   **New:** **Salaried Hourly-Only Exceptions**: Flags "Salaried" employees in hourly-only roles (Driver, Walker, Helper, etc.) with smart comments and status lookups from both systems.
+    *   **New:** **High Hourly Rate Anomalies**: Flags hourly employees with rates >$100/hr.
     *   **New:** Identifies active employees missing in Uzio.
 
 4.  **🚑 Payment & Emergency Audit**
@@ -32,12 +35,15 @@ A unified platform for auditing and reconciling data across **Uzio**, **ADP**, a
 6.  **📝 ADP Census Generator** (*New*)
     *   Converts ADP census exports into the standard Uzio template format.
     *   **Auto-Fix**: Truncates and zero-pads Zip codes to 5 digits.
+    *   **Intelligent Auto-Fix**: Convert Salaried Hourly-Only roles (Driver, Walker, Helper, etc.) to **Hourly/Non-Exempt** automatically.
     *   Enforces hard-stop validations for missing critical columns like State and Zip.
 
 ### Paycom Tools
 6.  **🏢 Paycom Census Audit**
     *   Audits Paycom census data against Uzio records.
     *   Includes specific logic for Paycom fields and mapping.
+    *   **New:** **Salaried Hourly-Only Exceptions**: Flags "Salaried" employees in hourly-only roles with detailed system comparisons and smart comments.
+    *   **New:** **High Hourly Rate Anomalies**: Detects rates >$100/hr for hourly-only roles.
     *   **New:** Checks for FLSA compliance issues.
     *   **New:** Identifies active employees missing from Uzio.
 
@@ -53,7 +59,7 @@ A unified platform for auditing and reconciling data across **Uzio**, **ADP**, a
 9.  **📝 Paycom Census Generator** (*New*)
     *   Converts Paycom census exports into the Uzio template format.
     *   **DSP Owner Detection**: Automatically detects the most common `Supervisor_Primary_Code`, auto-assigns their Position to "DSP Owner", and sorts them to the very top of the generated files.
-    *   **Intelligent Auto-Fixes**: Checkbox UI to auto-fix blank Working Hours, fallback Work Email to Personal Email, and auto-correct FLSA classifications based on Pay Type.
+    *   **Intelligent Auto-Fixes**: Checkbox UI to auto-fix blank Working Hours, fallback Work Email to Personal Email, auto-correct FLSA classifications, and **convert Salaried Hourly-Only roles** to Hourly/Non-Exempt.
     *   **Fallback Logic**: Automatically pulls from `Department_Desc` if `Position` is blank.
     *   Enforces hard-stops on blank `DOL_Status` and `Employee Status`.
 

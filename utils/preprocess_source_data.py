@@ -124,10 +124,12 @@ def detect_fixable_issues(df, resolved_field_map):
 
     # Count invalid 00/00/0000 dates across all columns
     for col in df.columns:
-        # Optimization: skip columns that don't have strings or objects if performance is an issue, 
-        # but 00/00/0000 will be stored as a string.
-        if df[col].astype(str).str.contains('00/00/0000', regex=False).any():
-            counts['invalid_date_count'] += df[col].astype(str).str.count('00/00/0000').sum()
+        try:
+            col_series = df.loc[:, col]
+            if hasattr(col_series, 'astype') and col_series.astype(str).str.contains('00/00/0000', regex=False).any():
+                counts['invalid_date_count'] += int(col_series.astype(str).str.count('00/00/0000').sum())
+        except Exception:
+            continue
 
     # Count blank Employment Type / Worker Category
     if type_col and type_col in df.columns:
@@ -358,17 +360,19 @@ def apply_auto_fixes(df, resolved_field_map, fixes_to_apply=None):
         # --- FIX 8: Invalid Dates (00/00/0000) ---
         if fixes_to_apply.get('fix_invalid_dates', False):
             for col in df.columns:
-                val = row.get(col)
-                if pd.notna(val) and '00/00/0000' in str(val):
-                    # Replace with blank/NaN (if it's exactly 00/00/0000) or just strip it out
-                    fixed_val = str(val).replace('00/00/0000', '').strip()
-                    df.at[idx, col] = fixed_val
-                    invalid_date_fixes.append({
-                        'Employee ID': emp_ref,
-                        'Column': col,
-                        'Original Value': str(val),
-                        'Action': 'Blanked invalid date'
-                    })
+                try:
+                    val = row.get(col)
+                    if pd.notna(val) and '00/00/0000' in str(val):
+                        fixed_val = str(val).replace('00/00/0000', '').strip()
+                        df.at[idx, col] = fixed_val
+                        invalid_date_fixes.append({
+                            'Employee ID': emp_ref,
+                            'Column': col,
+                            'Original Value': str(val),
+                            'Action': 'Blanked invalid date'
+                        })
+                except Exception:
+                    continue
 
         # --- FIX 9: Blank Worker Category / Employment Type ---
         if fixes_to_apply.get('fix_type_blanks', False):

@@ -605,14 +605,25 @@ def render_ui():
                         
                     # Setup DSP Owner at the top of the Uzio sheet
                     if set_dsp_owner and detected_dsp_id:
-                        # 'Employee ID' is Uzio column Name
-                        df_dl_id_str = df_uzio['Employee ID'].astype(str).str.strip()
-                        dsp_mask = df_dl_id_str == detected_dsp_id
-                        if dsp_mask.any():
-                            df_uzio.loc[dsp_mask, 'Job Title'] = 'DSP Owner'
-                            dsp_rows = df_uzio[dsp_mask]
-                            other_rows = df_uzio[~dsp_mask]
-                            df_uzio = pd.concat([dsp_rows, other_rows], ignore_index=True)
+                        # Find the Employee ID column in df_uzio (case-insensitive)
+                        uzio_id_col = next(
+                            (c for c in df_uzio.columns
+                             if str(c).strip().lower().replace('_', ' ') == 'employee id'),
+                            None
+                        )
+                        # Fallback: use the ADP source ID column mapped into df_uzio
+                        if uzio_id_col is None:
+                            emp_id_src = resolved_field_map.get('Employee ID')
+                            if emp_id_src and emp_id_src in df_uzio.columns:
+                                uzio_id_col = emp_id_src
+                        if uzio_id_col and uzio_id_col in df_uzio.columns:
+                            df_dl_id_str = df_uzio[uzio_id_col].astype(str).str.strip()
+                            dsp_mask = df_dl_id_str == detected_dsp_id
+                            if dsp_mask.any():
+                                df_uzio.loc[dsp_mask, 'Job Title'] = 'DSP Owner'
+                                dsp_rows = df_uzio[dsp_mask]
+                                other_rows = df_uzio[~dsp_mask]
+                                df_uzio = pd.concat([dsp_rows, other_rows], ignore_index=True)
                     
                     # Validate Uzio Data
                     from utils.audit_utils import validate_uzio_data

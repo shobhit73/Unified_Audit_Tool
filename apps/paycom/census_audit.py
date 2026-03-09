@@ -89,6 +89,30 @@ def find_col(df_cols, *candidate_names):
             return norm_map[key]
     return None
 
+def ensure_unique_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    If multiple columns normalize to the same name, keep only the first one.
+    This prevents .loc[index, col] from returning a Series.
+    """
+    df = df.copy()
+    norm_cols = [norm_colname(c).casefold() for c in df.columns]
+    seen = set()
+    to_keep = []
+    for i, nc in enumerate(norm_cols):
+        if nc not in seen:
+            seen.add(nc)
+            to_keep.append(i)
+    return df.iloc[:, to_keep]
+
+def safe_val(df, idx, col):
+    """Safely get a scalar value from a dataframe, even if duplicates somehow exist."""
+    if idx is None or col not in df.columns:
+        return ""
+    val = df.loc[idx, col]
+    if isinstance(val, pd.Series):
+        return val.iloc[0]
+    return val
+
 def norm_key_series(s: pd.Series) -> pd.Series:
     s2 = s.astype(object).where(~s.isna(), "")
     def _fix(v):
@@ -404,8 +428,14 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
     except Exception as e:
         raise ValueError(f"Failed to read Paycom file: {e}")
 
-    # Normalize Paycom columns
+    # Column Normalization & De-duplication
+    uzio = ensure_unique_columns(uzio)
+    uzio.columns = [norm_colname(c) for c in uzio.columns]
+    uzio = uzio.reset_index(drop=True)
+
+    paycom = ensure_unique_columns(paycom)
     paycom.columns = [norm_colname(c) for c in paycom.columns]
+    paycom = paycom.reset_index(drop=True)
 
     # Verify Keys
     UZIO_KEY = 'Employee ID'
@@ -549,9 +579,9 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
             uz_val = ""
             pc_val = ""
             if (not uz_missing_row) and (not uz_missing_col):
-                uz_val = uzio.loc[u_i, uz_field]
+                uz_val = safe_val(uzio, u_i, uz_field)
             if (not pc_missing_row) and (not pc_missing_col):
-                pc_val = paycom.loc[p_i, pc_col]
+                pc_val = safe_val(paycom, p_i, pc_col)
 
             # Decide status
             if pc_missing_row and (not uz_missing_row):
@@ -661,11 +691,11 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                         uz_flsa_val = ""
                         if uz_i is not None:
                             if uzio_pay_type_col_str in uzio.columns:
-                                uz_pay_type_val = str(norm_blank(uzio.loc[uz_i, uzio_pay_type_col_str]) or "").strip()
+                                uz_pay_type_val = str(norm_blank(safe_val(uzio, uz_i, uzio_pay_type_col_str)) or "").strip()
                             if uzio_emp_status_col_str in uzio.columns:
-                                uz_emp_status_val = str(norm_blank(uzio.loc[uz_i, uzio_emp_status_col_str]) or "").strip()
+                                uz_emp_status_val = str(norm_blank(safe_val(uzio, uz_i, uzio_emp_status_col_str)) or "").strip()
                             if uzio_flsa_col_str in uzio.columns:
-                                uz_flsa_val = str(norm_blank(uzio.loc[uz_i, uzio_flsa_col_str]) or "").strip()
+                                uz_flsa_val = str(norm_blank(safe_val(uzio, uz_i, uzio_flsa_col_str)) or "").strip()
 
                         # --- Build smart Comment ---
                         comment_parts = [
@@ -707,7 +737,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
             # Get FLSA Classification from Uzio
             flsa_raw = ""
             if uzio_flsa_col in uzio.columns:
-                flsa_raw = uzio.loc[u_i, uzio_flsa_col]
+                flsa_raw = safe_val(uzio, u_i, uzio_flsa_col)
             flsa_norm = normalize_space_and_case(flsa_raw)
 
             # Detect invalid combinations
@@ -730,7 +760,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 # Get Pay Type raw value from Uzio for display
                 pay_raw = ""
                 if uzio_pay_type_col and uzio_pay_type_col in uzio.columns:
-                    pay_raw = str(norm_blank(uzio.loc[u_i, uzio_pay_type_col]) or "")
+                    pay_raw = str(norm_blank(safe_val(uzio, u_i, uzio_pay_type_col)) or "")
 
                 flsa_rows.append({
                     "Employee ID": display_id_map.get(eid, eid),
@@ -769,7 +799,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         if p_i is not None:
             # Check all columns for this row
             for col in paycom.columns:
-                val = paycom.loc[p_i, col]
+                val = safe_val(paycom, p_i, col)
                 if pd.notna(val) and '00/00/0000' in str(val):
                     fname = str(norm_blank(paycom.loc[p_i, pc_fname_col]) or "") if pc_fname_col else ""
                     lname = str(norm_blank(paycom.loc[p_i, pc_lname_col]) or "") if pc_lname_col else ""
@@ -819,7 +849,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         # Check employment status
         status_val = ""
         if paycom_emp_status_col and paycom_emp_status_col in paycom.columns:
-            status_val = str(norm_blank(paycom.loc[p_i, paycom_emp_status_col]) or "")
+            status_val = str(norm_blank(safe_val(paycom, p_i, paycom_emp_status_col)) or "")
         status_lower = status_val.strip().lower()
 
         # Only include Active / On Leave employees
@@ -910,7 +940,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                     uz_i = uzio_idx.get(emp_id)
                     uz_rate = ""
                     if uz_i is not None and 'Hourly Pay Rate' in uzio.columns:
-                        uz_rate = str(norm_blank(uzio.loc[uz_i, 'Hourly Pay Rate']) or '').strip()
+                        uz_rate = str(norm_blank(safe_val(uzio, uz_i, 'Hourly Pay Rate')) or '').strip()
                     high_rate_rows_pc.append({
                         'Employee ID': emp_id,
                         'Employee Name': emp_name,

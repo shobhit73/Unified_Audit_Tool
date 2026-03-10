@@ -605,9 +605,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
     # Standard name is 'FLSA Classification'
     uzio_flsa_col = 'FLSA Classification'
 
-    # Also locate employee name columns in Uzio for context in FLSA report
-    uzio_fname_col = 'First Name'
-    uzio_lname_col = 'Last Name'
+    # Build Name and Job Title maps for context (placed at the top of the comparison sheet)
     # Build Name and Job Title maps for context (placed at the top of the comparison sheet)
     full_name_map = {}
     jt_map = {}
@@ -795,14 +793,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                 issue = "Salaried employee classified as Non-Exempt"
 
             if issue:
-                # Get employee name for context
-                fname = ""
-                lname = ""
-                if uzio_fname_col and uzio_fname_col in uzio_idx.columns:
-                    fname = str(norm_blank(uzio_idx.at[emp_id, uzio_fname_col]) or "")
-                if uzio_lname_col and uzio_lname_col in uzio_idx.columns:
-                    lname = str(norm_blank(uzio_idx.at[emp_id, uzio_lname_col]) or "")
-                emp_name = f"{fname} {lname}".strip()
+                emp_name = full_name_map.get(emp_id, "")
 
                 flsa_rows.append({
                     "Employee ID": emp_id,
@@ -1046,31 +1037,12 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         ]
     })
 
-    # ---------- Specialized Discrepancy Tabs ----------
-    # 1. Work Location Discrpenacies
-    df_work_location_discrepancies = comparison_detail[
-        (comparison_detail["Field"] == "Work Location") & 
-        (comparison_detail["ADP_SourceOfTruth_Status"] != "Data Match")
-    ]
-
-    # 2. FLSA-Paytype-Job Title Discrepancies (includes Work Location as requested)
-    core_fields = ["FLSA Classification", "Pay Type", "Job Title", "Work Location"]
-    df_core_discrepancies = comparison_detail[
-        (comparison_detail["Field"].isin(core_fields)) & 
-        (comparison_detail["ADP_SourceOfTruth_Status"] != "Data Match")
-    ]
-
     # ---------- Export report ----------
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
         summary.to_excel(writer, sheet_name="Summary", index=False)
         field_summary_by_status.to_excel(writer, sheet_name="Field_Summary_By_Status", index=False)
         comparison_detail.to_excel(writer, sheet_name="Comparison_Detail_AllFields", index=False)
-        
-        # New specialized tabs
-        df_work_location_discrepancies.to_excel(writer, sheet_name="Work Location Discrpenacies", index=False)
-        df_core_discrepancies.to_excel(writer, sheet_name="FLSA-Paytype-Job Title Discr", index=False)
-
         flsa_issues.to_excel(writer, sheet_name="FLSA_Compliance_Issues", index=False)
         dq_issues.to_excel(writer, sheet_name="Data_Quality_Issues", index=False)
         active_missing_in_uzio.to_excel(writer, sheet_name="Active_Missing_In_Uzio", index=False)

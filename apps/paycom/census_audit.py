@@ -550,9 +550,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
     # ---------- FLSA Classification column (Uzio) ----------
     uzio_flsa_col = 'FLSA Classification'
 
-    # Also locate employee name columns in Uzio for context in FLSA report
-    uzio_fname_col = 'First Name'
-    uzio_lname_col = 'Last Name'
+    # ---
 
     all_emps = sorted(set(uzio_idx.keys()).union(set(paycom_idx.keys())))
 
@@ -783,14 +781,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 issue = "Salaried employee classified as Non-Exempt"
 
             if issue:
-                # Get employee name for context
-                fname = ""
-                lname = ""
-                if uzio_fname_col and uzio_fname_col in uzio.columns:
-                    fname = str(norm_blank(uzio.loc[u_i, uzio_fname_col]) or "")
-                if uzio_lname_col and uzio_lname_col in uzio.columns:
-                    lname = str(norm_blank(uzio.loc[u_i, uzio_lname_col]) or "")
-                emp_name = f"{fname} {lname}".strip()
+                emp_name = full_name_map.get(eid, "")
 
                 # Get Pay Type raw value from Uzio for display
                 pay_raw = ""
@@ -813,21 +804,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
     # ---------- Data Quality Issues (00/00/0000 dates) ----------
     dq_rows = []
     
-    # Locate Emp ID and Name columns again for context
-    pc_fname_col = find_col(paycom.columns, "Legal_Firstname", "Legal Firstname", "First Name", "FirstName")
-    if pc_fname_col is None:
-        for c in paycom.columns:
-            cl = norm_colname(c).casefold()
-            if "first" in cl and "name" in cl:
-                pc_fname_col = c
-                break
-    pc_lname_col = find_col(paycom.columns, "Legal_Lastname", "Legal Lastname", "Last Name", "LastName")
-    if pc_lname_col is None:
-        for c in paycom.columns:
-            cl = norm_colname(c).casefold()
-            if "last" in cl and "name" in cl:
-                pc_lname_col = c
-                break
+    # Iterate and check columns
 
     for eid in paycom_idx.keys():
         p_i = paycom_idx.get(eid)
@@ -836,9 +813,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
             for col in paycom.columns:
                 val = safe_val(paycom, p_i, col)
                 if pd.notna(val) and '00/00/0000' in str(val):
-                    fname = str(norm_blank(paycom.loc[p_i, pc_fname_col]) or "") if pc_fname_col else ""
-                    lname = str(norm_blank(paycom.loc[p_i, pc_lname_col]) or "") if pc_lname_col else ""
-                    emp_name = f"{fname} {lname}".strip()
+                    emp_name = full_name_map.get(eid, "")
                     pc_raw_id = paycom_orig_keys.loc[p_i] if p_i in paycom_orig_keys.index else eid
                     
                     dq_rows.append({
@@ -891,13 +866,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         if status_lower not in {"active", "on leave", "leave", "activated"}:
             continue
 
-        fname = ""
-        lname = ""
-        if pc_fname_col and pc_fname_col in paycom.columns:
-            fname = str(norm_blank(paycom.loc[p_i, pc_fname_col]) or "")
-        if pc_lname_col and pc_lname_col in paycom.columns:
-            lname = str(norm_blank(paycom.loc[p_i, pc_lname_col]) or "")
-        emp_name = f"{fname} {lname}".strip()
+        emp_name = full_name_map.get(eid, "")
 
         hire_date = ""
         if pc_hire_col and pc_hire_col in paycom.columns:
@@ -1021,30 +990,11 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         }
     )
 
-    # ---------- Specialized Discrepancy Tabs ----------
-    # 1. Work Location Discrpenacies
-    df_work_location_discrepancies_pc = comparison_detail[
-        (comparison_detail["Field"] == "Work Location") & 
-        (comparison_detail["PAYCOM_SourceOfTruth_Status"] != "Data Match")
-    ]
-
-    # 2. FLSA-Paytype-Job Title Discrepancies (includes Work Location as requested)
-    core_fields = ["FLSA Classification", "Pay Type", "Job Title", "Work Location"]
-    df_core_discrepancies_pc = comparison_detail[
-        (comparison_detail["Field"].isin(core_fields)) & 
-        (comparison_detail["PAYCOM_SourceOfTruth_Status"] != "Data Match")
-    ]
-
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
         summary.to_excel(writer, sheet_name="Summary", index=False)
         field_summary_by_status.to_excel(writer, sheet_name="Field_Summary_By_Status", index=False)
         comparison_detail.to_excel(writer, sheet_name="Comparison_Detail_AllFields", index=False)
-        
-        # New specialized tabs
-        df_work_location_discrepancies_pc.to_excel(writer, sheet_name="Work Location Discrpenacies", index=False)
-        df_core_discrepancies_pc.to_excel(writer, sheet_name="FLSA-Paytype-Job Title Discr", index=False)
-
         flsa_issues.to_excel(writer, sheet_name="FLSA_Compliance_Issues", index=False)
         dq_issues.to_excel(writer, sheet_name="Data_Quality_Issues", index=False)
         active_missing_in_uzio.to_excel(writer, sheet_name="Active_Missing_In_Uzio", index=False)

@@ -831,19 +831,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
     # Find employees in Paycom but NOT in Uzio who are Active / On Leave
     paycom_only_emps = set(paycom_idx.keys()) - set(uzio_idx.keys())
 
-    # (Already located above for DQ checks, but redeclared here if needed, safe to keep as is)
-    if pc_fname_col is None:
-        for c in paycom.columns:
-            cl = norm_colname(c).casefold()
-            if "first" in cl and "name" in cl:
-                pc_fname_col = c
-                break
-    if pc_lname_col is None:
-        for c in paycom.columns:
-            cl = norm_colname(c).casefold()
-            if "last" in cl and "name" in cl:
-                pc_lname_col = c
-                break
+    # (Hire date is still needed)
     pc_hire_col = find_col(paycom.columns, "Most_Recent_Hire_Date", "Most Recent Hire Date",
                            "Hire_Date", "Hire Date")
     if pc_hire_col is None:

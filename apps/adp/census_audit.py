@@ -812,40 +812,15 @@ def run_comparison(uzio_file, adp_file) -> bytes:
     dq_rows = []
     
     # Locate ADP columns for name to use as context
-    adp_fname_col = None
-    for c in adp.columns:
-        cl = norm_colname(c).casefold()
-        if cl in {"legal first name", "first name", "firstname"}:
-            adp_fname_col = c
-            break
-    if adp_fname_col is None:
-        for c in adp.columns:
-            cl = norm_colname(c).casefold()
-            if "first" in cl and "name" in cl:
-                adp_fname_col = c
-                break
-
-    adp_lname_col = None
-    for c in adp.columns:
-        cl = norm_colname(c).casefold()
-        if cl in {"legal last name", "last name", "lastname"}:
-            adp_lname_col = c
-            break
-    if adp_lname_col is None:
-        for c in adp.columns:
-            cl = norm_colname(c).casefold()
-            if "last" in cl and "name" in cl:
-                adp_lname_col = c
-                break
+    # Iterate and check columns
+    # Iterate and check columns
 
     for emp_id in adp_idx.index:
         # Check all columns for this row
         for col in adp.columns:
             val = adp_idx.at[emp_id, col]
             if pd.notna(val) and '00/00/0000' in str(val):
-                fname = str(norm_blank(adp_idx.at[emp_id, adp_fname_col]) or "") if adp_fname_col else ""
-                lname = str(norm_blank(adp_idx.at[emp_id, adp_lname_col]) or "") if adp_lname_col else ""
-                emp_name = f"{fname} {lname}".strip()
+                emp_name = full_name_map.get(emp_id, "")
                 
                 dq_rows.append({
                     "Employee ID": str(emp_id).strip(),
@@ -877,7 +852,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                 break
 
     # Name columns already located above for Data Quality check.
-    # We can reuse adp_fname_col and adp_lname_col
+    # Locate ADP hire date column
 
     adp_hire_col = None
     for c in adp.columns:
@@ -900,13 +875,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         if "active" not in status_lower and "leave" not in status_lower:
             continue
 
-        fname = ""
-        lname = ""
-        if adp_fname_col and adp_fname_col in adp_idx.columns:
-            fname = str(norm_blank(adp_idx.at[emp_id, adp_fname_col]) or "")
-        if adp_lname_col and adp_lname_col in adp_idx.columns:
-            lname = str(norm_blank(adp_idx.at[emp_id, adp_lname_col]) or "")
-        emp_name = f"{fname} {lname}".strip()
+        emp_name = full_name_map.get(emp_id, "")
 
         hire_date = ""
         if adp_hire_col and adp_hire_col in adp_idx.columns:

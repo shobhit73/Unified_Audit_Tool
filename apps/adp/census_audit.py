@@ -58,7 +58,8 @@ ADP_FIELD_MAP = {
     'Protected Veteran Status': 'Protected Veteran Status',
     'EEO Job Category': 'EEOC Job Classification',
     'Ethnicity': 'Race Description',
-    'SOC Code': 'SOC Code'
+    'SOC Code': 'SOC Code',
+    'Work Location': 'Location Description'
 }
 
 # ---------- Helpers ----------

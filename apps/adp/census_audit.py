@@ -610,6 +610,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
     uzio_lname_col = 'Last Name'
     # Build Name and Job Title maps for context (placed at the top of the comparison sheet)
     full_name_map = {}
+    adp_name_map = {}
     jt_map = {}
     adp_fname_col = norm_colname(ADP_FIELD_MAP.get('First Name', ''))
     adp_lname_col = norm_colname(ADP_FIELD_MAP.get('Last Name', ''))
@@ -619,6 +620,10 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         fn = ""
         ln = ""
         jt = ""
+        
+        afn = ""
+        aln = ""
+
         # Uzio
         if eid in uzio_idx.index:
             fn = str(norm_blank(uzio_idx.at[eid, 'First Name']) or "")
@@ -626,14 +631,20 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             jt = str(norm_blank(uzio_idx.at[eid, 'Job Title']) or "")
         # ADP Fallback
         if eid in adp_idx.index:
-            if not fn and adp_fname_col in adp_idx.columns:
-                fn = str(norm_blank(adp_idx.at[eid, adp_fname_col]) or "")
-            if not ln and adp_lname_col in adp_idx.columns:
-                ln = str(norm_blank(adp_idx.at[eid, adp_lname_col]) or "")
-            if not jt and adp_jt_col in adp_idx.columns:
-                jt = str(norm_blank(adp_idx.at[eid, adp_jt_col]) or "")
+            if adp_fname_col in adp_idx.columns:
+                afn = str(norm_blank(adp_idx.at[eid, adp_fname_col]) or "")
+            if adp_lname_col in adp_idx.columns:
+                aln = str(norm_blank(adp_idx.at[eid, adp_lname_col]) or "")
+            if adp_jt_col in adp_idx.columns:
+                jt_adp = str(norm_blank(adp_idx.at[eid, adp_jt_col]) or "")
+                if not jt:
+                    jt = jt_adp
+            
+            if not fn: fn = afn
+            if not ln: ln = aln
         
         full_name_map[eid] = f"{fn} {ln}".strip()
+        adp_name_map[eid] = f"{afn} {aln}".strip()
         jt_map[eid] = jt.strip()
 
     rows = []
@@ -754,6 +765,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             rows.append({
                 "Employee ID": emp_id,
                 "Name": full_name_map.get(emp_id, ""),
+                "Employee Name (ADP)": adp_name_map.get(emp_id, ""),
                 "Job Title": jt_map.get(emp_id, ""),
                 "Employment Status": uz_emp_status,
                 "Pay Type": emp_paytype,
@@ -764,7 +776,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             })
 
     comparison_detail = pd.DataFrame(rows)[[
-        "Employee ID", "Name", "Job Title", "Employment Status", "Pay Type",
+        "Employee ID", "Name", "Employee Name (ADP)", "Job Title", "Employment Status", "Pay Type",
         "Field", "UZIO_Value", "ADP_Value", "ADP_SourceOfTruth_Status"
     ]]
 

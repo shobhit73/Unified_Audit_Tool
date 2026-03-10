@@ -558,6 +558,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
 
     # Build Name and Job Title maps for context (placed at the top of the comparison sheet)
     full_name_map = {}
+    pc_name_map = {}
     jt_map = {}
     pc_fname_col = norm_colname(PAYCOM_FIELD_MAP.get('First Name', ''))
     pc_lname_col = norm_colname(PAYCOM_FIELD_MAP.get('Last Name', ''))
@@ -567,6 +568,10 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         fn = ""
         ln = ""
         jt = ""
+        
+        pfn = ""
+        pln = ""
+
         # Uzio
         u_i = uzio_idx.get(eid)
         if u_i is not None:
@@ -576,14 +581,20 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         # Paycom Fallback
         p_i = paycom_idx.get(eid)
         if p_i is not None:
-            if not fn and pc_fname_col in paycom.columns:
-                fn = str(norm_blank(paycom.at[p_i, pc_fname_col]) or "")
-            if not ln and pc_lname_col in paycom.columns:
-                ln = str(norm_blank(paycom.at[p_i, pc_lname_col]) or "")
-            if not jt and pc_jt_col in paycom.columns:
-                jt = str(norm_blank(paycom.at[p_i, pc_jt_col]) or "")
+            if pc_fname_col in paycom.columns:
+                pfn = str(norm_blank(paycom.at[p_i, pc_fname_col]) or "")
+            if pc_lname_col in paycom.columns:
+                pln = str(norm_blank(paycom.at[p_i, pc_lname_col]) or "")
+            if pc_jt_col in paycom.columns:
+                jt_pc = str(norm_blank(paycom.at[p_i, pc_jt_col]) or "")
+                if not jt:
+                    jt = jt_pc
+            
+            if not fn: fn = pfn
+            if not ln: ln = pln
         
         full_name_map[eid] = f"{fn} {ln}".strip()
+        pc_name_map[eid] = f"{pfn} {pln}".strip()
         jt_map[eid] = jt.strip()
 
     rows = []
@@ -670,6 +681,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 {
                     "Employee": display_id_map.get(eid, eid),  # Use original leading-zero form
                     "Name": full_name_map.get(eid, ""),
+                    "Employee Name (Paycom)": pc_name_map.get(eid, ""),
                     "Job Title": jt_map.get(eid, ""),
                     "Field": uz_field,
                     "Employment Status": emp_status_context,  # extra context column
@@ -684,6 +696,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         columns=[
             "Employee",
             "Name",
+            "Employee Name (Paycom)",
             "Job Title",
             "Field",
             "Employment Status",

@@ -1021,11 +1021,30 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         }
     )
 
+    # ---------- Specialized Discrepancy Tabs ----------
+    # 1. Work Location Discrpenacies
+    df_work_location_discrepancies_pc = comparison_detail[
+        (comparison_detail["Field"] == "Work Location") & 
+        (comparison_detail["PAYCOM_SourceOfTruth_Status"] != "Data Match")
+    ]
+
+    # 2. FLSA-Paytype-Job Title Discrepancies (includes Work Location as requested)
+    core_fields = ["FLSA Classification", "Pay Type", "Job Title", "Work Location"]
+    df_core_discrepancies_pc = comparison_detail[
+        (comparison_detail["Field"].isin(core_fields)) & 
+        (comparison_detail["PAYCOM_SourceOfTruth_Status"] != "Data Match")
+    ]
+
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
         summary.to_excel(writer, sheet_name="Summary", index=False)
         field_summary_by_status.to_excel(writer, sheet_name="Field_Summary_By_Status", index=False)
         comparison_detail.to_excel(writer, sheet_name="Comparison_Detail_AllFields", index=False)
+        
+        # New specialized tabs
+        df_work_location_discrepancies_pc.to_excel(writer, sheet_name="Work Location Discrpenacies", index=False)
+        df_core_discrepancies_pc.to_excel(writer, sheet_name="FLSA-Paytype-Job Title Discr", index=False)
+
         flsa_issues.to_excel(writer, sheet_name="FLSA_Compliance_Issues", index=False)
         dq_issues.to_excel(writer, sheet_name="Data_Quality_Issues", index=False)
         active_missing_in_uzio.to_excel(writer, sheet_name="Active_Missing_In_Uzio", index=False)

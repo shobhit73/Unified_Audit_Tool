@@ -556,6 +556,36 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
 
     all_emps = sorted(set(uzio_idx.keys()).union(set(paycom_idx.keys())))
 
+    # Build Name and Job Title maps for context (placed at the top of the comparison sheet)
+    full_name_map = {}
+    jt_map = {}
+    pc_fname_col = norm_colname(PAYCOM_FIELD_MAP.get('First Name', ''))
+    pc_lname_col = norm_colname(PAYCOM_FIELD_MAP.get('Last Name', ''))
+    pc_jt_col = norm_colname(PAYCOM_FIELD_MAP.get('Job Title', ''))
+
+    for eid in all_emps:
+        fn = ""
+        ln = ""
+        jt = ""
+        # Uzio
+        u_i = uzio_idx.get(eid)
+        if u_i is not None:
+            fn = str(norm_blank(uzio.at[u_i, 'First Name']) or "")
+            ln = str(norm_blank(uzio.at[u_i, 'Last Name']) or "")
+            jt = str(norm_blank(uzio.at[u_i, 'Job Title']) or "")
+        # Paycom Fallback
+        p_i = paycom_idx.get(eid)
+        if p_i is not None:
+            if not fn and pc_fname_col in paycom.columns:
+                fn = str(norm_blank(paycom.at[p_i, pc_fname_col]) or "")
+            if not ln and pc_lname_col in paycom.columns:
+                ln = str(norm_blank(paycom.at[p_i, pc_lname_col]) or "")
+            if not jt and pc_jt_col in paycom.columns:
+                jt = str(norm_blank(paycom.at[p_i, pc_jt_col]) or "")
+        
+        full_name_map[eid] = f"{fn} {ln}".strip()
+        jt_map[eid] = jt.strip()
+
     rows = []
     for eid in all_emps:
         u_i = uzio_idx.get(eid)
@@ -639,6 +669,8 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
             rows.append(
                 {
                     "Employee": display_id_map.get(eid, eid),  # Use original leading-zero form
+                    "Name": full_name_map.get(eid, ""),
+                    "Job Title": jt_map.get(eid, ""),
                     "Field": uz_field,
                     "Employment Status": emp_status_context,  # extra context column
                     "UZIO_Value": uz_val,
@@ -651,6 +683,8 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         rows,
         columns=[
             "Employee",
+            "Name",
+            "Job Title",
             "Field",
             "Employment Status",
             "UZIO_Value",

@@ -608,6 +608,34 @@ def run_comparison(uzio_file, adp_file) -> bytes:
     # Also locate employee name columns in Uzio for context in FLSA report
     uzio_fname_col = 'First Name'
     uzio_lname_col = 'Last Name'
+    # Build Name and Job Title maps for context (placed at the top of the comparison sheet)
+    full_name_map = {}
+    jt_map = {}
+    adp_fname_col = norm_colname(ADP_FIELD_MAP.get('First Name', ''))
+    adp_lname_col = norm_colname(ADP_FIELD_MAP.get('Last Name', ''))
+    adp_jt_col = norm_colname(ADP_FIELD_MAP.get('Job Title', ''))
+
+    for eid in all_keys:
+        fn = ""
+        ln = ""
+        jt = ""
+        # Uzio
+        if eid in uzio_idx.index:
+            fn = str(norm_blank(uzio_idx.at[eid, 'First Name']) or "")
+            ln = str(norm_blank(uzio_idx.at[eid, 'Last Name']) or "")
+            jt = str(norm_blank(uzio_idx.at[eid, 'Job Title']) or "")
+        # ADP Fallback
+        if eid in adp_idx.index:
+            if not fn and adp_fname_col in adp_idx.columns:
+                fn = str(norm_blank(adp_idx.at[eid, adp_fname_col]) or "")
+            if not ln and adp_lname_col in adp_idx.columns:
+                ln = str(norm_blank(adp_idx.at[eid, adp_lname_col]) or "")
+            if not jt and adp_jt_col in adp_idx.columns:
+                jt = str(norm_blank(adp_idx.at[eid, adp_jt_col]) or "")
+        
+        full_name_map[eid] = f"{fn} {ln}".strip()
+        jt_map[eid] = jt.strip()
+
     rows = []
     for emp_id in all_keys:
         uz_exists = emp_id in uzio_idx.index
@@ -725,6 +753,8 @@ def run_comparison(uzio_file, adp_file) -> bytes:
 
             rows.append({
                 "Employee ID": emp_id,
+                "Name": full_name_map.get(emp_id, ""),
+                "Job Title": jt_map.get(emp_id, ""),
                 "Employment Status": uz_emp_status,
                 "Pay Type": emp_paytype,
                 "Field": field,
@@ -734,7 +764,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             })
 
     comparison_detail = pd.DataFrame(rows)[[
-        "Employee ID", "Employment Status", "Pay Type",
+        "Employee ID", "Name", "Job Title", "Employment Status", "Pay Type",
         "Field", "UZIO_Value", "ADP_Value", "ADP_SourceOfTruth_Status"
     ]]
 

@@ -7,7 +7,9 @@ import pandas as pd
 import streamlit as st
 from utils.audit_utils import (
     read_uzio_raw_file, generate_uzio_template,
-    HOURLY_ONLY_JOB_TITLES, is_hourly_only_job_title
+    HOURLY_ONLY_JOB_TITLES, is_hourly_only_job_title,
+    norm_colname, norm_blank, try_parse_date, ensure_unique_columns, safe_val, normalize_space_and_case,
+    as_float_or_none, find_col
 )
 
 # =========================================================
@@ -63,40 +65,7 @@ ADP_FIELD_MAP = {
 }
 
 # ---------- Helpers ----------
-def norm_colname(c: str) -> str:
-    if c is None:
-        return ""
-    c = str(c).replace("\n", " ").replace("\r", " ")
-    c = c.replace("\u00A0", " ")
-    # Remove bracketed suffixes like (Personal Profile) or (Employment Profile - Pay Rates)
-    c = re.sub(r'\(.*?\)', '', c)
-    c = re.sub(r"\s+", " ", c).strip()
-    c = c.replace("*", "")
-    c = c.strip('"').strip("'")
-    return c
-
-def norm_blank(x):
-    if x is None:
-        return ""
-    if isinstance(x, float) and np.isnan(x):
-        return ""
-    if isinstance(x, str) and x.strip().lower() in {"", "nan", "none", "null"}:
-        return ""
-    return x
-
-def try_parse_date(x):
-    x = norm_blank(x)
-    if x == "":
-        return ""
-    if isinstance(x, (datetime, date, np.datetime64, pd.Timestamp)):
-        return pd.to_datetime(x).strftime("%m/%d/%Y")
-    if isinstance(x, str):
-        s = x.strip()
-        try:
-            return pd.to_datetime(s, errors="raise").strftime("%m/%d/%Y")
-        except Exception:
-            return s
-    return str(x)
+# (redunant helpers removed, using utils.audit_utils)
 
 def digits_only(x):
     x = norm_blank(x)
@@ -358,7 +327,8 @@ def run_comparison(uzio_file, adp_file) -> bytes:
     except Exception as e:
         raise ValueError(f"Failed to read ADP file: {e}")
 
-    # Normalize ADP columns
+    # Normalize ADP columns & Ensure Uniqueness
+    adp = ensure_unique_columns(adp)
     adp.columns = [norm_colname(c) for c in adp.columns]
 
     # 3. Apply Mapping Strategy
@@ -605,35 +575,9 @@ def run_comparison(uzio_file, adp_file) -> bytes:
     # Standard name is 'FLSA Classification'
     uzio_flsa_col = 'FLSA Classification'
 
-    # Build Name and Job Title maps for context (placed at the top of the comparison sheet)
-    # Build Name and Job Title maps for context (placed at the top of the comparison sheet)
-    full_name_map = {}
-    jt_map = {}
-    adp_fname_col = norm_colname(ADP_FIELD_MAP.get('First Name', ''))
-    adp_lname_col = norm_colname(ADP_FIELD_MAP.get('Last Name', ''))
-    adp_jt_col = norm_colname(ADP_FIELD_MAP.get('Job Title', ''))
-
-    for eid in all_keys:
-        fn = ""
-        ln = ""
-        jt = ""
-        # Uzio
-        if eid in uzio_idx.index:
-            fn = str(norm_blank(uzio_idx.at[eid, 'First Name']) or "")
-            ln = str(norm_blank(uzio_idx.at[eid, 'Last Name']) or "")
-            jt = str(norm_blank(uzio_idx.at[eid, 'Job Title']) or "")
-        # ADP Fallback
-        if eid in adp_idx.index:
-            if not fn and adp_fname_col in adp_idx.columns:
-                fn = str(norm_blank(adp_idx.at[eid, adp_fname_col]) or "")
-            if not ln and adp_lname_col in adp_idx.columns:
-                ln = str(norm_blank(adp_idx.at[eid, adp_lname_col]) or "")
-            if not jt and adp_jt_col in adp_idx.columns:
-                jt = str(norm_blank(adp_idx.at[eid, adp_jt_col]) or "")
-        
-        full_name_map[eid] = f"{fn} {ln}".strip()
-        jt_map[eid] = jt.strip()
-
+    # Also locate employee name columns in Uzio for context in FLSA report
+    uzio_fname_col = 'First Name'
+    uzio_lname_col = 'Last Name'
     rows = []
     for emp_id in all_keys:
         uz_exists = emp_id in uzio_idx.index
@@ -650,10 +594,10 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             uz_col_missing = (field not in uzio.columns)
             adp_col_missing = (adp_col not in adp.columns)
 
-            uz_val_raw = uzio_idx.at[emp_id, field] if (uz_exists and not uz_col_missing) else ""
+            uz_val_raw = safe_val(uzio_idx, emp_id, field) if (uz_exists and not uz_col_missing) else ""
             uz_val = cleanse_uzio_value_for_field(field, uz_val_raw)
 
-            adp_val = adp_idx.at[emp_id, adp_col] if (adp_exists and not adp_col_missing) else ""
+            adp_val = safe_val(adp_idx, emp_id, adp_col) if (adp_exists and not adp_col_missing) else ""
 
             if not adp_exists and uz_exists:
                 status = "Employee ID Not Found in ADP"
@@ -751,8 +695,6 @@ def run_comparison(uzio_file, adp_file) -> bytes:
 
             rows.append({
                 "Employee ID": emp_id,
-                "Name": full_name_map.get(emp_id, ""),
-                "Job Title": jt_map.get(emp_id, ""),
                 "Employment Status": uz_emp_status,
                 "Pay Type": emp_paytype,
                 "Field": field,
@@ -762,7 +704,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             })
 
     comparison_detail = pd.DataFrame(rows)[[
-        "Employee ID", "Name", "Job Title", "Employment Status", "Pay Type",
+        "Employee ID", "Employment Status", "Pay Type",
         "Field", "UZIO_Value", "ADP_Value", "ADP_SourceOfTruth_Status"
     ]]
 
@@ -793,7 +735,14 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                 issue = "Salaried employee classified as Non-Exempt"
 
             if issue:
-                emp_name = full_name_map.get(emp_id, "")
+                # Get employee name for context
+                fname = ""
+                lname = ""
+                if uzio_fname_col and uzio_fname_col in uzio_idx.columns:
+                    fname = str(norm_blank(uzio_idx.at[emp_id, uzio_fname_col]) or "")
+                if uzio_lname_col and uzio_lname_col in uzio_idx.columns:
+                    lname = str(norm_blank(uzio_idx.at[emp_id, uzio_lname_col]) or "")
+                emp_name = f"{fname} {lname}".strip()
 
                 flsa_rows.append({
                     "Employee ID": emp_id,
@@ -812,15 +761,40 @@ def run_comparison(uzio_file, adp_file) -> bytes:
     dq_rows = []
     
     # Locate ADP columns for name to use as context
-    # Iterate and check columns
-    # Iterate and check columns
+    adp_fname_col = None
+    for c in adp.columns:
+        cl = norm_colname(c).casefold()
+        if cl in {"legal first name", "first name", "firstname"}:
+            adp_fname_col = c
+            break
+    if adp_fname_col is None:
+        for c in adp.columns:
+            cl = norm_colname(c).casefold()
+            if "first" in cl and "name" in cl:
+                adp_fname_col = c
+                break
+
+    adp_lname_col = None
+    for c in adp.columns:
+        cl = norm_colname(c).casefold()
+        if cl in {"legal last name", "last name", "lastname"}:
+            adp_lname_col = c
+            break
+    if adp_lname_col is None:
+        for c in adp.columns:
+            cl = norm_colname(c).casefold()
+            if "last" in cl and "name" in cl:
+                adp_lname_col = c
+                break
 
     for emp_id in adp_idx.index:
         # Check all columns for this row
         for col in adp.columns:
             val = adp_idx.at[emp_id, col]
             if pd.notna(val) and '00/00/0000' in str(val):
-                emp_name = full_name_map.get(emp_id, "")
+                fname = str(norm_blank(adp_idx.at[emp_id, adp_fname_col]) or "") if adp_fname_col else ""
+                lname = str(norm_blank(adp_idx.at[emp_id, adp_lname_col]) or "") if adp_lname_col else ""
+                emp_name = f"{fname} {lname}".strip()
                 
                 dq_rows.append({
                     "Employee ID": str(emp_id).strip(),
@@ -852,7 +826,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                 break
 
     # Name columns already located above for Data Quality check.
-    # Locate ADP hire date column
+    # We can reuse adp_fname_col and adp_lname_col
 
     adp_hire_col = None
     for c in adp.columns:
@@ -875,7 +849,13 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         if "active" not in status_lower and "leave" not in status_lower:
             continue
 
-        emp_name = full_name_map.get(emp_id, "")
+        fname = ""
+        lname = ""
+        if adp_fname_col and adp_fname_col in adp_idx.columns:
+            fname = str(norm_blank(adp_idx.at[emp_id, adp_fname_col]) or "")
+        if adp_lname_col and adp_lname_col in adp_idx.columns:
+            lname = str(norm_blank(adp_idx.at[emp_id, adp_lname_col]) or "")
+        emp_name = f"{fname} {lname}".strip()
 
         hire_date = ""
         if adp_hire_col and adp_hire_col in adp_idx.columns:

@@ -1,6 +1,9 @@
 import pandas as pd
 import streamlit as st
 import io
+import re
+import numpy as np
+from datetime import datetime, date
 
 # --- Hardcoded Mappings ---
 
@@ -80,6 +83,108 @@ def norm_col(c):
     """Normalize column names to be case-insensitive and stripped."""
     if c is None: return ""
     return str(c).strip().replace("\n", " ").strip()
+
+def norm_colname(c: str) -> str:
+    """Robust column normalization: handles newlines, special quotes, and bracketed suffixes."""
+    if c is None:
+        return ""
+    c = str(c).replace("\n", " ").replace("\r", " ")
+    c = c.replace("\u00A0", " ")
+    c = c.replace("’", "'").replace("“", '"').replace("”", '"')
+    # Remove bracketed suffixes like (Personal Profile) or (Employment Profile - Pay Rates)
+    c = re.sub(r'\(.*?\)', '', c)
+    c = re.sub(r"\s+", " ", c).strip()
+    c = c.replace("*", "")
+    c = c.strip('"').strip("'")
+    return c
+
+def norm_blank(x):
+    """Normalize blank/NaN values to an empty string."""
+    if x is None:
+        return ""
+    if isinstance(x, float) and np.isnan(x):
+        return ""
+    if isinstance(x, str) and x.strip().lower() in {"", "nan", "none", "null"}:
+        return ""
+    return x
+
+def try_parse_date(x):
+    """Attempt to parse various date formats into standard MM/DD/YYYY string."""
+    x = norm_blank(x)
+    if x == "":
+        return ""
+    if isinstance(x, (datetime, date, np.datetime64, pd.Timestamp)):
+        return pd.to_datetime(x).strftime("%m/%d/%Y")
+    if isinstance(x, str):
+        s = x.strip()
+        try:
+            return pd.to_datetime(s, errors="raise").strftime("%m/%d/%Y")
+        except Exception:
+            return s
+    return str(x)
+
+def ensure_unique_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    If multiple columns normalize to the same name (case-insensitive), keep only the first one.
+    This prevents .loc[index, col] from returning a Series instead of a scalar.
+    """
+    df = df.copy()
+    norm_cols = [norm_colname(c).casefold() for c in df.columns]
+    seen = set()
+    to_keep = []
+    for i, nc in enumerate(norm_cols):
+        if nc not in seen:
+            seen.add(nc)
+            to_keep.append(i)
+    return df.iloc[:, to_keep]
+
+def safe_val(df, idx, col):
+    """Safely get a scalar value from a dataframe, even if duplicate columns somehow exist."""
+    if idx is None or col not in df.columns:
+        return ""
+    val = df.loc[idx, col]
+    if isinstance(val, pd.Series):
+        return val.iloc[0]
+    return val
+
+def normalize_space_and_case(x):
+    """Strip whitespace, collapse consecutive spaces, and convert to casefold."""
+    x = norm_blank(x)
+    if x == "":
+        return ""
+    s = str(x).strip()
+    s = s.replace("\u00A0", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s.casefold()
+
+def find_col(df_cols, *candidate_names):
+    """Find a column in a list of columns by matching against several candidates (case-insensitive)."""
+    norm_map = {norm_colname(c).casefold(): c for c in df_cols}
+    for cand in candidate_names:
+        key = norm_colname(cand).casefold()
+        if key in norm_map:
+            return norm_map[key]
+    return None
+
+def as_float_or_none(x):
+    """Convert a value to float or return None if not a number."""
+    x = norm_blank(x)
+    if x == "":
+        return None
+    if isinstance(x, (int, float, np.integer, np.floating)):
+        try:
+            return float(x)
+        except Exception:
+            return None
+    if isinstance(x, str):
+        s = x.strip().replace(",", "").replace("$", "")
+        if s == "":
+            return None
+        try:
+            return float(s)
+        except Exception:
+            return None
+    return None
 
 # --- Job Titles that Uzio ALWAYS treats as Hourly/Non-Exempt ---
 # Any salaried employee with one of these job titles must be flagged.

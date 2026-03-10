@@ -8,7 +8,8 @@ import pandas as pd
 import streamlit as st
 from utils.audit_utils import (
     read_uzio_raw_file,
-    HOURLY_ONLY_JOB_TITLES, is_hourly_only_job_title
+    HOURLY_ONLY_JOB_TITLES, is_hourly_only_job_title,
+    norm_colname, norm_blank, try_parse_date, ensure_unique_columns, safe_val, normalize_space_and_case
 )
 
 # =========================================================
@@ -60,115 +61,7 @@ PAYCOM_FIELD_MAP = {
 }
 
 # ---------- Helpers ----------
-def norm_colname(c: str) -> str:
-    if c is None:
-        return ""
-    c = str(c).replace("\n", " ").replace("\r", " ")
-    c = c.replace("\u00A0", " ")
-    c = c.replace("’", "'").replace("“", '"').replace("”", '"')
-    # Remove bracketed suffixes like (Personal Profile) or (Employment Profile - Pay Rates)
-    c = re.sub(r'\(.*?\)', '', c)
-    c = re.sub(r"\s+", " ", c).strip()
-    c = c.replace("*", "")
-    c = c.strip('"').strip("'")
-    return c
-
-def norm_blank(x):
-    if x is None:
-        return ""
-    if isinstance(x, float) and np.isnan(x):
-        return ""
-    if isinstance(x, str) and x.strip().lower() in {"", "nan", "none", "null"}:
-        return ""
-    return x
-
-def find_col(df_cols, *candidate_names):
-    norm_map = {norm_colname(c).casefold(): c for c in df_cols}
-    for cand in candidate_names:
-        key = norm_colname(cand).casefold()
-        if key in norm_map:
-            return norm_map[key]
-    return None
-
-def ensure_unique_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    If multiple columns normalize to the same name, keep only the first one.
-    This prevents .loc[index, col] from returning a Series.
-    """
-    df = df.copy()
-    norm_cols = [norm_colname(c).casefold() for c in df.columns]
-    seen = set()
-    to_keep = []
-    for i, nc in enumerate(norm_cols):
-        if nc not in seen:
-            seen.add(nc)
-            to_keep.append(i)
-    return df.iloc[:, to_keep]
-
-def safe_val(df, idx, col):
-    """Safely get a scalar value from a dataframe, even if duplicates somehow exist."""
-    if idx is None or col not in df.columns:
-        return ""
-    val = df.loc[idx, col]
-    if isinstance(val, pd.Series):
-        return val.iloc[0]
-    return val
-
-def norm_key_series(s: pd.Series) -> pd.Series:
-    s2 = s.astype(object).where(~s.isna(), "")
-    def _fix(v):
-        v = str(v).strip()
-        v = v.replace("\u00A0", " ")
-        if re.fullmatch(r"\d+\.0+", v):
-            v = v.split(".")[0]
-        # Strip leading zeros from purely numeric IDs for matching
-        # e.g. "0006" -> "6", "006" -> "6", "0" -> "0"
-        if re.fullmatch(r"0+\d+", v):
-            v = v.lstrip("0") or "0"
-        return v
-    return s2.map(_fix)
-
-def try_parse_date(x):
-    x = norm_blank(x)
-    if x == "":
-        return ""
-    if isinstance(x, (datetime, date, np.datetime64, pd.Timestamp)):
-        return pd.to_datetime(x).strftime("%m/%d/%Y")
-    if isinstance(x, str):
-        s = x.strip()
-        try:
-            return pd.to_datetime(s, errors="raise").strftime("%m/%d/%Y")
-        except Exception:
-            return s
-    return str(x)
-
-def as_float_or_none(x):
-    x = norm_blank(x)
-    if x == "":
-        return None
-    if isinstance(x, (int, float, np.integer, np.floating)):
-        try:
-            return float(x)
-        except Exception:
-            return None
-    if isinstance(x, str):
-        s = x.strip().replace(",", "").replace("$", "")
-        if s == "":
-            return None
-        try:
-            return float(s)
-        except Exception:
-            return None
-    return None
-
-def normalize_space_and_case(x):
-    x = norm_blank(x)
-    if x == "":
-        return ""
-    s = str(x).strip()
-    s = s.replace("\u00A0", " ")
-    s = re.sub(r"\s+", " ", s).strip()
-    return s.casefold()
+# (redunant helpers removed, using utils.audit_utils)
 
 def normalize_employment_type(x):
     s = normalize_space_and_case(x)
@@ -550,39 +443,11 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
     # ---------- FLSA Classification column (Uzio) ----------
     uzio_flsa_col = 'FLSA Classification'
 
-    # ---
+    # Also locate employee name columns in Uzio for context in FLSA report
+    uzio_fname_col = 'First Name'
+    uzio_lname_col = 'Last Name'
 
     all_emps = sorted(set(uzio_idx.keys()).union(set(paycom_idx.keys())))
-
-    # Build Name and Job Title maps for context (placed at the top of the comparison sheet)
-    full_name_map = {}
-    jt_map = {}
-    pc_fname_col = norm_colname(PAYCOM_FIELD_MAP.get('First Name', ''))
-    pc_lname_col = norm_colname(PAYCOM_FIELD_MAP.get('Last Name', ''))
-    pc_jt_col = norm_colname(PAYCOM_FIELD_MAP.get('Job Title', ''))
-
-    for eid in all_emps:
-        fn = ""
-        ln = ""
-        jt = ""
-        # Uzio
-        u_i = uzio_idx.get(eid)
-        if u_i is not None:
-            fn = str(norm_blank(uzio.at[u_i, 'First Name']) or "")
-            ln = str(norm_blank(uzio.at[u_i, 'Last Name']) or "")
-            jt = str(norm_blank(uzio.at[u_i, 'Job Title']) or "")
-        # Paycom Fallback
-        p_i = paycom_idx.get(eid)
-        if p_i is not None:
-            if not fn and pc_fname_col in paycom.columns:
-                fn = str(norm_blank(paycom.at[p_i, pc_fname_col]) or "")
-            if not ln and pc_lname_col in paycom.columns:
-                ln = str(norm_blank(paycom.at[p_i, pc_lname_col]) or "")
-            if not jt and pc_jt_col in paycom.columns:
-                jt = str(norm_blank(paycom.at[p_i, pc_jt_col]) or "")
-        
-        full_name_map[eid] = f"{fn} {ln}".strip()
-        jt_map[eid] = jt.strip()
 
     rows = []
     for eid in all_emps:
@@ -667,8 +532,6 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
             rows.append(
                 {
                     "Employee": display_id_map.get(eid, eid),  # Use original leading-zero form
-                    "Name": full_name_map.get(eid, ""),
-                    "Job Title": jt_map.get(eid, ""),
                     "Field": uz_field,
                     "Employment Status": emp_status_context,  # extra context column
                     "UZIO_Value": uz_val,
@@ -681,8 +544,6 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         rows,
         columns=[
             "Employee",
-            "Name",
-            "Job Title",
             "Field",
             "Employment Status",
             "UZIO_Value",
@@ -781,7 +642,14 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 issue = "Salaried employee classified as Non-Exempt"
 
             if issue:
-                emp_name = full_name_map.get(eid, "")
+                # Get employee name for context
+                fname = ""
+                lname = ""
+                if uzio_fname_col and uzio_fname_col in uzio.columns:
+                    fname = str(norm_blank(uzio.loc[u_i, uzio_fname_col]) or "")
+                if uzio_lname_col and uzio_lname_col in uzio.columns:
+                    lname = str(norm_blank(uzio.loc[u_i, uzio_lname_col]) or "")
+                emp_name = f"{fname} {lname}".strip()
 
                 # Get Pay Type raw value from Uzio for display
                 pay_raw = ""
@@ -804,7 +672,21 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
     # ---------- Data Quality Issues (00/00/0000 dates) ----------
     dq_rows = []
     
-    # Iterate and check columns
+    # Locate Emp ID and Name columns again for context
+    pc_fname_col = find_col(paycom.columns, "Legal_Firstname", "Legal Firstname", "First Name", "FirstName")
+    if pc_fname_col is None:
+        for c in paycom.columns:
+            cl = norm_colname(c).casefold()
+            if "first" in cl and "name" in cl:
+                pc_fname_col = c
+                break
+    pc_lname_col = find_col(paycom.columns, "Legal_Lastname", "Legal Lastname", "Last Name", "LastName")
+    if pc_lname_col is None:
+        for c in paycom.columns:
+            cl = norm_colname(c).casefold()
+            if "last" in cl and "name" in cl:
+                pc_lname_col = c
+                break
 
     for eid in paycom_idx.keys():
         p_i = paycom_idx.get(eid)
@@ -813,7 +695,9 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
             for col in paycom.columns:
                 val = safe_val(paycom, p_i, col)
                 if pd.notna(val) and '00/00/0000' in str(val):
-                    emp_name = full_name_map.get(eid, "")
+                    fname = str(norm_blank(paycom.loc[p_i, pc_fname_col]) or "") if pc_fname_col else ""
+                    lname = str(norm_blank(paycom.loc[p_i, pc_lname_col]) or "") if pc_lname_col else ""
+                    emp_name = f"{fname} {lname}".strip()
                     pc_raw_id = paycom_orig_keys.loc[p_i] if p_i in paycom_orig_keys.index else eid
                     
                     dq_rows.append({
@@ -831,7 +715,19 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
     # Find employees in Paycom but NOT in Uzio who are Active / On Leave
     paycom_only_emps = set(paycom_idx.keys()) - set(uzio_idx.keys())
 
-    # (Hire date is still needed)
+    # (Already located above for DQ checks, but redeclared here if needed, safe to keep as is)
+    if pc_fname_col is None:
+        for c in paycom.columns:
+            cl = norm_colname(c).casefold()
+            if "first" in cl and "name" in cl:
+                pc_fname_col = c
+                break
+    if pc_lname_col is None:
+        for c in paycom.columns:
+            cl = norm_colname(c).casefold()
+            if "last" in cl and "name" in cl:
+                pc_lname_col = c
+                break
     pc_hire_col = find_col(paycom.columns, "Most_Recent_Hire_Date", "Most Recent Hire Date",
                            "Hire_Date", "Hire Date")
     if pc_hire_col is None:
@@ -854,7 +750,13 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         if status_lower not in {"active", "on leave", "leave", "activated"}:
             continue
 
-        emp_name = full_name_map.get(eid, "")
+        fname = ""
+        lname = ""
+        if pc_fname_col and pc_fname_col in paycom.columns:
+            fname = str(norm_blank(paycom.loc[p_i, pc_fname_col]) or "")
+        if pc_lname_col and pc_lname_col in paycom.columns:
+            lname = str(norm_blank(paycom.loc[p_i, pc_lname_col]) or "")
+        emp_name = f"{fname} {lname}".strip()
 
         hire_date = ""
         if pc_hire_col and pc_hire_col in paycom.columns:

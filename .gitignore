@@ -19,3 +19,10 @@ env
 .env
 .streamlit/secrets.toml
 **/.vscode/
+
+# Agent Artifacts
+.playwright-mcp/
+adp_*.png
+adp_*.md
+!adp_census_download.md
+! .agents/workflows/

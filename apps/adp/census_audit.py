@@ -584,6 +584,14 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             return "" if norm_blank(v) == "" else str(v)
         return ""
 
+    # ADP Employment Status lookup (always show ADP status regardless of Uzio presence)
+    def get_adp_employment_status(emp_id: str) -> str:
+        if adp_emp_status_col and adp_emp_status_col in adp_idx.columns:
+            if emp_id in adp_idx.index:
+                v = adp_idx.at[emp_id, adp_emp_status_col]
+                return "" if norm_blank(v) == "" else str(v)
+        return ""
+
     # Pay Type mapping (prefer ADP)
     UZIO_PAYTYPE_COL = 'Pay Type'
     ADP_PAYTYPE_COL = norm_colname(ADP_FIELD_MAP.get('Pay Type', ''))
@@ -639,6 +647,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         adp_exists = emp_id in adp_idx.index
 
         uz_emp_status = get_uzio_employment_status(emp_id)
+        adp_emp_status_val = get_adp_employment_status(emp_id)
         emp_paytype = get_employee_pay_type(emp_id, adp_exists=adp_exists, uz_exists=uz_exists)
         emp_pay_bucket = paytype_bucket(normalize_paytype_text(emp_paytype))
 
@@ -781,6 +790,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                 "Employee ID": emp_id,
                 "Employee Name": emp_name,
                 "Employment Status": uz_emp_status,
+                "Employment Status (ADP)": adp_emp_status_val,
                 "Pay Type": emp_paytype,
                 "Field": field,
                 "UZIO_Value": uz_val,
@@ -789,7 +799,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             })
 
     comparison_detail = pd.DataFrame(rows)[[
-        "Employee ID", "Employee Name", "Employment Status", "Pay Type",
+        "Employee ID", "Employee Name", "Employment Status", "Employment Status (ADP)", "Pay Type",
         "Field", "UZIO_Value", "ADP_Value", "ADP_SourceOfTruth_Status"
     ]]
 

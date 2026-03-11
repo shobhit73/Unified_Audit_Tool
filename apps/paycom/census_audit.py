@@ -455,6 +455,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         p_i = paycom_idx.get(eid)
 
         emp_status_context = get_emp_status(eid)
+        paycom_emp_status_val = str(paycom_status_map.get(eid, ""))  # Paycom status, blank if not present
         emp_pay_type = pay_type_map.get(eid, "")
 
         for field in mapped_fields:
@@ -534,6 +535,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                     "Employee": display_id_map.get(eid, eid),  # Use original leading-zero form
                     "Field": uz_field,
                     "Employment Status": emp_status_context,  # extra context column
+                    "Employment Status (Paycom)": paycom_emp_status_val,  # Paycom status always shown
                     "UZIO_Value": uz_val,
                     "PAYCOM_Value": pc_val,
                     "PAYCOM_SourceOfTruth_Status": status,
@@ -546,6 +548,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
             "Employee",
             "Field",
             "Employment Status",
+            "Employment Status (Paycom)",
             "UZIO_Value",
             "PAYCOM_Value",
             "PAYCOM_SourceOfTruth_Status",

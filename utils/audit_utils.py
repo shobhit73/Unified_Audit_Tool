@@ -98,6 +98,17 @@ def norm_colname(c: str) -> str:
     c = c.strip('"').strip("'")
     return c
 
+def norm_key_series(s: pd.Series) -> pd.Series:
+    """Normalize a pandas Series of keys (like Employee IDs), handling floats like '123.0' and NaN."""
+    s2 = s.astype(object).where(~s.isna(), "")
+    def _fix(v):
+        v = str(v).strip()
+        v = v.replace("\u00A0", " ")
+        if re.fullmatch(r"\d+\.0+", v):
+            v = v.split(".")[0]
+        return v
+    return s2.map(_fix)
+
 def norm_blank(x):
     """Normalize blank/NaN values to an empty string."""
     if x is None:

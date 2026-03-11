@@ -61,7 +61,8 @@ ADP_FIELD_MAP = {
     'EEO Job Category': 'EEOC Job Classification',
     'Ethnicity': 'Race Description',
     'SOC Code': 'SOC Code',
-    'Work Location': 'Location Description'
+    'Work Location': 'Location Description',
+    'Employment Type': 'Worker Category Description'
 }
 
 # ---------- Helpers ----------
@@ -109,6 +110,10 @@ PHONE_KEYWORDS = {"phone"}
 MIDDLE_INITIAL_KEYWORDS = {"middle initial"}  # ONLY CHANGE: treat as initial vs full middle name
 JOB_TITLE_KEYWORDS = {"job title", "position title"}
 VETERAN_KEYWORDS = {"veteran"}
+EMPLOYMENT_TYPE_KEYWORDS = {"employment type"}
+
+# Valid Uzio Employment Type values
+VALID_EMPLOYMENT_TYPES = {"full time", "part time", "other", "seasonal"}
 
 JOB_TITLE_MAPPINGS = {
     "admin": "administrator",
@@ -302,6 +307,29 @@ def cleanse_uzio_value_for_field(field_name: str, uz_val):
 def is_pay_type_field(field_name: str) -> bool:
     f = norm_colname(field_name).casefold()
     return f == "pay type" or ("pay type" in f)
+
+# ---------- Employment Type (Full Time / Part Time / Other / Seasonal) ----------
+def is_employment_type_field(field_name: str) -> bool:
+    f = norm_colname(field_name).casefold()
+    return "employment type" in f
+
+def normalize_employment_type(x) -> str:
+    """Normalize to one of: full time, part time, other, seasonal, or raw value."""
+    s = norm_blank(x)
+    if s == "":
+        return ""
+    s = str(s).replace("\u00A0", " ")
+    s = re.sub(r"\s+", " ", s).strip().casefold()
+    # Map common ADP variants -> Uzio canonical
+    if s in {"full time", "fulltime", "full-time", "ft"}:
+        return "full time"
+    if s in {"part time", "parttime", "part-time", "pt"}:
+        return "part time"
+    if s in {"seasonal"}:
+        return "seasonal"
+    if s in {"other"}:
+        return "other"
+    return s
 
 def normalize_paytype_for_compare(x) -> str:
     s = normalize_paytype_text(x)
@@ -677,6 +705,17 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                                 status = "Value missing in ADP (Uzio has value)"
                             else:
                                 status = "Data Mismatch"
+                    elif is_employment_type_field(field):
+                        uz_et = normalize_employment_type(uz_val)
+                        adp_et = normalize_employment_type(adp_val)
+                        if (uz_et == adp_et) or (uz_et == "" and adp_et == ""):
+                            status = "Data Match"
+                        elif uz_et == "" and adp_et != "":
+                            status = "Value missing in Uzio (ADP has value)"
+                        elif uz_et != "" and adp_et == "":
+                            status = "Value missing in ADP (Uzio has value)"
+                        else:
+                            status = "Data Mismatch"
                     else:
                         if (uz_n == adp_n) or (uz_n == "" and adp_n == ""):
                             status = "Data Match"

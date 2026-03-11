@@ -72,7 +72,11 @@ def digits_only(x):
     x = norm_blank(x)
     if x == "":
         return ""
-    return re.sub(r"\D", "", str(x))
+    # If pandas read it as a float, it might look like '9048729456.0'
+    s = str(x).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return re.sub(r"\D", "", s)
 
 def norm_ssn_9digits(x):
     # ONLY CHANGE: SSN compare as 9 digits (pad leading zeros if Excel dropped them)

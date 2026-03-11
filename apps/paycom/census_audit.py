@@ -79,8 +79,12 @@ def normalize_phone(x):
     s = norm_blank(x)
     if s == "":
         return ""
+    # If pandas read it as a float, it might look like '9048729456.0'
+    s_str = str(s).strip()
+    if s_str.endswith(".0"):
+        s_str = s_str[:-2]
     # remove all non-digits
-    digits = re.sub(r"[^0-9]", "", str(s))
+    digits = re.sub(r"[^0-9]", "", s_str)
     # if 11 digits and starts with 1, remove leading 1
     if len(digits) == 11 and digits.startswith("1"):
         digits = digits[1:]

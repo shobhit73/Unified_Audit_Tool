@@ -329,7 +329,7 @@ def normalize_employment_type(x) -> str:
         return "full time"
     if s in {"part time", "parttime", "part-time", "pt"}:
         return "part time"
-    if s in {"seasonal"}:
+    if s in {"seasonal", "temporary", "temp"}:
         return "seasonal"
     if s in {"other"}:
         return "other"

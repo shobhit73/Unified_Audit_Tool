@@ -68,6 +68,12 @@ def normalize_employment_type(x):
     s = normalize_space_and_case(x)
     s = s.replace("-", " ")
     s = re.sub(r"\s+", " ", s).strip()
+    if s in {"full time", "fulltime", "ft"}:
+        return "full time"
+    if s in {"part time", "parttime", "pt"}:
+        return "part time"
+    if s in {"seasonal", "temporary", "temp"}:
+        return "seasonal"
     return s
 
 def normalize_suffix(x):

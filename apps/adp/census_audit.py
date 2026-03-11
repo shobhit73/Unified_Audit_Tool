@@ -604,9 +604,36 @@ def run_comparison(uzio_file, adp_file) -> bytes:
     uzio_flsa_col = 'FLSA Classification'
 
     # Also locate employee name columns in Uzio for context in FLSA report
+    # Locate ADP columns for name to use as context
+    adp_fname_col = None
+    for c in adp.columns:
+        cl = norm_colname(c).casefold()
+        if cl in {"legal first name", "first name", "firstname"}:
+            adp_fname_col = c
+            break
+    if adp_fname_col is None:
+        for c in adp.columns:
+            cl = norm_colname(c).casefold()
+            if "first" in cl and "name" in cl:
+                adp_fname_col = c
+                break
+
+    adp_lname_col = None
+    for c in adp.columns:
+        cl = norm_colname(c).casefold()
+        if cl in {"legal last name", "last name", "lastname"}:
+            adp_lname_col = c
+            break
+    if adp_lname_col is None:
+        for c in adp.columns:
+            cl = norm_colname(c).casefold()
+            if "last" in cl and "name" in cl:
+                adp_lname_col = c
+                break
+
+    rows = []
     uzio_fname_col = 'First Name'
     uzio_lname_col = 'Last Name'
-    rows = []
     for emp_id in all_keys:
         uz_exists = emp_id in uzio_idx.index
         adp_exists = emp_id in adp_idx.index
@@ -614,6 +641,24 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         uz_emp_status = get_uzio_employment_status(emp_id)
         emp_paytype = get_employee_pay_type(emp_id, adp_exists=adp_exists, uz_exists=uz_exists)
         emp_pay_bucket = paytype_bucket(normalize_paytype_text(emp_paytype))
+
+        # --- Determine Employee Name ---
+        fname = ""
+        lname = ""
+        if uz_exists:
+            if uzio_fname_col in uzio_idx.columns:
+                fname = str(norm_blank(uzio_idx.at[emp_id, uzio_fname_col]) or "")
+            if uzio_lname_col in uzio_idx.columns:
+                lname = str(norm_blank(uzio_idx.at[emp_id, uzio_lname_col]) or "")
+        
+        # Fallback to ADP if Uzio is blank or employee not in Uzio
+        if (fname == "" and lname == "") and adp_exists:
+            if adp_fname_col and adp_fname_col in adp_idx.columns:
+                fname = str(norm_blank(adp_idx.at[emp_id, adp_fname_col]) or "")
+            if adp_lname_col and adp_lname_col in adp_idx.columns:
+                lname = str(norm_blank(adp_idx.at[emp_id, adp_lname_col]) or "")
+        
+        emp_name = f"{fname} {lname}".strip()
 
         for field in mapped_fields:
             adp_col = uz_to_adp.get(field, "")
@@ -734,6 +779,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
 
             rows.append({
                 "Employee ID": emp_id,
+                "Employee Name": emp_name,
                 "Employment Status": uz_emp_status,
                 "Pay Type": emp_paytype,
                 "Field": field,
@@ -743,7 +789,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             })
 
     comparison_detail = pd.DataFrame(rows)[[
-        "Employee ID", "Employment Status", "Pay Type",
+        "Employee ID", "Employee Name", "Employment Status", "Pay Type",
         "Field", "UZIO_Value", "ADP_Value", "ADP_SourceOfTruth_Status"
     ]]
 
@@ -799,33 +845,6 @@ def run_comparison(uzio_file, adp_file) -> bytes:
     # ---------- Data Quality Issues (00/00/0000 dates) ----------
     dq_rows = []
     
-    # Locate ADP columns for name to use as context
-    adp_fname_col = None
-    for c in adp.columns:
-        cl = norm_colname(c).casefold()
-        if cl in {"legal first name", "first name", "firstname"}:
-            adp_fname_col = c
-            break
-    if adp_fname_col is None:
-        for c in adp.columns:
-            cl = norm_colname(c).casefold()
-            if "first" in cl and "name" in cl:
-                adp_fname_col = c
-                break
-
-    adp_lname_col = None
-    for c in adp.columns:
-        cl = norm_colname(c).casefold()
-        if cl in {"legal last name", "last name", "lastname"}:
-            adp_lname_col = c
-            break
-    if adp_lname_col is None:
-        for c in adp.columns:
-            cl = norm_colname(c).casefold()
-            if "last" in cl and "name" in cl:
-                adp_lname_col = c
-                break
-
     for emp_id in adp_idx.index:
         # Check all columns for this row
         for col in adp.columns:

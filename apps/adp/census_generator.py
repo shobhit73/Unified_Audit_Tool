@@ -177,7 +177,7 @@ def render_ui():
         # Show soft warnings first (non-blocking)
         has_soft_warnings = not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty
         if has_soft_warnings:
-            with st.expander("System Auto-Corrections & Minor Warnings", expanded=False):
+            with st.expander("System Minor Warnings", expanded=False):
                 if not flsa_corrections.empty:
                     st.markdown(f"- ℹ️ **FLSA Auto-Corrections:** {len(flsa_corrections)} employee(s) had mismatched FLSA classifications. These have been auto-corrected.")
                 if not flsa_blanks.empty:
@@ -227,178 +227,11 @@ def render_ui():
         else:
             st.success("✅ Source data passed all sanity checks!")
             
-        fix_convert_drivers = False
-        if not salaried_drivers.empty:
-            st.markdown("---")
-            st.error(f"**\U0001f6a8 Salaried Hourly-Only Exception:** Found {len(salaried_drivers)} employee(s) with an hourly-only Job Title (Driver, Walker, Helper, etc.) but Pay Type set to Salaried. Uzio requires these roles to be Hourly/Non-Exempt.")
-            fix_convert_drivers = st.checkbox(
-                f"**Auto-Fix {len(salaried_drivers)} employee(s):** Convert Pay Type to **Hourly** and FLSA Classification to **Non-Exempt** for these employee(s).",
-                value=True, key="adp_convert_drivers"
-            )
+
+
     
-        # --- AUTO-FIX OPTIONS (always shown, checkbox-based) ---
-        from utils.preprocess_source_data import detect_fixable_issues, apply_auto_fixes
-        fixable = detect_fixable_issues(df_adp, resolved_field_map)
-        
-        has_any_fixable = (fixable['flsa_blank_count'] > 0 or fixable['email_blank_count'] > 0 
-                           or fixable['zip_fixable_count'] > 0 or fixable['hours_blank_count'] > 0
-                           or fixable.get('inactive_status_count', 0) > 0
-                           or fixable.get('temporary_status_count', 0) > 0
-                           or fixable.get('blank_dol_active_count', 0) > 0
-                           or fixable.get('blank_dol_term_count', 0) > 0
-                           or fixable.get('invalid_date_count', 0) > 0
-                           or fixable.get('type_blank_count', 0) > 0)
-        
-        if has_any_fixable:
-            st.markdown("---")
-            st.markdown("### 🔧 Auto-Fix Options")
-            st.markdown("Select which issues you'd like the tool to fix automatically:")
-            
-            fix_flsa = False
-            fix_email = False
-            fix_zip = False
-            fix_hours = False
-            fix_inactive = False
-            fix_temporary = False
-            fix_blank_dol_active = False
-            fix_blank_dol_term = False
-            fix_invalid_dates = False
-            fix_type_blanks = False
-            
-            if fixable['flsa_blank_count'] > 0:
-                fix_flsa = st.checkbox(
-                    f"**Fix Blank FLSA Classification** — Set based on Pay Type ({fixable['flsa_blank_count']} employee(s) affected)",
-                    value=True, key="adp_fix_flsa"
-                )
-            
-            if fixable['email_blank_count'] > 0:
-                fix_email = st.checkbox(
-                    f"**Fix Blank Work Email** — Use Personal Email as fallback ({fixable['email_blank_count']} employee(s) affected)",
-                    value=True, key="adp_fix_email"
-                )
-            
-            if fixable['zip_fixable_count'] > 0:
-                fix_zip = st.checkbox(
-                    f"**Fix Zip Code Issues** — Strip extra characters after dash or dot ({fixable['zip_fixable_count']} employee(s) affected)",
-                    value=True, key="adp_fix_zip"
-                )
-            
-            if fixable['hours_blank_count'] > 0:
-                label = f"**Fix Blank Working Hours** — Set to 0 ({fixable['hours_blank_count']} employee(s) affected)"
-                if fixable['hours_col_missing']:
-                    label = f"**Fix Missing Working Hours Column** — Add column with 0 values ({fixable['hours_blank_count']} employee(s) affected)"
-                fix_hours = st.checkbox(label, value=True, key="adp_fix_hours")
                 
-            if fixable.get('inactive_status_count', 0) > 0:
-                fix_inactive = st.checkbox(
-                    f"**Fix 'Inactive' Employee Status** — Change to 'Terminated' ({fixable['inactive_status_count']} employee(s) affected)",
-                    value=True, key="adp_fix_inactive"
-                )
-            if fixable.get('temporary_status_count', 0) > 0:
-                fix_temporary = st.checkbox(
-                    f"**Fix 'Temporary' Employee Status** — Change to 'Seasonal' ({fixable['temporary_status_count']} employee(s) affected)",
-                    value=True, key="adp_fix_temporary"
-                )
-            if fixable.get('blank_dol_active_count', 0) > 0:
-                fix_blank_dol_active = st.checkbox(
-                    f"**Fix Blank 'DOL_Status'** — Set to 'Full-Time' for Active employees ({fixable['blank_dol_active_count']} employee(s) affected)",
-                    value=True, key="adp_fix_blank_dol_active"
-                )
-            if fixable.get('blank_dol_term_count', 0) > 0:
-                fix_blank_dol_term = st.checkbox(
-                    f"**Fix Blank 'DOL_Status'** — Delete Row for Terminated employees ({fixable['blank_dol_term_count']} employee(s) affected)",
-                    value=True, key="adp_fix_blank_dol_term"
-                )
-            if fixable.get('invalid_date_count', 0) > 0:
-                fix_invalid_dates = st.checkbox(
-                    f"**Fix Invalid Dates** — Blank out '00/00/0000' values ({fixable['invalid_date_count']} instance(s) affected)",
-                    value=True, key="adp_fix_invalid_dates"
-                )
-            if fixable.get('type_blank_count', 0) > 0:
-                fix_type_blanks = st.checkbox(
-                    f"**Fix Blank Worker Category (Employment Type)** — Set to 'Part Time' ({fixable['type_blank_count']} employee(s) affected)",
-                    value=True, key="adp_fix_type_blanks"
-                )
-    
-            st.markdown("---")
-        
-            fixes_to_apply = {
-                'fix_flsa': fix_flsa,
-                'fix_email': fix_email,
-                'fix_zip': fix_zip,
-                'fix_hours': fix_hours,
-                'fix_inactive': fix_inactive,
-                'fix_temporary': fix_temporary,
-                'fix_blank_dol_active': fix_blank_dol_active,
-                'fix_blank_dol_term': fix_blank_dol_term,
-                'fix_invalid_dates': fix_invalid_dates,
-                'fix_type_blanks': fix_type_blanks
-            }
-            
-            if any(fixes_to_apply.values()):
-                fixes = apply_auto_fixes(df_adp, resolved_field_map, fixes_to_apply)
-                
-                # Display what was fixed
-                fix_count = 0
-                success_messages = []
-                
-                if not fixes['flsa_fills'].empty:
-                    fix_count += len(fixes['flsa_fills'])
-                    success_messages.append(f"- **FLSA Auto-Fill:** {len(fixes['flsa_fills'])} employee(s)")
-            
-            if not fixes['email_fallbacks'].empty:
-                fix_count += len(fixes['email_fallbacks'])
-                success_messages.append(f"- **Email Fallback:** {len(fixes['email_fallbacks'])} employee(s)")
-            
-            if not fixes['zip_corrections'].empty:
-                fix_count += len(fixes['zip_corrections'])
-                success_messages.append(f"- **Zip Code Corrections:** {len(fixes['zip_corrections'])} employee(s)")
-            
-            if not fixes['hours_fixes'].empty:
-                fix_count += len(fixes['hours_fixes'])
-                success_messages.append(f"- **Working Hours Fix:** {len(fixes['hours_fixes'])} employee(s)")
-                
-            if 'inactive_fixes' in fixes and not fixes['inactive_fixes'].empty:
-                fix_count += len(fixes['inactive_fixes'])
-                success_messages.append(f"- **Inactive Status Fix:** {len(fixes['inactive_fixes'])} employee(s)")
-                
-            if 'temporary_fixes' in fixes and not fixes['temporary_fixes'].empty:
-                fix_count += len(fixes['temporary_fixes'])
-                success_messages.append(f"- **Temporary Status Fix:** {len(fixes['temporary_fixes'])} employee(s)")
-                
-            if 'dol_active_fixes' in fixes and not fixes['dol_active_fixes'].empty:
-                fix_count += len(fixes['dol_active_fixes'])
-                success_messages.append(f"- **Blank DOL Fix (Active):** {len(fixes['dol_active_fixes'])} employee(s)")
-                
-            if 'dol_term_fixes' in fixes and not fixes['dol_term_fixes'].empty:
-                fix_count += len(fixes['dol_term_fixes'])
-                success_messages.append(f"- **Blank DOL Fix (Terminated):** {len(fixes['dol_term_fixes'])} employee(s) deleted")
-                
-            if 'invalid_date_fixes' in fixes and not fixes['invalid_date_fixes'].empty:
-                fix_count += len(fixes['invalid_date_fixes'])
-                success_messages.append(f"- **Invalid Dates Blanked:** {len(fixes['invalid_date_fixes'])} dates corrected")
-                
-            if 'type_blank_fixes' in fixes and not fixes['type_blank_fixes'].empty:
-                fix_count += len(fixes['type_blank_fixes'])
-                success_messages.append(f"- **Worker Category Auto-Fill:** {len(fixes['type_blank_fixes'])} employee(s) set to Part Time")
-            
-            if fix_count > 0:
-                msg = f"✅ **{fix_count} total fix(es) actively applied to the data!**\n\n" + "\n".join(success_messages)
-                st.success(msg)
-                
-        # Convert Salaried Hourly-Only employees to Hourly + Non-Exempt if checked
-        if fix_convert_drivers and not salaried_drivers.empty:
-            emp_id_col = resolved_field_map.get('Employee ID')
-            pay_type_col = resolved_field_map.get('Pay Type')
-            flsa_col = resolved_field_map.get('FLSA Classification')
-            if emp_id_col and emp_id_col in df_adp.columns:
-                bad_ids = salaried_drivers['Employee ID'].astype(str).str.strip().tolist()
-                mask = df_adp[emp_id_col].astype(str).str.strip().isin(bad_ids)
-                if pay_type_col and pay_type_col in df_adp.columns:
-                    df_adp.loc[mask, pay_type_col] = 'Hourly'
-                if flsa_col and flsa_col in df_adp.columns:
-                    df_adp.loc[mask, flsa_col] = 'Non-Exempt'
-                st.success(f"**\u2705 Converted:** {mask.sum()} employee(s) updated \u2014 Pay Type set to **Hourly**, FLSA Classification set to **Non-Exempt**.")
+
                 
         # --- DSP OWNER DETECTION (ADP) ---
         col_sup_code = resolved_field_map.get('Reports To ID')

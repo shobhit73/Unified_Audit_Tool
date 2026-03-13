@@ -418,7 +418,6 @@ def validate_source_data(df_source, resolved_field_map):
                 if pay_val and ("hourly" in pay_val or "hour" in pay_val):
                     if "exempt" in flsa_str and "non" not in flsa_str:
                         # Hourly should be Non-Exempt
-                        df_source.at[idx, flsa_col] = "Non-Exempt"
                         flsa_corrections.append({
                             'Employee ID': emp_ref,
                             'Pay Type': str(row.get(pay_type_col, '')).strip(),
@@ -428,7 +427,6 @@ def validate_source_data(df_source, resolved_field_map):
                 elif pay_val and ("salary" in pay_val or "salaried" in pay_val):
                     if "non" in flsa_str and "exempt" in flsa_str:
                         # Salaried should be Exempt
-                        df_source.at[idx, flsa_col] = "Exempt"
                         flsa_corrections.append({
                             'Employee ID': emp_ref,
                             'Pay Type': str(row.get(pay_type_col, '')).strip(),
@@ -451,7 +449,6 @@ def validate_source_data(df_source, resolved_field_map):
                 if personal_email_col and personal_email_col in df_source.columns:
                     pe_val = row.get(personal_email_col)
                     if pd.notna(pe_val) and str(pe_val).strip():
-                        df_source.at[idx, work_email_col] = str(pe_val).strip()
                         email_fallbacks.append({
                             'Employee ID': emp_ref,
                             'Personal Email Used': str(pe_val).strip()
@@ -461,7 +458,6 @@ def validate_source_data(df_source, resolved_field_map):
         if type_col and type_col in df_source.columns:
             type_val = row.get(type_col)
             if pd.notna(type_val) and 'intern' in str(type_val).strip().lower():
-                df_source.at[idx, type_col] = 'Part Time'
                 intern_corrections.append({
                     'Employee ID': emp_ref,
                     'Original Employment Type': str(type_val).strip(),

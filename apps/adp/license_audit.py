@@ -35,10 +35,29 @@ def try_parse_date(x):
             return s
     return str(x)
 
+def safe_read_excel(file, dtype=None, header=None):
+    """
+    Robust reader for Excel files. 
+    Handles openpyxl 'Invalid datetime value' errors by falling back 
+    to a default read and then manually converting to string.
+    """
+    try:
+        # Primary attempt with requested dtype
+        return pd.read_excel(file, dtype=dtype, header=header)
+    except Exception as e:
+        # If openpyxl fails due to date parsing or other data-specific issues
+        if "Invalid datetime value" in str(e):
+            # Fallback: Read without forced dtype, then convert to string manually
+            # This allows openpyxl to parse dates correctly into objects first
+            file.seek(0)
+            df = pd.read_excel(file, header=header)
+            return df.astype(str).replace('nan', '').replace('None', '')
+        raise e
+
 def read_uzio_license(file) -> pd.DataFrame:
     """Reads UZIO license report, extracting exact headers while bypassing corrupt metadata."""
     try:
-        df = pd.read_excel(file, header=None, dtype=str)
+        df = safe_read_excel(file, header=None, dtype=str)
         # Find the header row by looking for 'Employee ID'
         header_idx = -1
         for i, row in df.head(20).iterrows():
@@ -54,7 +73,8 @@ def read_uzio_license(file) -> pd.DataFrame:
             return df
         else:
             # Fallback if not found in first 20 rows
-            df = pd.read_excel(file, dtype=str)
+            file.seek(0)
+            df = safe_read_excel(file, dtype=str)
             return df
     except Exception as e:
         st.error(f"Could not read Uzio file: {e}")
@@ -63,7 +83,7 @@ def read_uzio_license(file) -> pd.DataFrame:
 def read_adp_license(file) -> pd.DataFrame:
     """Reads ADP license report, extracting headers while bypassing metadata."""
     try:
-        df = pd.read_excel(file, header=None, dtype=str)
+        df = safe_read_excel(file, header=None, dtype=str)
         # Locate header row
         header_idx = -1
         for i, row in df.head(20).iterrows():
@@ -79,7 +99,8 @@ def read_adp_license(file) -> pd.DataFrame:
             return df
         else:
             # Fallback
-            df = pd.read_excel(file, dtype=str)
+            file.seek(0)
+            df = safe_read_excel(file, dtype=str)
             return df
     except Exception as e:
         st.error(f"Could not read ADP file: {e}")

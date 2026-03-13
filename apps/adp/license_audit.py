@@ -39,19 +39,37 @@ def safe_read_excel(file, dtype=None, header=None):
     """
     Robust reader for Excel files. 
     Handles openpyxl 'Invalid datetime value' errors by falling back 
-    to a default read and then manually converting to string.
+    to a direct openpyxl read to bypass automated parsing failures.
     """
     try:
-        # Primary attempt with requested dtype
+        file.seek(0)
         return pd.read_excel(file, dtype=dtype, header=header)
     except Exception as e:
+        err_msg = str(e)
         # If openpyxl fails due to date parsing or other data-specific issues
-        if "Invalid datetime value" in str(e):
-            # Fallback: Read without forced dtype, then convert to string manually
-            # This allows openpyxl to parse dates correctly into objects first
-            file.seek(0)
-            df = pd.read_excel(file, header=header)
-            return df.astype(str).replace('nan', '').replace('None', '')
+        if "Invalid datetime value" in err_msg or "datetime" in err_msg.lower():
+            try:
+                import openpyxl
+                file.seek(0)
+                # data_only=True retrieves values only, bypassing complex formula/date parsing
+                wb = openpyxl.load_workbook(file, data_only=True, read_only=True)
+                try:
+                    sheet = wb.active
+                    if sheet is None:
+                        sheet = wb[wb.sheetnames[0]]
+                except:
+                    sheet = wb[wb.sheetnames[0]]
+                
+                data = []
+                for row in sheet.iter_rows(values_only=True):
+                    # Manually convert each cell to string to match 'dtype=str' intent
+                    data.append([str(c).strip() if c is not None else "" for c in row])
+                
+                df = pd.DataFrame(data)
+                return df
+            except Exception:
+                # If manual read also fails, raise original error
+                raise e
         raise e
 
 def read_uzio_license(file) -> pd.DataFrame:

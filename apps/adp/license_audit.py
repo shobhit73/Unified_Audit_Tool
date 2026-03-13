@@ -5,6 +5,24 @@ import re
 from datetime import datetime, date
 import numpy as np
 
+# --- Monkey-patch openpyxl to handle non-ISO datetime strings gracefully ---
+# openpyxl's from_ISO8601 raises ValueError for date formats like '06/29/2023'
+# which can appear in some Excel files. This patch returns the raw string instead of crashing.
+try:
+    import openpyxl.utils.datetime as _openpyxl_dt
+    _original_from_ISO8601 = _openpyxl_dt.from_ISO8601
+
+    def _patched_from_ISO8601(formatted_string):
+        try:
+            return _original_from_ISO8601(formatted_string)
+        except ValueError:
+            # Return the raw string instead of crashing
+            return formatted_string
+    
+    _openpyxl_dt.from_ISO8601 = _patched_from_ISO8601
+except Exception:
+    pass  # If openpyxl is not installed or structure changed, skip silently
+
 APP_TITLE = "ADP License Details Audit"
 
 # --- HELPER FUNCTIONS ---
@@ -35,47 +53,10 @@ def try_parse_date(x):
             return s
     return str(x)
 
-def safe_read_excel(file, dtype=None, header=None):
-    """
-    Robust reader for Excel files. 
-    Handles openpyxl 'Invalid datetime value' errors by falling back 
-    to a direct openpyxl read to bypass automated parsing failures.
-    """
-    try:
-        file.seek(0)
-        return pd.read_excel(file, dtype=dtype, header=header)
-    except Exception as e:
-        err_msg = str(e)
-        # If openpyxl fails due to date parsing or other data-specific issues
-        if "Invalid datetime value" in err_msg or "datetime" in err_msg.lower():
-            try:
-                import openpyxl
-                file.seek(0)
-                # data_only=True retrieves values only, bypassing complex formula/date parsing
-                wb = openpyxl.load_workbook(file, data_only=True, read_only=True)
-                try:
-                    sheet = wb.active
-                    if sheet is None:
-                        sheet = wb[wb.sheetnames[0]]
-                except:
-                    sheet = wb[wb.sheetnames[0]]
-                
-                data = []
-                for row in sheet.iter_rows(values_only=True):
-                    # Manually convert each cell to string to match 'dtype=str' intent
-                    data.append([str(c).strip() if c is not None else "" for c in row])
-                
-                df = pd.DataFrame(data)
-                return df
-            except Exception:
-                # If manual read also fails, raise original error
-                raise e
-        raise e
-
 def read_uzio_license(file) -> pd.DataFrame:
     """Reads UZIO license report, extracting exact headers while bypassing corrupt metadata."""
     try:
-        df = safe_read_excel(file, header=None, dtype=str)
+        df = pd.read_excel(file, header=None, dtype=str)
         # Find the header row by looking for 'Employee ID'
         header_idx = -1
         for i, row in df.head(20).iterrows():
@@ -92,7 +73,7 @@ def read_uzio_license(file) -> pd.DataFrame:
         else:
             # Fallback if not found in first 20 rows
             file.seek(0)
-            df = safe_read_excel(file, dtype=str)
+            df = pd.read_excel(file, dtype=str)
             return df
     except Exception as e:
         st.error(f"Could not read Uzio file: {e}")
@@ -101,7 +82,7 @@ def read_uzio_license(file) -> pd.DataFrame:
 def read_adp_license(file) -> pd.DataFrame:
     """Reads ADP license report, extracting headers while bypassing metadata."""
     try:
-        df = safe_read_excel(file, header=None, dtype=str)
+        df = pd.read_excel(file, header=None, dtype=str)
         # Locate header row
         header_idx = -1
         for i, row in df.head(20).iterrows():
@@ -118,7 +99,7 @@ def read_adp_license(file) -> pd.DataFrame:
         else:
             # Fallback
             file.seek(0)
-            df = safe_read_excel(file, dtype=str)
+            df = pd.read_excel(file, dtype=str)
             return df
     except Exception as e:
         st.error(f"Could not read ADP file: {e}")

@@ -43,12 +43,12 @@ def try_parse_date(x):
     if x == "":
         return ""
     if isinstance(x, (datetime, date, np.datetime64, pd.Timestamp)):
-        return pd.to_datetime(x).strftime('%Y-%m-%d')
+        return pd.to_datetime(x).strftime('%m/%d/%Y')
     if isinstance(x, str):
         # Handle '1900-01-01 00:00:00' common Excel raw string formats
         s = x.strip().split(' ')[0]
         try:
-            return pd.to_datetime(s, errors="raise").strftime('%Y-%m-%d')
+            return pd.to_datetime(s, errors="raise").strftime('%m/%d/%Y')
         except Exception:
             return s
     return str(x)

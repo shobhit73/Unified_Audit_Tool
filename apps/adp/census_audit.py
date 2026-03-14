@@ -265,7 +265,10 @@ ALLOWED_TERM_REASONS = {
     "mutual agreement",
     "import created action",
     "advancement",
-    "no-show"
+    "no-show",
+    "management",
+    "voluntary resignation",
+    "layoff"
 }
 
 def normalize_reason_text(x) -> str:
@@ -764,10 +767,19 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                         # Logic: If UZIO says "Other" but ADP gives a reason we know is okay, Match it.
                         is_other_match = (uz_reason == "other" and adp_reason in ALLOWED_TERM_REASONS)
                         
-                        # Special Case: Uzio "Voluntary Termination of Employment" == ADP "Quit without Notice" -> Match
-                        is_voluntary_quit = (uz_reason == "voluntary termination of employment" and adp_reason == "quit without notice")
+                        # Special Case: Uzio "Voluntary Termination of Employment" == ADP "Quit without Notice" or "Voluntary Resignation" -> Match
+                        is_voluntary_match = (
+                            uz_reason == "voluntary termination of employment" and 
+                            adp_reason in ["quit without notice", "voluntary resignation"]
+                        )
+                        
+                        # Special Case: Uzio "Involuntary Termination of Employment" == ADP "Layoff" -> Match
+                        is_involuntary_match = (
+                            uz_reason == "involuntary termination of employment" and 
+                            adp_reason == "layoff"
+                        )
 
-                        if is_other_match or is_voluntary_quit:
+                        if is_other_match or is_voluntary_match or is_involuntary_match:
                             status = "Data Match"
                         else:
                             if (uz_n == adp_n) or (uz_n == "" and adp_n == ""):

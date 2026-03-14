@@ -148,6 +148,16 @@ def render_ui():
             elif 'employee code' in df_paycom.columns and pd.notna(row.get('employee code')) and str(row.get('employee code')).strip():
                 emp_ref = str(row.get('employee code')).strip()
 
+            fname = ""
+            lname = ""
+            if col_fname:
+                val = row.get(col_fname)
+                fname = str(val).strip() if pd.notna(val) else ""
+            if col_lname:
+                val = row.get(col_lname)
+                lname = str(val).strip() if pd.notna(val) else ""
+            emp_name = f"{fname} {lname}".strip()
+
             custom_missing = []
 
             # 1. DOL_Status blank check
@@ -190,45 +200,45 @@ def render_ui():
             if custom_missing:
                 paycom_custom_errors.append({
                     'Employee ID': emp_ref,
+                    'Name': emp_name,
                     'Issue': ", ".join(custom_missing)
                 })
 
-        # --- CHECK: State column must exist ---
+        # --- CHECK: State column must exist (Non-Blocking) ---
         state_col = resolved_field_map.get('State')
         if not state_col or state_col not in df_paycom.columns:
-            st.error("**⛔ 'Primary_State/Province' (or similar State) column not found in the source file!** This column is required for state validation.")
-            return
+            st.warning("⚠️ **'Primary_State/Province' (or similar State) column not found!** State validation will be skipped.")
 
-        # --- CHECK: Zip column must exist ---
+        # --- CHECK: Zip column must exist (Non-Blocking) ---
         zip_col = resolved_field_map.get('Zip')
         if not zip_col or zip_col not in df_paycom.columns:
-            st.error("**⛔ 'Primary_Zip/Postal_Code' (or similar Zip) column not found in the source file!** This column is required for zip code validation.")
-            return
+            st.warning("⚠️ **'Primary_Zip/Postal_Code' (or similar Zip) column not found!** Zip code validation will be skipped.")
 
         # --- PRE-GENERATION SANITY CHECKS ---
         from utils.audit_utils import validate_source_data
         validation = validate_source_data(df_paycom, resolved_field_map)
-
-        # Merge custom Paycom hard errors with generic hard errors
-        hard_errors_df = validation['hard_errors']
-        if paycom_custom_errors:
-            df_custom = pd.DataFrame(paycom_custom_errors)
-            if not hard_errors_df.empty:
-                # Group by Employee ID to merge issues
-                hard_errors = pd.concat([hard_errors_df, df_custom]).groupby('Employee ID')['Issue'].apply(lambda x: ', '.join(x)).reset_index()
-            else:
-                hard_errors = df_custom
-        else:
-            hard_errors = hard_errors_df
 
         flsa_corrections = validation['flsa_corrections']
         flsa_blanks = validation['flsa_blanks']
         intern_corrections = validation['intern_corrections']
         email_fallbacks = validation['email_fallbacks']
         salaried_drivers = validation.get('salaried_drivers', pd.DataFrame())
+        anomalies = validation.get('anomalies', pd.DataFrame())
+
+        # Merge custom Paycom hard errors with generic hard errors
+        hard_errors_df = validation['hard_errors']
+        if paycom_custom_errors:
+            df_custom = pd.DataFrame(paycom_custom_errors)
+            if not hard_errors_df.empty:
+                # Merge and keep Name if possible
+                hard_errors = pd.concat([hard_errors_df, df_custom]).groupby(['Employee ID', 'Name'])['Issue'].apply(lambda x: ', '.join(x)).reset_index()
+            else:
+                hard_errors = df_custom
+        else:
+            hard_errors = hard_errors_df
 
         # Show soft warnings first (non-blocking)
-        has_soft_warnings = paycom_pos_fixes or not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty
+        has_soft_warnings = paycom_pos_fixes or not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty or not anomalies.empty
         if has_soft_warnings:
             with st.expander("System Minor Warnings", expanded=False):
                 if paycom_pos_fixes:
@@ -237,6 +247,8 @@ def render_ui():
                     st.markdown(f"- ℹ️ **FLSA Auto-Corrections:** {len(flsa_corrections)} employee(s) had mismatched FLSA classifications. These have been auto-corrected.")
                 if not flsa_blanks.empty:
                     st.markdown(f"- ⚠️ **Blank FLSA Classification:** {len(flsa_blanks)} employee(s) have a Pay Type set but FLSA Classification is blank.")
+                if not anomalies.empty:
+                    st.markdown(f"- ⚠️ **FLSA Anomalies:** {len(anomalies)} employee(s) have Hourly Exempt or Salaried Non-Exempt mismatches.")
                 if not intern_corrections.empty:
                     st.markdown(f"- ⚠️ **Intern → Part Time:** {len(intern_corrections)} employee(s) had 'Intern' as Worker Category. Changed to **Part Time**.")
                 if not email_fallbacks.empty:
@@ -269,6 +281,8 @@ def render_ui():
             err_xlsx = io.BytesIO()
             with pd.ExcelWriter(err_xlsx, engine='openpyxl') as writer:
                 hard_errors.to_excel(writer, sheet_name="Critical Errors", index=False)
+                if not anomalies.empty:
+                    anomalies.to_excel(writer, sheet_name="FLSA Anomalies", index=False)
                 if not salaried_drivers.empty:
                     salaried_drivers.to_excel(writer, sheet_name="Salaried Driver Exceptions", index=False)
             err_xlsx.seek(0)

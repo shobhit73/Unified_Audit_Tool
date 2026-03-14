@@ -173,6 +173,7 @@ def render_ui():
         intern_corrections = validation['intern_corrections']
         email_fallbacks = validation['email_fallbacks']
         salaried_drivers = validation.get('salaried_drivers', pd.DataFrame())
+        anomalies = validation.get('anomalies', pd.DataFrame())
         
         # Show soft warnings first (non-blocking)
         has_soft_warnings = not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty
@@ -182,6 +183,8 @@ def render_ui():
                     st.markdown(f"- ℹ️ **FLSA Auto-Corrections:** {len(flsa_corrections)} employee(s) had mismatched FLSA classifications. These have been auto-corrected.")
                 if not flsa_blanks.empty:
                     st.markdown(f"- ⚠️ **Blank FLSA Classification:** {len(flsa_blanks)} employee(s) have a Pay Type set but FLSA Classification is blank.")
+                if not anomalies.empty:
+                    st.markdown(f"- ⚠️ **FLSA Anomalies:** {len(anomalies)} employee(s) have Hourly Exempt or Salaried Non-Exempt mismatches.")
                 if not intern_corrections.empty:
                     st.markdown(f"- ⚠️ **Intern → Part Time:** {len(intern_corrections)} employee(s) had 'Intern' as Worker Category. Changed to **Part Time**.")
                 if not email_fallbacks.empty:
@@ -214,6 +217,8 @@ def render_ui():
             err_xlsx = io.BytesIO()
             with pd.ExcelWriter(err_xlsx, engine='openpyxl') as writer:
                 hard_errors.to_excel(writer, sheet_name="Critical Errors", index=False)
+                if not anomalies.empty:
+                    anomalies.to_excel(writer, sheet_name="FLSA Anomalies", index=False)
                 if not salaried_drivers.empty:
                     salaried_drivers.to_excel(writer, sheet_name="Salaried Driver Exceptions", index=False)
             err_xlsx.seek(0)

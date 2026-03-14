@@ -252,6 +252,7 @@ def validate_source_data(df_source, resolved_field_map):
     intern_corrections = []
     email_fallbacks = []
     salaried_drivers = []
+    anomalies = [] # New: For Hourly Exempt / Salaried Non-Exempt flags
     
     # Resolve column references
     emp_id_col = resolved_field_map.get('Employee ID')
@@ -269,6 +270,8 @@ def validate_source_data(df_source, resolved_field_map):
     state_col = resolved_field_map.get('State')
     hire_date_col = resolved_field_map.get('Hire Date')
     term_date_col = resolved_field_map.get('Termination Date')
+    first_name_col = resolved_field_map.get('First Name')
+    last_name_col = resolved_field_map.get('Last Name')
     
     def get_emp_ref(row, idx):
         ref = f"Row {idx+2}"
@@ -277,6 +280,17 @@ def validate_source_data(df_source, resolved_field_map):
             if pd.notna(eid) and str(eid).strip():
                 ref = str(eid).strip()
         return ref
+
+    def get_emp_name(row):
+        fname = ""
+        lname = ""
+        if first_name_col and first_name_col in df_source.columns:
+            val = row.get(first_name_col)
+            fname = str(val).strip() if pd.notna(val) else ""
+        if last_name_col and last_name_col in df_source.columns:
+            val = row.get(last_name_col)
+            lname = str(val).strip() if pd.notna(val) else ""
+        return f"{fname} {lname}".strip()
     
     for idx, row in df_source.iterrows():
         emp_ref = get_emp_ref(row, idx)
@@ -404,6 +418,7 @@ def validate_source_data(df_source, resolved_field_map):
         if missing:
             hard_errors.append({
                 'Employee ID': emp_ref,
+                'Name': get_emp_name(row),
                 'Issue': ", ".join(missing)
             })
         
@@ -420,24 +435,37 @@ def validate_source_data(df_source, resolved_field_map):
                         # Hourly should be Non-Exempt
                         flsa_corrections.append({
                             'Employee ID': emp_ref,
+                            'Name': get_emp_name(row),
                             'Pay Type': str(row.get(pay_type_col, '')).strip(),
                             'Original FLSA': str(flsa_val).strip(),
                             'Corrected FLSA': 'Non-Exempt'
+                        })
+                        anomalies.append({
+                            'Employee ID': emp_ref,
+                            'Name': get_emp_name(row),
+                            'Issue': f"Hourly Exempt (Pay Type: {str(row.get(pay_type_col, '')).strip()}, FLSA: {str(flsa_val).strip()})"
                         })
                 elif pay_val and ("salary" in pay_val or "salaried" in pay_val):
                     if "non" in flsa_str and "exempt" in flsa_str:
                         # Salaried should be Exempt
                         flsa_corrections.append({
                             'Employee ID': emp_ref,
+                            'Name': get_emp_name(row),
                             'Pay Type': str(row.get(pay_type_col, '')).strip(),
                             'Original FLSA': str(flsa_val).strip(),
                             'Corrected FLSA': 'Exempt'
+                        })
+                        anomalies.append({
+                            'Employee ID': emp_ref,
+                            'Name': get_emp_name(row),
+                            'Issue': f"Salaried Non-Exempt (Pay Type: {str(row.get(pay_type_col, '')).strip()}, FLSA: {str(flsa_val).strip()})"
                         })
             else:
                 # FLSA is blank — soft flag
                 if pay_val and ("hourly" in pay_val or "hour" in pay_val or "salary" in pay_val or "salaried" in pay_val):
                     flsa_blanks.append({
                         'Employee ID': emp_ref,
+                        'Name': get_emp_name(row),
                         'Pay Type': str(row.get(pay_type_col, '')).strip(),
                         'FLSA Classification': '(blank)'
                     })
@@ -451,6 +479,7 @@ def validate_source_data(df_source, resolved_field_map):
                     if pd.notna(pe_val) and str(pe_val).strip():
                         email_fallbacks.append({
                             'Employee ID': emp_ref,
+                            'Name': get_emp_name(row),
                             'Personal Email Used': str(pe_val).strip()
                         })
         
@@ -460,6 +489,7 @@ def validate_source_data(df_source, resolved_field_map):
             if pd.notna(type_val) and 'intern' in str(type_val).strip().lower():
                 intern_corrections.append({
                     'Employee ID': emp_ref,
+                    'Name': get_emp_name(row),
                     'Original Employment Type': str(type_val).strip(),
                     'Corrected Employment Type': 'Part Time'
                 })
@@ -471,7 +501,8 @@ def validate_source_data(df_source, resolved_field_map):
         'type_blanks': pd.DataFrame(type_blanks),
         'intern_corrections': pd.DataFrame(intern_corrections),
         'email_fallbacks': pd.DataFrame(email_fallbacks),
-        'salaried_drivers': pd.DataFrame(salaried_drivers)
+        'salaried_drivers': pd.DataFrame(salaried_drivers).assign(Name=lambda d: d['Employee ID'].map(lambda x: next((e['Name'] for e in hard_errors if e['Employee ID'] == x), "")) if not d.empty else ""),
+        'anomalies': pd.DataFrame(anomalies)
     }
 
 def generate_uzio_template(df_source, vendor_field_map):

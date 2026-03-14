@@ -267,7 +267,6 @@ ALLOWED_TERM_REASONS = {
     "advancement",
     "no-show",
     "management",
-    "voluntary resignation",
     "layoff"
 }
 
@@ -767,19 +766,26 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                         # Logic: If UZIO says "Other" but ADP gives a reason we know is okay, Match it.
                         is_other_match = (uz_reason == "other" and adp_reason in ALLOWED_TERM_REASONS)
                         
-                        # Special Case: Uzio "Voluntary Termination of Employment" == ADP "Quit without Notice" or "Voluntary Resignation" -> Match
+                        # Keyword-based Matching: 
+                        # If ADP reason contains "voluntary", match Uzio "Voluntary Termination of Employment"
                         is_voluntary_match = (
                             uz_reason == "voluntary termination of employment" and 
-                            adp_reason in ["quit without notice", "voluntary resignation"]
+                            "voluntary" in adp_reason
                         )
                         
-                        # Special Case: Uzio "Involuntary Termination of Employment" == ADP "Layoff" -> Match
+                        # If ADP reason contains "involuntary", match Uzio "Involuntary Termination of Employment"
                         is_involuntary_match = (
+                            uz_reason == "involuntary termination of employment" and 
+                            "involuntary" in adp_reason
+                        )
+                        
+                        # Special Case (from before): "Involuntary Termination" == "Layoff" (Layoff doesn't always say 'involuntary')
+                        is_layoff_match = (
                             uz_reason == "involuntary termination of employment" and 
                             adp_reason == "layoff"
                         )
 
-                        if is_other_match or is_voluntary_match or is_involuntary_match:
+                        if is_other_match or is_voluntary_match or is_involuntary_match or is_layoff_match:
                             status = "Data Match"
                         else:
                             if (uz_n == adp_n) or (uz_n == "" and adp_n == ""):

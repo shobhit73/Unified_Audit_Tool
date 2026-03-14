@@ -233,43 +233,47 @@ def render_ui():
                 
 
                 
-        # --- DSP OWNER DETECTION (ADP) ---
+        # --- MANAGER DETECTION (ADP) ---
         col_sup_code = resolved_field_map.get('Reports To ID')
         if not col_sup_code or col_sup_code not in df_adp.columns:
             # Maybe it wasn't mapped, try to find 'Reports To Associate ID' directly as a fallback
             if 'Reports To Associate ID' in df_adp.columns:
                 col_sup_code = 'Reports To Associate ID'
     
-        detected_dsp_id = None
-        detected_dsp_name = ""
+        top_manager_id = None
+        top_manager_name = ""
+        has_managers = False
         
         if col_sup_code and col_sup_code in df_adp.columns:
             # Filter out blanks
             valid_sups = df_adp[df_adp[col_sup_code].notna() & (df_adp[col_sup_code].astype(str).str.strip() != "")]
             if not valid_sups.empty:
+                has_managers = True
                 sup_counts = valid_sups[col_sup_code].value_counts()
                 if not sup_counts.empty:
-                    detected_dsp_id = str(sup_counts.index[0]).strip()
+                    top_manager_id = str(sup_counts.index[0]).strip()
                     
                     # Try to get their name
                     emp_code_col = resolved_field_map.get('Employee ID')
                     if emp_code_col and emp_code_col in df_adp.columns:
-                        match = df_adp[df_adp[emp_code_col].astype(str).str.strip() == detected_dsp_id]
+                        match = df_adp[df_adp[emp_code_col].astype(str).str.strip() == top_manager_id]
                         if not match.empty:
                             fn = match.iloc[0].get(resolved_field_map.get('First Name'), '')
                             ln = match.iloc[0].get(resolved_field_map.get('Last Name'), '')
                             if pd.notna(fn) and pd.notna(ln):
-                                detected_dsp_name = f"{str(fn).strip()} {str(ln).strip()}".strip()
+                                top_manager_name = f"{str(fn).strip()} {str(ln).strip()}".strip()
     
         st.markdown("---")
         
-        set_dsp_owner = False
-        if detected_dsp_id:
-            name_disp = f" ({detected_dsp_name})" if detected_dsp_name else ""
-            st.info(f"**DSP Owner Detected:** Employee **{detected_dsp_id}**{name_disp} supervises the most employees.")
-            set_dsp_owner = st.checkbox(
-                f"Automatically set Job Title to **'DSP Owner'** for Employee {detected_dsp_id} and move them to the **very top** of all generated files.",
-                value=True, key="adp_set_dsp_owner"
+        sort_by_manager = False
+        if has_managers:
+            if top_manager_id:
+                name_disp = f" ({top_manager_name})" if top_manager_name else ""
+                st.info(f"**Top Manager Detected:** Employee **{top_manager_id}**{name_disp} supervises the most employees.")
+            
+            sort_by_manager = st.checkbox(
+                "Sort all reporting managers to the **very top** of all generated files (ordered by number of reportees).",
+                value=True, key="adp_sort_managers"
             )
     
         # --- Optional Location Mapping (in Tab 1) ---
@@ -315,20 +319,18 @@ def render_ui():
         
         df_download = df_adp.copy()
         
-        # Move DSP owner to the top if requested
-        if set_dsp_owner and detected_dsp_id:
+        # Sort by management hierarchy if requested
+        if sort_by_manager and col_sup_code and col_sup_code in df_download.columns:
             emp_id_col = resolved_field_map.get('Employee ID')
             if emp_id_col and emp_id_col in df_download.columns:
-                df_dl_id_str = df_download[emp_id_col].astype(str).str.strip()
-                dsp_mask = df_dl_id_str == detected_dsp_id
-                if dsp_mask.any():
-                    # Set Job Title Definition for DSP Owner
-                    j_col = resolved_field_map.get('Job Title')
-                    if j_col and j_col in df_download.columns:
-                        df_download.loc[dsp_mask, j_col] = 'DSP Owner'
-                    dsp_rows = df_download[dsp_mask]
-                    other_rows = df_download[~dsp_mask]
-                    df_download = pd.concat([dsp_rows, other_rows], ignore_index=True)
+                # Count reportees
+                sup_counts = df_download[df_download[col_sup_code].notna() & (df_download[col_sup_code].astype(str).str.strip() != "")][col_sup_code].value_counts().to_dict()
+                
+                # Add temporary column for sorting
+                df_download['__mgr_sort'] = df_download[emp_id_col].astype(str).str.strip().map(lambda x: sup_counts.get(x, 0))
+                
+                # Sort: Managers first (most reportees at top), then keeping original relative order
+                df_download = df_download.sort_values(by='__mgr_sort', ascending=False, kind='stable').drop(columns=['__mgr_sort'])
                     
         restored_cols = [norm_to_orig.get(c, c) for c in df_download.columns]
         df_download.columns = restored_cols
@@ -436,27 +438,23 @@ def render_ui():
                         stripped_locs = df_adp[src_loc_col].astype(str).str.strip()
                         df_uzio['Work Location'] = stripped_locs.map(loc_dict).fillna(df_adp[src_loc_col])
                         
-                    # Setup DSP Owner at the top of the Uzio sheet
-                    if set_dsp_owner and detected_dsp_id:
+                    # Sort by management hierarchy for Uzio sheet if requested
+                    if sort_by_manager:
                         # Find the Employee ID column in df_uzio (case-insensitive)
                         uzio_id_col = next(
                             (c for c in df_uzio.columns
-                             if str(c).strip().lower().replace('_', ' ') == 'employee id'),
+                             if str(c).strip().lower().replace('_', ' ') == 'employee id' or str(c).strip().lower() == 'employee id*'),
                             None
                         )
-                        # Fallback: use the ADP source ID column mapped into df_uzio
-                        if uzio_id_col is None:
-                            emp_id_src = resolved_field_map.get('Employee ID')
-                            if emp_id_src and emp_id_src in df_uzio.columns:
-                                uzio_id_col = emp_id_src
-                        if uzio_id_col and uzio_id_col in df_uzio.columns:
-                            df_dl_id_str = df_uzio[uzio_id_col].astype(str).str.strip()
-                            dsp_mask = df_dl_id_str == detected_dsp_id
-                            if dsp_mask.any():
-                                df_uzio.loc[dsp_mask, 'Job Title'] = 'DSP Owner'
-                                dsp_rows = df_uzio[dsp_mask]
-                                other_rows = df_uzio[~dsp_mask]
-                                df_uzio = pd.concat([dsp_rows, other_rows], ignore_index=True)
+                        # Find the Reports To ID column in Uzio template (mapped from ADP col_sup_code)
+                        uzio_sup_col = 'Reports To Associate ID' if 'Reports To Associate ID' in df_uzio.columns else 'Reports To ID'
+                        
+                        if uzio_id_col and uzio_id_col in df_uzio.columns and uzio_sup_col in df_uzio.columns:
+                            # Count reportees using the IDs present in the Uzio dataset
+                            sup_counts_uz = df_uzio[df_uzio[uzio_sup_col].notna() & (df_uzio[uzio_sup_col].astype(str).str.strip() != "")][uzio_sup_col].value_counts().to_dict()
+                            
+                            df_uzio['__mgr_sort_uz'] = df_uzio[uzio_id_col].astype(str).str.strip().map(lambda x: sup_counts_uz.get(x, 0))
+                            df_uzio = df_uzio.sort_values(by='__mgr_sort_uz', ascending=False, kind='stable').drop(columns=['__mgr_sort_uz'])
                     
                     # Validate Uzio Data
                     from utils.audit_utils import validate_uzio_data

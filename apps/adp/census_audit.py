@@ -161,7 +161,10 @@ def norm_veteran_status(x):
     s = str(x).replace("\u00A0", " ")
     s = re.sub(r"\s+", " ", s).strip().casefold()
     
-    # Normalize phrases
+    # Normalize "Decline to answer" variants
+    if "decline to self-identify" in s or "decline to answer" in s:
+        return "decline to answer"
+
     # "i am not a protected veteran" -> "not a protected veteran"
     if "not a protected veteran" in s:
         return "not a protected veteran"
@@ -257,6 +260,12 @@ ALLOWED_TERM_REASONS = {
     "personal",
     "scheduling conflicts (schedules don't work)",
     "attendance",
+    "reduction in force",
+    "reorganization",
+    "mutual agreement",
+    "import created action",
+    "advancement",
+    "no-show"
 }
 
 def normalize_reason_text(x) -> str:
@@ -752,7 +761,13 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                         uz_reason = normalize_reason_text(uz_val)
                         adp_reason = normalize_reason_text(adp_val)
 
-                        if uz_reason == "other" and adp_reason in ALLOWED_TERM_REASONS:
+                        # Logic: If UZIO says "Other" but ADP gives a reason we know is okay, Match it.
+                        is_other_match = (uz_reason == "other" and adp_reason in ALLOWED_TERM_REASONS)
+                        
+                        # Special Case: Uzio "Voluntary Termination of Employment" == ADP "Quit without Notice" -> Match
+                        is_voluntary_quit = (uz_reason == "voluntary termination of employment" and adp_reason == "quit without notice")
+
+                        if is_other_match or is_voluntary_quit:
                             status = "Data Match"
                         else:
                             if (uz_n == adp_n) or (uz_n == "" and adp_n == ""):

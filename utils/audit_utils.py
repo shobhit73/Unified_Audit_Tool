@@ -716,8 +716,9 @@ def inject_into_uzio_template(df_uzio, template_path="templates/Uzio_Census_Temp
     import os
     import re
     
-    if not os.path.exists(template_path):
-        raise FileNotFoundError(f"Template file not found at {template_path}")
+    if isinstance(template_path, str):
+        if not os.path.exists(template_path):
+            raise FileNotFoundError(f"Template file not found at {template_path}")
         
     wb = openpyxl.load_workbook(template_path, keep_vba=True)
     ws = wb['Employee Details']

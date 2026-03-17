@@ -154,37 +154,6 @@ def render_ui():
         st.error("**⛔ 'Primary Address: Zip / Postal Code' column not found in the source file!** This column is required for zip code validation.")
         return
     
-    # --- SELECTIVE UPDATE MODE TOGGLE ---
-    st.markdown("---")
-    gen_mode = st.radio(
-        "Generation Mode",
-        ["Full Generation (New File)", "Selective Column Update (Existing Template)"],
-        index=0,
-        help="Full Generation creates a fresh Uzio file. Selective Update modifies specific columns in an existing Uzio template for employees in your source file.",
-        key="adp_gen_mode"
-    )
-    is_selective = (gen_mode == "Selective Column Update (Existing Template)")
-    
-    uzio_template_file = None
-    selected_uzio_cols = []
-    
-    if is_selective:
-        st.info("💡 **Mode: Selective Update**. Employees in your ADP file will have their selected columns updated in the Uzio template. All other data and row order will be preserved.")
-        uzio_template_file = st.file_uploader("Upload Pre-filled Uzio Template (.xlsm)", type=["xlsm"], key="adp_uzio_template_upload")
-        
-        if uzio_template_file:
-            from utils.audit_utils import UZIO_RAW_MAPPING
-            # We allow selecting any column that we have a standard mapping for
-            available_cols = list(UZIO_RAW_MAPPING.keys())
-            selected_uzio_cols = st.multiselect(
-                "Select Uzio Columns to Update",
-                options=available_cols,
-                default=["Employee SSN"] if "Employee SSN" in available_cols else [],
-                help="Only these columns will be modified for the employees found in your ADP file."
-            )
-            if not selected_uzio_cols:
-                st.warning("Please select at least one column to update.")
-    
     # --- CHECK: Reports To Associate ID column (soft flag) ---
     reports_col = resolved_field_map.get('Reports To ID')
     if not reports_col or reports_col not in df_adp.columns:
@@ -396,7 +365,36 @@ def render_ui():
             )
     
     with tab_gen:
-        # --- STEP 2: Interactive UI Mapping (persists across reruns) ---
+        # --- NEW: SELECTIVE UPDATE MODE TOGGLE (Moved inside tab for visibility) ---
+        st.markdown("### Step 1: Generation Mode")
+        gen_mode = st.radio(
+            "Select how you want to generate the Uzio census:",
+            ["Full Generation (New File from Scratch)", "Selective Column Update (Sync to Existing Template)"],
+            index=0,
+            help="Full Generation creates a fresh Uzio file. Selective Update modifies specific columns in an existing Uzio template.",
+            key="adp_gen_mode_v2"
+        )
+        is_selective = ("Selective Column Update" in gen_mode)
+        
+        uzio_template_file = None
+        selected_uzio_cols = []
+        
+        if is_selective:
+            st.info("💡 **Mode: Selective Update**. We will update specific columns for employees in your source file into an existing Uzio template.")
+            uzio_template_file = st.file_uploader("📤 Upload Pre-filled Uzio Template (.xlsm)", type=["xlsm"], key="adp_uzio_template_v2")
+            
+            if uzio_template_file:
+                from utils.audit_utils import UZIO_RAW_MAPPING
+                available_cols = list(UZIO_RAW_MAPPING.keys())
+                selected_uzio_cols = st.multiselect(
+                    "🎯 Select Uzio Columns to Sync/Update",
+                    options=available_cols,
+                    default=["Employee SSN"] if "Employee SSN" in available_cols else [],
+                    help="Only these columns will be modified in the uploaded template."
+                )
+                if not selected_uzio_cols:
+                    st.warning("Please select at least one column to update.")
+        
         st.markdown("---")
         st.markdown("### Step 2: Map Data to Uzio Format")
         st.markdown("Please map the unique Job Titles and Work Locations found in your source file to the acceptable Uzio formats.")

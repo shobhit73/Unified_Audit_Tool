@@ -445,19 +445,32 @@ def render_ui():
         
         uzio_template_file = None
         selected_uzio_cols = []
+        df_template = None
+        job_seeds = {}
+        loc_seeds = {}
         
         if is_selective:
             st.info("💡 **Mode: Selective Update**. We will update specific columns for employees in your source file into an existing Uzio template.")
             uzio_template_file = st.file_uploader("📤 Upload Pre-filled Uzio Template (.xlsm)", type=["xlsm"], key="pc_uzio_template_v2")
             
             if uzio_template_file:
-                from utils.audit_utils import UZIO_RAW_MAPPING
+                from utils.audit_utils import UZIO_RAW_MAPPING, read_uzio_raw_file, extract_mappings_from_uzio
+                df_template = read_uzio_raw_file(uzio_template_file)
+                
+                if df_template is not None:
+                    # Auto-fetch mappings
+                    with st.spinner("Auto-fetching mappings from template..."):
+                        job_seeds, loc_seeds = extract_mappings_from_uzio(df_paycom, df_template, resolved_field_map)
+                        if job_seeds or loc_seeds:
+                            st.success(f"✅ Auto-fetched {len(job_seeds)} Job Roles and {len(loc_seeds)} Work Locations from the template.")
+
                 available_cols = list(UZIO_RAW_MAPPING.keys())
                 selected_uzio_cols = st.multiselect(
                     "🎯 Select Uzio Columns to Sync/Update",
                     options=available_cols,
                     default=["Employee SSN"] if "Employee SSN" in available_cols else [],
-                    help="Only these columns will be modified in the uploaded template."
+                    help="Only these columns will be modified in the uploaded template.",
+                    key="pc_sel_cols_v2" # Added unique key to prevent leakage
                 )
                 if not selected_uzio_cols:
                     st.warning("Please select at least one column to update.")
@@ -480,8 +493,18 @@ def render_ui():
             unique_locs = sorted([str(l).strip() for l in df_paycom[src_loc_col].dropna().unique() if str(l).strip()])
 
         # Create mapping dataframes for the editor
-        df_job_map = pd.DataFrame({"Source Job Title": unique_jobs, "Mapped Uzio Job Title": pd.Series([None]*len(unique_jobs), dtype="object")})
-        df_loc_map = pd.DataFrame({"Source Work Location": unique_locs, "Mapped Uzio Work Location": pd.Series([""]*len(unique_locs), dtype=str)})
+        # Seed with auto-fetched values
+        job_map_list = [job_seeds.get(j) for j in unique_jobs]
+        loc_map_list = [loc_seeds.get(l, "") for l in unique_locs]
+
+        df_job_map = pd.DataFrame({
+            "Source Job Title": unique_jobs, 
+            "Mapped Uzio Job Title": pd.Series(job_map_list, dtype="object")
+        })
+        df_loc_map = pd.DataFrame({
+            "Source Work Location": unique_locs, 
+            "Mapped Uzio Work Location": pd.Series(loc_map_list, dtype=str)
+        })
 
         col1, col2 = st.columns(2)
 

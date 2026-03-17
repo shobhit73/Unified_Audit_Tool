@@ -79,6 +79,62 @@ def read_uzio_raw_file(uploaded_file):
         st.error(f"Error reading Uzio Raw File: {e}")
         return None
 
+def extract_mappings_from_uzio(df_source, df_template, vendor_map):
+    """
+    Extracts Job Title and Work Location mappings from a pre-filled Uzio template.
+    Matches employees between source and template using Employee ID.
+    Returns: (job_mappings, loc_mappings) dictionaries.
+    """
+    job_mappings = {}
+    loc_mappings = {}
+    
+    src_id_col = vendor_map.get('Employee ID')
+    src_job_col = vendor_map.get('Job Title')
+    src_loc_col = vendor_map.get('Work Location')
+    
+    if not src_id_col or src_id_col not in df_source.columns:
+        return job_mappings, loc_mappings
+        
+    # Uzio headers (Standard names after read_uzio_raw_file)
+    # Note: UZIO_RAW_MAPPING maps 'Employee ID*' to 'Employee ID'
+    UZIO_ID = 'Employee ID'
+    UZIO_JOB = 'Job Title'
+    UZIO_LOC = 'Work Location'
+    
+    if UZIO_ID not in df_template.columns or UZIO_JOB not in df_template.columns or UZIO_LOC not in df_template.columns:
+        # Try raw names just in case it wasn't processed
+        if 'Employee ID*' in df_template.columns: UZIO_ID = 'Employee ID*'
+        else: return job_mappings, loc_mappings
+        
+    # Build a lookup for Uzio records
+    uzio_lookup = {}
+    for _, t_row in df_template.iterrows():
+        tid = str(t_row.get(UZIO_ID, "")).strip().replace(".0", "")
+        if tid:
+            uzio_lookup[tid] = {
+                'job': str(t_row.get(UZIO_JOB, "")).strip(),
+                'loc': str(t_row.get(UZIO_LOC, "")).strip()
+            }
+            
+    # Iterate source and build mapping
+    for _, s_row in df_source.iterrows():
+        sid = str(s_row.get(src_id_col, "")).strip().replace(".0", "")
+        if not sid or sid not in uzio_lookup:
+            continue
+            
+        u_job = uzio_lookup[sid]['job']
+        u_loc = uzio_lookup[sid]['loc']
+        
+        s_job = str(s_row.get(src_job_col, "")).strip() if src_job_col else ""
+        s_loc = str(s_row.get(src_loc_col, "")).strip() if src_loc_col else ""
+        
+        if s_job and u_job and u_job.lower() not in ['nan', 'none', '']:
+            job_mappings[s_job] = u_job
+        if s_loc and u_loc and u_loc.lower() not in ['nan', 'none', '']:
+            loc_mappings[s_loc] = u_loc
+                
+    return job_mappings, loc_mappings
+
 def norm_col(c):
     """Normalize column names to be case-insensitive and stripped."""
     if c is None: return ""

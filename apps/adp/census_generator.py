@@ -122,43 +122,6 @@ def render_ui():
         if not found:
             resolved_field_map[std_name] = norm_colname(vendor_cols[0])
     
-    # --- CHECK: Position column fallback to Department Description ---
-    job_col = resolved_field_map.get('Job Title')
-    dept_col_norm = norm_colname('Department Description')
-    if job_col and job_col in df_adp.columns:
-        blank_count = df_adp[job_col].isna().sum() + (df_adp[job_col].astype(str).str.strip() == '').sum()
-        if blank_count > 0 and dept_col_norm in df_adp.columns:
-            # Fill blanks from Department Description
-            mask = df_adp[job_col].isna() | (df_adp[job_col].astype(str).str.strip() == '')
-            df_adp.loc[mask, job_col] = df_adp.loc[mask, dept_col_norm]
-            st.warning(f"**Position Fallback:** {int(blank_count)} employee(s) had blank Job Title (Position). Falling back to **Department Description** for these employees.")
-    elif dept_col_norm in df_adp.columns:
-        # Job Title column not found at all, use Department Description
-        resolved_field_map['Job Title'] = dept_col_norm
-        st.warning("**Position column not found.** Falling back to **Department Description** for Job Title mapping.")
-    
-    # --- CHECK: Working Hours column (soft flag instead of hard stop) ---
-    hours_col = resolved_field_map.get('Working Hours')
-    if not hours_col or hours_col not in df_adp.columns:
-        st.warning("**⚠️ 'Working Hours Per Week' column not found** in the source file. You can use the Auto-Fix option below to add this column, or fix it manually.")
-    
-    # --- CHECK: State column must exist ---
-    state_col = resolved_field_map.get('State')
-    if not state_col or state_col not in df_adp.columns:
-        st.error("**⛔ 'Primary Address: State / Territory Code' column not found in the source file!** This column is required for state validation.")
-        return
-    
-    # --- CHECK: Zip column must exist ---
-    zip_col = resolved_field_map.get('Zip')
-    if not zip_col or zip_col not in df_adp.columns:
-        st.error("**⛔ 'Primary Address: Zip / Postal Code' column not found in the source file!** This column is required for zip code validation.")
-        return
-    
-    # --- CHECK: Reports To Associate ID column (soft flag) ---
-    reports_col = resolved_field_map.get('Reports To ID')
-    if not reports_col or reports_col not in df_adp.columns:
-        st.warning("**Reports To Associate ID column not found** in the source file. This field will be blank in the output.")
-    
     # --- STEP 2: Choose Action ---
     st.markdown("---")
     st.markdown("### 🚀 **What would you like to do?**")
@@ -169,15 +132,61 @@ def render_ui():
             "🆕 Generate Entire New Uzio Census File",
             "🔄 Update Existing Uzio Census File (Selective Sync)"
         ],
-        index=1, # Default to Generate New
+        index=None, # Require explicit selection
         help="Choose 'Sanity Check' to audit your source file. Choose 'Generate New' for a fresh Uzio file. Choose 'Update Existing' to sync specific columns to an existing template.",
         label_visibility="collapsed",
-        key="adp_action_v2"
+        key="adp_action_v3" # New key to reset state
     )
     
     st.markdown("---")
     
+    if action is None:
+        st.info("💡 Please select an action above to proceed.")
+        return
+
+    # --- COMMON PRE-PROCESSING (Calculations only, UI warnings moved inside branches) ---
+    job_col = resolved_field_map.get('Job Title')
+    dept_col_norm = norm_colname('Department Description')
+    pos_was_fixed = False
+    blank_count = 0
+    if job_col and job_col in df_adp.columns:
+        blank_count = df_adp[job_col].isna().sum() + (df_adp[job_col].astype(str).str.strip() == '').sum()
+        if blank_count > 0 and dept_col_norm in df_adp.columns:
+            mask = df_adp[job_col].isna() | (df_adp[job_col].astype(str).str.strip() == '')
+            df_adp.loc[mask, job_col] = df_adp.loc[mask, dept_col_norm]
+            pos_was_fixed = True
+    elif dept_col_norm in df_adp.columns:
+        resolved_field_map['Job Title'] = dept_col_norm
+        pos_was_fixed = True
+
     if "Sanity Check" in action:
+        # Show path-specific warnings here
+        if pos_was_fixed:
+            if blank_count > 0:
+                st.warning(f"**Position Fallback:** {int(blank_count)} employee(s) had blank Job Title (Position). Falling back to **Department Description** for these employees.")
+            else:
+                st.warning("**Position column not found.** Falling back to **Department Description** for Job Title mapping.")
+        
+        hours_col = resolved_field_map.get('Working Hours')
+        if not hours_col or hours_col not in df_adp.columns:
+            st.warning("**⚠️ 'Working Hours Per Week' column not found** in the source file. This field will be empty in the output.")
+
+        reports_col = resolved_field_map.get('Reports To ID')
+        if not reports_col or reports_col not in df_adp.columns:
+            st.warning("**Reports To Associate ID column not found** in the source file. This field will be blank in the output.")
+    
+    
+        # Validation (Critical for generation too, but we show here for Sanity path)
+        state_col = resolved_field_map.get('State')
+        if not state_col or state_col not in df_adp.columns:
+            st.error("**⛔ 'Primary Address: State / Territory Code' column not found in the source file!** This column is required for state validation.")
+            return
+        
+        zip_col = resolved_field_map.get('Zip')
+        if not zip_col or zip_col not in df_adp.columns:
+            st.error("**⛔ 'Primary Address: Zip / Postal Code' column not found in the source file!** This column is required for zip code validation.")
+            return
+
         # --- PRE-GENERATION SANITY CHECKS ---
         from utils.audit_utils import validate_source_data
         validation = validate_source_data(df_adp, resolved_field_map)

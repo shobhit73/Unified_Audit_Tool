@@ -132,14 +132,18 @@ def render_ui():
             "🆕 Generate Entire New Uzio Census File",
             "🔄 Update Existing Uzio Census File (Selective Sync)"
         ],
-        index=1, # Default to Generate New
+        index=None, # Require explicit selection
         help="Choose 'Sanity Check' to audit your source file. Choose 'Generate New' for a fresh Uzio file. Choose 'Update Existing' to sync specific columns to an existing template.",
         label_visibility="collapsed",
-        key="pc_action_v2"
+        key="pc_action_v3" # New key to reset state
     )
     
     st.markdown("---")
-    
+
+    if action is None:
+        st.info("💡 Please select an action above to proceed.")
+        return
+
     if "Sanity Check" in action:
         # --- PAYCOM SPECIFIC PRE-PROCESSING & VALIDATION ---
         paycom_custom_errors = []

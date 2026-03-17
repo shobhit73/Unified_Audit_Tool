@@ -144,28 +144,8 @@ def render_ui():
         st.info("💡 Please select an action above to proceed.")
         return
 
-    # --- COMMON PRE-PROCESSING (Calculations only, UI warnings moved inside branches) ---
-    job_col = resolved_field_map.get('Job Title')
-    dept_col_norm = norm_colname('Department Description')
-    pos_was_fixed = False
-    blank_count = 0
-    if job_col and job_col in df_adp.columns:
-        blank_count = df_adp[job_col].isna().sum() + (df_adp[job_col].astype(str).str.strip() == '').sum()
-        if blank_count > 0 and dept_col_norm in df_adp.columns:
-            mask = df_adp[job_col].isna() | (df_adp[job_col].astype(str).str.strip() == '')
-            df_adp.loc[mask, job_col] = df_adp.loc[mask, dept_col_norm]
-            pos_was_fixed = True
-    elif dept_col_norm in df_adp.columns:
-        resolved_field_map['Job Title'] = dept_col_norm
-        pos_was_fixed = True
 
     if "Sanity Check" in action:
-        # Show path-specific warnings here
-        if pos_was_fixed:
-            if blank_count > 0:
-                st.warning(f"**Position Fallback:** {int(blank_count)} employee(s) had blank Job Title (Position). Falling back to **Department Description** for these employees.")
-            else:
-                st.warning("**Position column not found.** Falling back to **Department Description** for Job Title mapping.")
         
         hours_col = resolved_field_map.get('Working Hours')
         if not hours_col or hours_col not in df_adp.columns:

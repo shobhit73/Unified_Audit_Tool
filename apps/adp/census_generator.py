@@ -159,10 +159,23 @@ def render_ui():
     if not reports_col or reports_col not in df_adp.columns:
         st.warning("**Reports To Associate ID column not found** in the source file. This field will be blank in the output.")
     
-    # --- UI TABS (MATCHING PAYCOM) ---
-    tab_sanity, tab_gen = st.tabs(['🩺 Sanity Check & Auto-Fix', '⚙️ Uzio Template Generator'])
+    # --- STEP 2: Choose Action ---
+    st.markdown("---")
+    action = st.radio(
+        "🚀 **What would you like to do?**",
+        [
+            "🩺 Run Sanity Check on Source File",
+            "🆕 Generate Entire New Uzio Census File",
+            "🔄 Update Existing Uzio Census File (Selective Sync)"
+        ],
+        index=1, # Default to Generate New
+        help="Choose 'Sanity Check' to audit your source file. Choose 'Generate New' for a fresh Uzio file. Choose 'Update Existing' to sync specific columns to an existing template.",
+        key="adp_action_v2"
+    )
     
-    with tab_sanity:
+    st.markdown("---")
+    
+    if "Sanity Check" in action:
         # --- PRE-GENERATION SANITY CHECKS ---
         from utils.audit_utils import validate_source_data
         validation = validate_source_data(df_adp, resolved_field_map)
@@ -364,17 +377,8 @@ def render_ui():
                 key="adp_corrected_xlsx_dl"
             )
     
-    with tab_gen:
-        # --- NEW: SELECTIVE UPDATE MODE TOGGLE (Moved inside tab for visibility) ---
-        st.markdown("### Step 1: Generation Mode")
-        gen_mode = st.radio(
-            "Select how you want to generate the Uzio census:",
-            ["Full Generation (New File from Scratch)", "Selective Column Update (Sync to Existing Template)"],
-            index=0,
-            help="Full Generation creates a fresh Uzio file. Selective Update modifies specific columns in an existing Uzio template.",
-            key="adp_gen_mode_v2"
-        )
-        is_selective = ("Selective Column Update" in gen_mode)
+    elif "Generate Entire New" in action or "Update Existing" in action:
+        is_selective = ("Update Existing" in action)
         
         uzio_template_file = None
         selected_uzio_cols = []

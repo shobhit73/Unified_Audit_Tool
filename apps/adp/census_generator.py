@@ -384,10 +384,23 @@ def render_ui():
         
         if is_selective:
             st.info("💡 **Mode: Selective Update**. We will update specific columns for employees in your source file into an existing Uzio template.")
+            
+            from utils.audit_utils import UZIO_RAW_MAPPING, read_uzio_raw_file, extract_mappings_from_uzio
+            
+            available_cols = list(UZIO_RAW_MAPPING.keys())
+            selected_uzio_cols = st.multiselect(
+                "🎯 Select Uzio Columns to Sync/Update",
+                options=available_cols,
+                default=["Employee SSN"] if "Employee SSN" in available_cols else [],
+                help="Only these columns will be modified in the uploaded template.",
+                key="adp_sel_cols_v2"
+            )
+            if not selected_uzio_cols:
+                st.warning("Please select at least one column to update.")
+
             uzio_template_file = st.file_uploader("📤 Upload Pre-filled Uzio Template (.xlsm)", type=["xlsm"], key="adp_uzio_template_v2")
             
             if uzio_template_file:
-                from utils.audit_utils import UZIO_RAW_MAPPING, read_uzio_raw_file, extract_mappings_from_uzio
                 df_template = read_uzio_raw_file(uzio_template_file)
                 
                 if df_template is not None:
@@ -396,17 +409,6 @@ def render_ui():
                         job_seeds, loc_seeds = extract_mappings_from_uzio(df_adp, df_template, resolved_field_map)
                         if job_seeds or loc_seeds:
                             st.success(f"✅ Auto-fetched {len(job_seeds)} Job Roles and {len(loc_seeds)} Work Locations from the template.")
-                
-                available_cols = list(UZIO_RAW_MAPPING.keys())
-                selected_uzio_cols = st.multiselect(
-                    "🎯 Select Uzio Columns to Sync/Update",
-                    options=available_cols,
-                    default=["Employee SSN"] if "Employee SSN" in available_cols else [],
-                    help="Only these columns will be modified in the uploaded template.",
-                    key="adp_sel_cols_v2" # Added unique key to prevent leakage
-                )
-                if not selected_uzio_cols:
-                    st.warning("Please select at least one column to update.")
         
         st.markdown("---")
         st.markdown("### Step 2: Map Data to Uzio Format")

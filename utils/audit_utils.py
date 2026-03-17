@@ -860,6 +860,8 @@ def selective_update_uzio(df_source, df_template, selected_uzio_cols, vendor_fie
     # Prepare lookup dict from source: {id: row_data}
     df_source_clean = df_source.copy()
     df_source_clean[emp_id_col_source] = norm_key_series(df_source_clean[emp_id_col_source])
+    # --- FIX: Deduplicate to prevent "DataFrame index must be unique" error ---
+    df_source_clean = df_source_clean.drop_duplicates(subset=[emp_id_col_source], keep='first')
     source_lookup = df_source_clean.set_index(emp_id_col_source).to_dict('index')
     
     # 3. Create a temp copy for formatting

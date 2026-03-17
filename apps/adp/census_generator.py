@@ -154,6 +154,37 @@ def render_ui():
         st.error("**⛔ 'Primary Address: Zip / Postal Code' column not found in the source file!** This column is required for zip code validation.")
         return
     
+    # --- SELECTIVE UPDATE MODE TOGGLE ---
+    st.markdown("---")
+    gen_mode = st.radio(
+        "Generation Mode",
+        ["Full Generation (New File)", "Selective Column Update (Existing Template)"],
+        index=0,
+        help="Full Generation creates a fresh Uzio file. Selective Update modifies specific columns in an existing Uzio template for employees in your source file.",
+        key="adp_gen_mode"
+    )
+    is_selective = (gen_mode == "Selective Column Update (Existing Template)")
+    
+    uzio_template_file = None
+    selected_uzio_cols = []
+    
+    if is_selective:
+        st.info("💡 **Mode: Selective Update**. Employees in your ADP file will have their selected columns updated in the Uzio template. All other data and row order will be preserved.")
+        uzio_template_file = st.file_uploader("Upload Pre-filled Uzio Template (.xlsm)", type=["xlsm"], key="adp_uzio_template_upload")
+        
+        if uzio_template_file:
+            from utils.audit_utils import UZIO_RAW_MAPPING
+            # We allow selecting any column that we have a standard mapping for
+            available_cols = list(UZIO_RAW_MAPPING.keys())
+            selected_uzio_cols = st.multiselect(
+                "Select Uzio Columns to Update",
+                options=available_cols,
+                default=["Employee SSN"] if "Employee SSN" in available_cols else [],
+                help="Only these columns will be modified for the employees found in your ADP file."
+            )
+            if not selected_uzio_cols:
+                st.warning("Please select at least one column to update.")
+    
     # --- CHECK: Reports To Associate ID column (soft flag) ---
     reports_col = resolved_field_map.get('Reports To ID')
     if not reports_col or reports_col not in df_adp.columns:
@@ -425,11 +456,62 @@ def render_ui():
         
         # --- STEP 3: Generate Template (only on button click) ---
         st.markdown("---")
-        if st.button("Generate Uzio Template", type="primary", key="adp_gen_btn"):
-            with st.spinner("Generating..."):
+        
+        btn_label = "Update Uzio Template" if is_selective else "Generate Uzio Template"
+        if st.button(btn_label, type="primary", key="adp_gen_btn"):
+            if is_selective and not uzio_template_file:
+                st.error("Please upload the Pre-filled Uzio Template first.")
+                return
+            if is_selective and not selected_uzio_cols:
+                st.error("Please select at least one column to update.")
+                return
+
+            with st.spinner("Processing..."):
                 try:
-                    # Generate Uzio Template
-                    df_uzio = generate_uzio_template(df_adp, resolved_field_map)
+                    # 1. Prepare Mappings (Job Titles and Locations)
+                    job_dict = {}
+                    if src_job_col and src_job_col in df_adp.columns:
+                        job_dict = dict(zip(edited_jobs['Source Job Title'], edited_jobs['Mapped Uzio Job Title']))
+                    
+                    loc_dict = {}
+                    if src_loc_col and src_loc_col in df_adp.columns:
+                        loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
+
+                    # 2. Logic Branch: Full vs Selective
+                    if is_selective:
+                        from utils.audit_utils import read_uzio_template_df, selective_update_uzio
+                        
+                        # Read template
+                        df_template = read_uzio_template_df(uzio_template_file)
+                        if df_template is None:
+                            st.error("Could not read Uzio template. Please ensure it's a valid .xlsm file with an 'Employee Details' sheet.")
+                            return
+                        
+                        # Perform Merge
+                        df_uzio, summary, df_changes = selective_update_uzio(df_adp, df_template, selected_uzio_cols, resolved_field_map)
+                        
+                        # Apply Job/Loc mapping if those columns were selected
+                        if 'Job Title' in selected_uzio_cols and src_job_col in df_adp.columns:
+                            # job_dict is ready
+                            pass # selective_update_uzio already handles standard fields if mapped
+                            
+                        st.info(summary)
+                        if not df_changes.empty:
+                            with st.expander("View Changes Preview", expanded=False):
+                                st.dataframe(df_changes, hide_index=True, use_container_width=True)
+                    else:
+                        # Full Generation
+                        df_uzio = generate_uzio_template(df_adp, resolved_field_map)
+                        
+                        # Apply Job Title Mapping
+                        if src_job_col and src_job_col in df_adp.columns:
+                            stripped_jobs = df_adp[src_job_col].astype(str).str.strip()
+                            df_uzio['Job Title'] = stripped_jobs.map(job_dict).fillna(df_adp[src_job_col])
+                            
+                        # Apply Work Location Mapping
+                        if src_loc_col and src_loc_col in df_adp.columns:
+                            stripped_locs = df_adp[src_loc_col].astype(str).str.strip()
+                            df_uzio['Work Location'] = stripped_locs.map(loc_dict).fillna(df_adp[src_loc_col])
                     
                     # Apply Job Title Mapping
                     if src_job_col and src_job_col in df_adp.columns:
@@ -480,8 +562,17 @@ def render_ui():
     
                     # Inject into formatted template
                     from utils.audit_utils import inject_into_uzio_template
-                    template_path = "templates/Uzio_Census_Template.xlsm"
-                    wb = inject_into_uzio_template(df_uzio, template_path)
+                    
+                    # If selective, we use the uploaded template as the base
+                    if is_selective:
+                        # We need to save the uploaded file to a temporary location or use BytesIO
+                        # Openpyxl load_workbook can take a file-like object
+                        uzio_template_file.seek(0)
+                        wb = inject_into_uzio_template(df_uzio, uzio_template_file)
+                    else:
+                        # Use default blank template
+                        template_path = "templates/Uzio_Census_Template.xlsm"
+                        wb = inject_into_uzio_template(df_uzio, template_path)
                     
                     # Save to BytesIO for download
                     output = io.BytesIO()

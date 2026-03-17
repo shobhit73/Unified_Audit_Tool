@@ -118,6 +118,36 @@ def render_ui():
         if not found:
             resolved_field_map[std_name] = norm_colname(vendor_cols[0])
             
+    # --- SELECTIVE UPDATE MODE TOGGLE ---
+    st.markdown("---")
+    gen_mode = st.radio(
+        "Generation Mode",
+        ["Full Generation (New File)", "Selective Column Update (Existing Template)"],
+        index=0,
+        help="Full Generation creates a fresh Uzio file. Selective Update modifies specific columns in an existing Uzio template for employees in your source file.",
+        key="pc_gen_mode"
+    )
+    is_selective = (gen_mode == "Selective Column Update (Existing Template)")
+    
+    uzio_template_file = None
+    selected_uzio_cols = []
+    
+    if is_selective:
+        st.info("💡 **Mode: Selective Update**. Employees in your Paycom file will have their selected columns updated in the Uzio template. All other data and row order will be preserved.")
+        uzio_template_file = st.file_uploader("Upload Pre-filled Uzio Template (.xlsm)", type=["xlsm"], key="pc_uzio_template_upload")
+        
+        if uzio_template_file:
+            from utils.audit_utils import UZIO_RAW_MAPPING
+            available_cols = list(UZIO_RAW_MAPPING.keys())
+            selected_uzio_cols = st.multiselect(
+                "Select Uzio Columns to Update",
+                options=available_cols,
+                default=["Employee SSN"] if "Employee SSN" in available_cols else [],
+                help="Only these columns will be modified for the employees found in your Paycom file."
+            )
+            if not selected_uzio_cols:
+                st.warning("Please select at least one column to update.")
+            
     tab_sanity, tab_gen = st.tabs(['🩺 Sanity Check & Auto-Fix', '⚙️ Uzio Template Generator'])
     with tab_sanity:
         # --- PAYCOM SPECIFIC PRE-PROCESSING & VALIDATION ---
@@ -492,11 +522,56 @@ def render_ui():
         st.markdown("### Step 3: Finalize & Generate")
 
         # --- STEP 4: Generate Template (only on button click) ---
-        if st.button("Generate Uzio Template", type="primary", key="pc_gen_btn"):
-            with st.spinner("Generating..."):
+        btn_label = "Update Uzio Template" if is_selective else "Generate Uzio Template"
+        if st.button(btn_label, type="primary", key="pc_gen_btn"):
+            if is_selective and not uzio_template_file:
+                st.error("Please upload the Pre-filled Uzio Template first.")
+                return
+            if is_selective and not selected_uzio_cols:
+                st.error("Please select at least one column to update.")
+                return
+
+            with st.spinner("Processing..."):
                 try:
-                    # Generate Uzio Template
-                    df_uzio = generate_uzio_template(df_paycom, resolved_field_map)
+                    # 1. Prepare Mappings (Job Titles and Locations)
+                    job_dict = {}
+                    if src_job_col and src_job_col in df_paycom.columns:
+                        job_dict = dict(zip(edited_jobs['Source Job Title'], edited_jobs['Mapped Uzio Job Title']))
+                    
+                    loc_dict = {}
+                    if src_loc_col and src_loc_col in df_paycom.columns:
+                        loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
+
+                    # 2. Logic Branch: Full vs Selective
+                    if is_selective:
+                        from utils.audit_utils import read_uzio_template_df, selective_update_uzio
+                        
+                        # Read template
+                        df_template = read_uzio_template_df(uzio_template_file)
+                        if df_template is None:
+                            st.error("Could not read Uzio template. Please ensure it's a valid .xlsm file with an 'Employee Details' sheet.")
+                            return
+                        
+                        # Perform Merge
+                        df_uzio, summary, df_changes = selective_update_uzio(df_paycom, df_template, selected_uzio_cols, resolved_field_map)
+                        
+                        st.info(summary)
+                        if not df_changes.empty:
+                            with st.expander("View Changes Preview", expanded=False):
+                                st.dataframe(df_changes, hide_index=True, use_container_width=True)
+                    else:
+                        # Full Generation
+                        df_uzio = generate_uzio_template(df_paycom, resolved_field_map)
+                        
+                        # Apply Job Title Mapping
+                        if src_job_col and src_job_col in df_paycom.columns:
+                            stripped_jobs = df_paycom[src_job_col].astype(str).str.strip()
+                            df_uzio['Job Title'] = stripped_jobs.map(job_dict).fillna(df_paycom[src_job_col])
+                        
+                        # Apply Work Location Mapping
+                        if src_loc_col and src_loc_col in df_paycom.columns:
+                            stripped_locs = df_paycom[src_loc_col].astype(str).str.strip()
+                            df_uzio['Work Location'] = stripped_locs.map(loc_dict).fillna(df_paycom[src_loc_col])
 
                     # Apply Job Title Mapping
                     if src_job_col and src_job_col in df_paycom.columns:
@@ -547,7 +622,11 @@ def render_ui():
 
                     # Inject into the Master Template
                     from utils.audit_utils import inject_into_uzio_template
-                    wb = inject_into_uzio_template(df_uzio, template_path="templates/Uzio_Census_Template.xlsm")
+                    if is_selective:
+                        uzio_template_file.seek(0)
+                        wb = inject_into_uzio_template(df_uzio, uzio_template_file)
+                    else:
+                        wb = inject_into_uzio_template(df_uzio, template_path="templates/Uzio_Census_Template.xlsm")
 
                     # Write to buffer
                     out = io.BytesIO()

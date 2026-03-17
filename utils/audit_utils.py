@@ -768,3 +768,118 @@ def validate_uzio_data(df_uzio):
             })
             
     return pd.DataFrame(errors)
+    return pd.DataFrame(errors)
+
+def read_uzio_template_df(file):
+    """
+    Reads the 'Employee Details' sheet from a Uzio template .xlsm.
+    Identifies the header row (index 3) and returns the full DataFrame.
+    """
+    try:
+        # Load the whole workbook to preserve everything, but read as DF for logic
+        df_template = pd.read_excel(file, sheet_name='Employee Details', header=3, dtype=str)
+        # Normalize column names for internal matching (strip space, handles newlines)
+        df_template.columns = [str(c).replace("\n", " ").replace("\r", " ").strip() for c in df_template.columns]
+        return df_template
+    except Exception as e:
+        print(f"Error reading Uzio template: {e}")
+        return None
+
+def selective_update_uzio(df_source, df_template, selected_uzio_cols, vendor_field_map):
+    """
+    Updates specific columns in df_template using data from df_source.
+    Only updates employees present in df_source.
+    Returns the updated df_template and a summary of changes.
+    """
+    # 1. Reverse the mapping to find which 'standard field' relates to the selected 'Uzio Column'
+    # selected_uzio_cols are the raw keys from UZIO_RAW_MAPPING
+    
+    # 2. Normalize Employee IDs for matching
+    emp_id_col_source = vendor_field_map.get('Employee ID')
+    emp_id_col_template = 'Employee ID*' if 'Employee ID*' in df_template.columns else 'Employee ID'
+    
+    if not emp_id_col_source or emp_id_col_source not in df_source.columns:
+        return df_template, "Error: Source 'Employee ID' column not found."
+    
+    # Prepare lookup dict from source: {id: row_data}
+    df_source_clean = df_source.copy()
+    df_source_clean[emp_id_col_source] = norm_key_series(df_source_clean[emp_id_col_source])
+    source_lookup = df_source_clean.set_index(emp_id_col_source).to_dict('index')
+    
+    # 3. Create a temp copy for formatting
+    # We use a dummy generator logic to get formatted values for each standard field
+    from utils.audit_utils import UZIO_RAW_MAPPING
+    
+    updated_count = 0
+    df_updated = df_template.copy()
+    
+    # Track changes for display
+    change_details = []
+
+    for idx, row in df_updated.iterrows():
+        eid = norm_key_series(pd.Series([row.get(emp_id_col_template, "")])).iloc[0]
+        
+        if eid in source_lookup:
+            source_row_data = source_lookup[eid]
+            # Create a mini-dataframe for this person to use existing formatters if needed
+            # Or just pull logic from generate_uzio_template
+            
+            for uzio_col in selected_uzio_cols:
+                std_name = UZIO_RAW_MAPPING.get(uzio_col)
+                if not std_name: continue
+                
+                vendor_col = vendor_field_map.get(std_name)
+                if not vendor_col or vendor_col not in df_source.columns: continue
+                
+                val = source_row_data.get(vendor_col)
+                # Apply same formatting used in generate_uzio_template
+                formatted_val = ""
+                if pd.notna(val) and str(val).strip() != "":
+                    # Reuse specific formatters
+                    if std_name == 'Middle Initial':
+                        formatted_val = str(val).strip()[0]
+                    elif std_name in ['Hire Date', 'Original Hire Date', 'Termination Date', 'DOB']:
+                        try:
+                            dt = pd.to_datetime(str(val).strip(), errors='coerce')
+                            formatted_val = dt.strftime('%d/%m/%Y') if not pd.isna(dt) else str(val).strip()
+                        except:
+                            formatted_val = str(val).strip()
+                    elif std_name == 'SSN':
+                        formatted_val = str(val).replace("-", "").strip()
+                    elif std_name == 'Gender':
+                        g_str = str(val).lower()
+                        if g_str.startswith('m'): formatted_val = "Male"
+                        elif g_str.startswith('f'): formatted_val = "Female"
+                    elif std_name == 'Employment Status':
+                        s = str(val).lower()
+                        if 'not hired' in s: formatted_val = 'EXCLUDE'
+                        elif 'inactive' in s or 'term' in s: formatted_val = 'TERMINATED'
+                        elif 'active' in s or 'leave' in s: formatted_val = 'ACTIVE'
+                        else: formatted_val = str(val).strip().upper()
+                    elif std_name in ['Zip', 'Mailing Zip']:
+                        z_clean = re.sub(r'\D', '', str(val).strip())
+                        formatted_val = z_clean.zfill(5)[:5] if z_clean else ""
+                    elif std_name == 'Employment Type':
+                        et_str = str(val).lower()
+                        if 'full' in et_str: formatted_val = 'Full Time'
+                        elif 'part' in et_str: formatted_val = 'Part Time'
+                        elif 'season' in et_str: formatted_val = 'Seasonal'
+                        elif 'other' in et_str: formatted_val = 'Other'
+                    else:
+                        formatted_val = str(val).strip()
+                
+                # Check for delete/update
+                old_val = row.get(uzio_col, "")
+                if str(formatted_val) != str(old_val):
+                    df_updated.at[idx, uzio_col] = formatted_val
+                    change_details.append({
+                        'Employee ID': eid,
+                        'Column': uzio_col,
+                        'Old Value': old_val,
+                        'New Value': formatted_val
+                    })
+            
+            updated_count += 1
+
+    summary = f"Updated {updated_count} employees. Total {len(change_details)} cell changes."
+    return df_updated, summary, pd.DataFrame(change_details)

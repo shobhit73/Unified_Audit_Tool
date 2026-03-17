@@ -40,22 +40,34 @@ st.markdown("""
     }
     
     /* Radio buttons in sidebar */
-    .stRadio > div {
+    [data-testid="stSidebar"] .stRadio > div {
         background-color: transparent;
         margin-bottom: -15px; /* Compact spacing */
     }
-    .stRadio label {
+    [data-testid="stSidebar"] .stRadio label {
         font-size: 15px;
         padding: 4px 10px; /* Reduced padding */
         border-radius: 5px;
         color: #ffffff !important;
         transition: background-color 0.3s;
     }
-    .stRadio label:hover {
+    [data-testid="stSidebar"] .stRadio label:hover {
         background-color: #1a1a4b;
     }
-    .stRadio p {
+    [data-testid="stSidebar"] .stRadio p {
         font-size: 15px; /* Consistent font size */
+    }
+    
+    /* Ensure main area radio labels are visible (dark text) */
+    .main .stRadio p {
+        color: #070738 !important;
+        font-weight: bold;
+    }
+    .main .stRadio label {
+        color: #333333 !important;
+    }
+    .main .stRadio label:hover {
+        background-color: #f0f2f6 !important;
     }
     
     /* Info box */

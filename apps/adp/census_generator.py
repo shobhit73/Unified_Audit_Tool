@@ -161,15 +161,17 @@ def render_ui():
     
     # --- STEP 2: Choose Action ---
     st.markdown("---")
+    st.markdown("### 🚀 **What would you like to do?**")
     action = st.radio(
-        "🚀 **What would you like to do?**",
-        [
+        label="Action Selection",
+        options=[
             "🩺 Run Sanity Check on Source File",
             "🆕 Generate Entire New Uzio Census File",
             "🔄 Update Existing Uzio Census File (Selective Sync)"
         ],
         index=1, # Default to Generate New
         help="Choose 'Sanity Check' to audit your source file. Choose 'Generate New' for a fresh Uzio file. Choose 'Update Existing' to sync specific columns to an existing template.",
+        label_visibility="collapsed",
         key="adp_action_v2"
     )
     

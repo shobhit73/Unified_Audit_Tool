@@ -213,65 +213,76 @@ def run_audit(uzio_file, paycom_file):
         s_id = str(raw_id).strip()
         if s_id.endswith(".0"): s_id = s_id[:-2]
         
-        candidates_to_try = []
-        # 1. Exact
-        candidates_to_try.append(s_id)
-        # 2. Padded (3, 4, 5)
+        # 1. Direct Candidates (Exact + Padded)
+        direct_to_try = [s_id]
         for w in [3, 4, 5]:
             padded = s_id.zfill(w)
-            if padded not in candidates_to_try:
-                candidates_to_try.append(padded)
+            if padded not in direct_to_try:
+                direct_to_try.append(padded)
         
-        # Filter to only existing Uzio keys
-        valid_candidates = [c for c in candidates_to_try if c in uzio_data]
+        valid_direct = [c for c in direct_to_try if c in uzio_data]
         
-        # O vs 0 Typography Fix Loop
-        # Often A0BZ in Paycom is AOBZ in Uzio, so check transposed characters
-        if not valid_candidates:
-            transposed_candidates = []
-            for c in candidates_to_try:
-                # Try replacing all 0 with O (e.g. A00A -> AOOA)
+        using_fixed = False
+        if valid_direct:
+            candidates = valid_direct
+        else:
+            # 2. Transposed Candidates (Only if no direct matches)
+            # Often A0BZ in Paycom is AOBZ in Uzio
+            transposed_to_try = []
+            for c in direct_to_try:
                 c_o = c.replace('0', 'O')
-                if c_o != c: transposed_candidates.append(c_o)
-                
-                # Try replacing all O with 0
+                if c_o != c and c_o not in transposed_to_try: transposed_to_try.append(c_o)
                 c_zero = c.replace('O', '0')
-                if c_zero != c: transposed_candidates.append(c_zero)
+                if c_zero != c and c_zero not in transposed_to_try: transposed_to_try.append(c_zero)
             
-            # Re-evaluate valid candidates against transposed array
-            valid_candidates = [c for c in transposed_candidates if c in uzio_data]
+            valid_fixed = [c for c in transposed_to_try if c in uzio_data]
+            candidates = valid_fixed
+            using_fixed = True
 
-        if not valid_candidates:
+        if not candidates:
             return s_id.zfill(4) # Fallback if absolutely no match found
             
-        # If only 1 candidate, return it (simple case)
-        if len(valid_candidates) == 1:
-            return valid_candidates[0]
-            
-        # COLLISION: Multiple candidates found (e.g. '001' and '0001')
-        # Use Name Matching to decide
-        # Paycom Name Parts
         pc_lowers = [str(p).lower().strip() for p in raw_name_parts if p and not pd.isna(p)]
         
-        best_match = valid_candidates[0] # Default to first if name match fails
+        # If we have only one direct match, no reason to doubt it
+        if len(candidates) == 1 and not using_fixed:
+            return candidates[0]
+            
+        # COLLISION OR FIX VERIFICATION:
+        # Use Name Matching to decide between candidates or verify a "fixed" ID
+        best_match = None
         best_score = -1
         
-        for cand in valid_candidates:
-            # Get Uzio Name
-            # uzio_data holds emp_names dict
+        for cand in candidates:
             u_name = uzio_data.get(cand, "").lower()
-            
             score = 0
-            # Check if Paycom parts (First, Last) appear in Uzio Full Name
-            for part in pc_lowers:
-                if part in u_name:
-                    score += 1
+            if pc_lowers:
+                for part in pc_lowers:
+                    if part in u_name:
+                        score += 5 # High score for name part match
+                    elif len(part) > 3:
+                        # Partial match for longer names
+                        if u_name.startswith(part) or u_name.endswith(part):
+                            score += 2
             
+            # Favor exact length matches if scores are tied
+            if len(cand) == len(s_id):
+                score += 1
+
             if score > best_score:
                 best_score = score
                 best_match = cand
+            elif score == best_score:
+                # If tied, pick first one or stick with best_match
+                pass
+
+        # SAFETY CHECK for "fixed" (transposed) IDs:
+        # If we are using a "fixed" ID, we require at least one name overlap to accept it,
+        # otherwise it's safer to report it as the original ID (Missing in Uzio).
+        if using_fixed and pc_lowers and best_score <= 1: # 1 is tiebreaker for length, 5+ is name match
+             return s_id.zfill(4)
                 
-        return best_match
+        return best_match if best_match else candidates[0]
 
     uzio_keys = set(uzio_map.keys())
 

@@ -587,7 +587,7 @@ def generate_uzio_template(df_source, vendor_field_map):
             # Apply formatting rules
             if std_name == 'Middle Initial':
                 series = series.apply(lambda x: str(x).strip()[0] if pd.notna(x) and str(x).strip() else "")
-            elif std_name in ['Hire Date', 'Original Hire Date', 'Termination Date', 'DOB', 'License Expiration Date']:
+            elif std_name in ['Hire Date', 'Original Hire Date', 'Termination Date', 'DOB']:
                 def format_date(d):
                     if pd.isna(d) or str(d).strip() == "": return ""
                     try:
@@ -597,6 +597,19 @@ def generate_uzio_template(df_source, vendor_field_map):
                     except:
                         return str(d).strip()
                 series = series.apply(format_date)
+            elif std_name == 'License Expiration Date':
+                def format_license_exp_date(d):
+                    if pd.isna(d) or str(d).strip() == "": return ""
+                    d_str = str(d).strip()
+                    # Never allow placeholder invalid dates
+                    if '00/00/0000' in d_str or d_str in ('0', '00', '0000'): return ""
+                    try:
+                        dt = pd.to_datetime(d_str, errors='coerce')
+                        if pd.isna(dt): return ""
+                        return dt.strftime('%m/%d/%Y')  # Uzio wants MM/DD/YYYY
+                    except:
+                        return ""
+                series = series.apply(format_license_exp_date)
             elif std_name == 'SSN':
                 series = series.apply(lambda x: str(x).replace("-", "").strip() if pd.notna(x) else "")
             elif std_name == 'Gender':
@@ -676,6 +689,20 @@ def generate_uzio_template(df_source, vendor_field_map):
         # Fill missing Work Emails with Personal Email
         missing_work_mask = df_uzio['Official Email*'].isna() | (df_uzio['Official Email*'].astype(str).str.strip() == "")
         df_uzio.loc[missing_work_mask, 'Official Email*'] = df_uzio.loc[missing_work_mask, 'Personal Email']
+
+    # --- License Rules ---
+    # Rule 1: Never allow License Expiration Date if License Number is blank
+    # Rule 2: Never allow 00/00/0000 in License Expiration Date
+    lic_num_col = 'License Number*'
+    lic_exp_col = 'License Expiration Date'
+    if lic_exp_col in df_uzio.columns:
+        # Clear 00/00/0000 or similar invalid placeholders
+        bad_exp_mask = df_uzio[lic_exp_col].astype(str).str.strip().isin(['00/00/0000', '0', '00', '0000', 'nan', 'NaT', ''])
+        df_uzio.loc[bad_exp_mask, lic_exp_col] = ""
+        # Clear expiration date if no license number
+        if lic_num_col in df_uzio.columns:
+            no_license_mask = df_uzio[lic_num_col].isna() | (df_uzio[lic_num_col].astype(str).str.strip() == "") | (df_uzio[lic_num_col].astype(str).str.strip() == 'nan')
+            df_uzio.loc[no_license_mask, lic_exp_col] = ""
 
     # Apply Pay Type rules
     if 'Pay Type*' in df_uzio.columns:
@@ -899,12 +926,22 @@ def selective_update_uzio(df_source, df_template, selected_uzio_cols, vendor_fie
                     # Reuse specific formatters
                     if std_name == 'Middle Initial':
                         formatted_val = str(val).strip()[0]
-                    elif std_name in ['Hire Date', 'Original Hire Date', 'Termination Date', 'DOB', 'License Expiration Date']:
+                    elif std_name in ['Hire Date', 'Original Hire Date', 'Termination Date', 'DOB']:
                         try:
                             dt = pd.to_datetime(str(val).strip(), errors='coerce')
                             formatted_val = dt.strftime('%d/%m/%Y') if not pd.isna(dt) else str(val).strip()
                         except:
                             formatted_val = str(val).strip()
+                    elif std_name == 'License Expiration Date':
+                        v_str = str(val).strip()
+                        if '00/00/0000' in v_str or v_str in ('0', '00', '0000'):
+                            formatted_val = ""
+                        else:
+                            try:
+                                dt = pd.to_datetime(v_str, errors='coerce')
+                                formatted_val = dt.strftime('%m/%d/%Y') if not pd.isna(dt) else ""
+                            except:
+                                formatted_val = ""
                     elif std_name == 'SSN':
                         formatted_val = str(val).replace("-", "").strip()
                     elif std_name == 'Gender':
@@ -941,6 +978,18 @@ def selective_update_uzio(df_source, df_template, selected_uzio_cols, vendor_fie
                     })
             
             updated_count += 1
+
+    # --- Post-processing: License Rules on the updated template ---
+    lic_num_col = 'License Number*'
+    lic_exp_col = 'License Expiration Date'
+    if lic_exp_col in df_updated.columns:
+        # Clear any 00/00/0000 or invalid placeholders
+        bad_mask = df_updated[lic_exp_col].astype(str).str.strip().isin(['00/00/0000', '0', '00', '0000', 'nan', 'NaT', ''])
+        df_updated.loc[bad_mask, lic_exp_col] = ""
+        # Clear expiration date when license number is blank
+        if lic_num_col in df_updated.columns:
+            no_lic_mask = df_updated[lic_num_col].isna() | (df_updated[lic_num_col].astype(str).str.strip() == "") | (df_updated[lic_num_col].astype(str).str.strip() == 'nan')
+            df_updated.loc[no_lic_mask, lic_exp_col] = ""
 
     summary = f"Updated {updated_count} employees. Total {len(change_details)} cell changes."
     return df_updated, summary, pd.DataFrame(change_details)

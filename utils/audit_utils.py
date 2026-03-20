@@ -45,7 +45,9 @@ UZIO_RAW_MAPPING = {
     'Mailing Zipcode': 'Mailing Zip',
     'Mailing State(Abbreviation)': 'Mailing State',
     'Reporting Manager ID': 'Reports To ID',
-    'Work Location': 'Work Location'
+    'Work Location': 'Work Location',
+    'License Number*': 'License Number',
+    'License Expiration Date': 'License Expiration Date'
 }
 
 def read_uzio_raw_file(uploaded_file):
@@ -585,7 +587,7 @@ def generate_uzio_template(df_source, vendor_field_map):
             # Apply formatting rules
             if std_name == 'Middle Initial':
                 series = series.apply(lambda x: str(x).strip()[0] if pd.notna(x) and str(x).strip() else "")
-            elif std_name in ['Hire Date', 'Original Hire Date', 'Termination Date', 'DOB']:
+            elif std_name in ['Hire Date', 'Original Hire Date', 'Termination Date', 'DOB', 'License Expiration Date']:
                 def format_date(d):
                     if pd.isna(d) or str(d).strip() == "": return ""
                     try:
@@ -897,7 +899,7 @@ def selective_update_uzio(df_source, df_template, selected_uzio_cols, vendor_fie
                     # Reuse specific formatters
                     if std_name == 'Middle Initial':
                         formatted_val = str(val).strip()[0]
-                    elif std_name in ['Hire Date', 'Original Hire Date', 'Termination Date', 'DOB']:
+                    elif std_name in ['Hire Date', 'Original Hire Date', 'Termination Date', 'DOB', 'License Expiration Date']:
                         try:
                             dt = pd.to_datetime(str(val).strip(), errors='coerce')
                             formatted_val = dt.strftime('%d/%m/%Y') if not pd.isna(dt) else str(val).strip()

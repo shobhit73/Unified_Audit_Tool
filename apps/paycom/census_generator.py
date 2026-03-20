@@ -40,7 +40,8 @@ PAYCOM_FIELD_MAP = {
     'Mailing City': ['Mailing_City/Municipality', 'Mailing City'],
     'Mailing Zip': ['Mailing_Zip/Postal_Code', 'Mailing Zip'],
     'Mailing State': ['Mailing_State/Province', 'Mailing State'],
-    'License Number': ['DriversLicense', 'Drivers License', 'License Number'],
+    'License Number': ['DriversLicense', 'Drivers License', 'License Number', 'DL Number'],
+    'License Expiration Date': ['DLExpirationDate', 'DL Expiration Date', 'License Expiration Date', 'Drivers License Expiration'],
     'Work Location': ['Work_Location', 'Location', 'Work Location']
 }
 

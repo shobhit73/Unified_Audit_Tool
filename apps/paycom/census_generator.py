@@ -118,10 +118,51 @@ def render_ui():
                 break
         if not found:
             resolved_field_map[std_name] = norm_colname(vendor_cols[0])
-            
+
     # Extract name columns for validation
     col_fname = resolved_field_map.get('First Name')
     col_lname = resolved_field_map.get('Last Name')
+
+    # --- MANAGER DETECTION (PAYCOM) ---
+    col_sup_code = None
+    for cand in ['supervisor_primary_code', 'supervisor primary code', 'supervisorcode']:
+        if cand in df_paycom.columns:
+            col_sup_code = cand
+            break
+
+    top_manager_id = None
+    top_manager_name = ""
+    has_managers = False
+
+    if col_sup_code:
+        # Filter out blanks
+        valid_sups = df_paycom[df_paycom[col_sup_code].notna() & (df_paycom[col_sup_code].astype(str).str.strip() != "")]
+        if not valid_sups.empty:
+            has_managers = True
+            sup_counts = valid_sups[col_sup_code].value_counts()
+            if not sup_counts.empty:
+                top_manager_id = str(sup_counts.index[0]).strip()
+
+                # Try to get their name
+                emp_code_col = resolved_field_map.get('Employee ID')
+                if emp_code_col and emp_code_col in df_paycom.columns:
+                    match = df_paycom[df_paycom[emp_code_col].astype(str).str.strip() == top_manager_id]
+                    if not match.empty:
+                        fn = match.iloc[0].get(resolved_field_map.get('First Name'), '')
+                        ln = match.iloc[0].get(resolved_field_map.get('Last Name'), '')
+                        if pd.notna(fn) and pd.notna(ln):
+                            top_manager_name = f"{str(fn).strip()} {str(ln).strip()}".strip()
+
+    sort_by_manager = False
+    if has_managers:
+        if top_manager_id:
+            name_disp = f" ({top_manager_name})" if top_manager_name else ""
+            st.info(f"**Top Manager Detected:** Employee **{top_manager_id}**{name_disp} supervises the most employees.")
+        
+        sort_by_manager = st.checkbox(
+            "Sort all reporting managers to the **very top** of all generated files (ordered by number of reportees).",
+            value=True, key="paycom_sort_managers_global"
+        )
     
     # --- STEP 2: Choose Action ---
     st.markdown("---")
@@ -323,49 +364,6 @@ def render_ui():
             st.success("✅ Source data passed all sanity checks!")
             
 
-
-        # --- MANAGER DETECTION (PAYCOM) ---
-        col_sup_code = None
-        for cand in ['supervisor_primary_code', 'supervisor primary code', 'supervisorcode']:
-            if cand in df_paycom.columns:
-                col_sup_code = cand
-                break
-    
-        top_manager_id = None
-        top_manager_name = ""
-        has_managers = False
-    
-        if col_sup_code:
-            # Filter out blanks
-            valid_sups = df_paycom[df_paycom[col_sup_code].notna() & (df_paycom[col_sup_code].astype(str).str.strip() != "")]
-            if not valid_sups.empty:
-                has_managers = True
-                sup_counts = valid_sups[col_sup_code].value_counts()
-                if not sup_counts.empty:
-                    top_manager_id = str(sup_counts.index[0]).strip()
-    
-                    # Try to get their name
-                    emp_code_col = resolved_field_map.get('Employee ID')
-                    if emp_code_col and emp_code_col in df_paycom.columns:
-                        match = df_paycom[df_paycom[emp_code_col].astype(str).str.strip() == top_manager_id]
-                        if not match.empty:
-                            fn = match.iloc[0].get(resolved_field_map.get('First Name'), '')
-                            ln = match.iloc[0].get(resolved_field_map.get('Last Name'), '')
-                            if pd.notna(fn) and pd.notna(ln):
-                                top_manager_name = f"{str(fn).strip()} {str(ln).strip()}".strip()
-    
-        st.markdown("---")
-    
-        sort_by_manager = False
-        if has_managers:
-            if top_manager_id:
-                name_disp = f" ({top_manager_name})" if top_manager_name else ""
-                st.info(f"**Top Manager Detected:** Employee **{top_manager_id}**{name_disp} supervises the most employees.")
-            
-            sort_by_manager = st.checkbox(
-                "Sort all reporting managers to the **very top** of all generated files (ordered by number of reportees).",
-                value=True, key="paycom_sort_managers"
-            )
 
 
 

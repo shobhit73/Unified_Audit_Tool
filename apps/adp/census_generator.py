@@ -182,7 +182,8 @@ def render_ui():
         # Show soft warnings first (non-blocking)
         has_soft_warnings = not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty
         if has_soft_warnings:
-            with st.expander("System Minor Warnings", expanded=False):
+            with st.expander("System Minor Warnings & Mapping Suggestions", expanded=False):
+                st.info("💡 **Note:** The following suggestions can be automatically applied by checking the corresponding boxes in **Step 3** before generating your file.")
                 if not flsa_corrections.empty:
                     st.markdown(f"- ℹ️ **FLSA Auto-Corrections:** {len(flsa_corrections)} employee(s) had mismatched FLSA classifications. These have been auto-corrected.")
                 if not flsa_blanks.empty:
@@ -471,9 +472,32 @@ def render_ui():
         if not job_map_complete or not loc_map_complete:
             st.warning("Please fill out all mappings in the tables above before generating the template.")
             return
-        
-        # --- STEP 3: Generate Template (only on button click) ---
+
         st.markdown("---")
+        st.markdown("### Step 3: Auto-Correction Options (Manual Consent Required)")
+        st.markdown("Select which automated fixes you would like to apply during generation. No changes will be made unless selected.")
+        
+        col_fix1, col_fix2 = st.columns(2)
+        with col_fix1:
+            fix_flsa = st.checkbox("Enforce FLSA/Pay Type alignment (e.g. Salaried = Exempt)", value=False, key="adp_fix_flsa")
+            fix_emails = st.checkbox("Use Personal Email as fallback for missing Work Email", value=False, key="adp_fix_emails")
+            fix_license = st.checkbox("Strict License Validation (Clear dates if number missing)", value=False, key="adp_fix_license")
+        with col_fix2:
+            # Note: fix_position is Paycom-only as per request
+            fix_status = st.checkbox("Auto-Map Employment Status (e.g. Inactive -> Terminated)", value=False, key="adp_fix_status")
+            fix_type = st.checkbox("Auto-Map Worker Category (e.g. Intern -> Part Time)", value=False, key="adp_fix_type")
+
+        fix_options = {
+            'fix_flsa': fix_flsa,
+            'fix_emails': fix_emails,
+            'fix_license': fix_license,
+            'fix_status': fix_status,
+            'fix_type': fix_type
+        }
+
+        # --- STEP 4: Generate Template (only on button click) ---
+        st.markdown("---")
+        st.markdown("### Step 4: Finalize & Generate")
         
         btn_label = "Update Uzio Template" if is_selective else "Generate Uzio Template"
         if st.button(btn_label, type="primary", key="adp_gen_btn"):
@@ -506,7 +530,7 @@ def render_ui():
                             return
                         
                         # Perform Merge
-                        df_uzio, summary, df_changes = selective_update_uzio(df_adp, df_template, selected_uzio_cols, resolved_field_map)
+                        df_uzio, summary, df_changes = selective_update_uzio(df_adp, df_template, selected_uzio_cols, resolved_field_map, fix_options=fix_options)
                         
                         # Apply Job/Loc mapping if those columns were selected
                         if 'Job Title' in selected_uzio_cols and src_job_col in df_adp.columns:
@@ -519,7 +543,7 @@ def render_ui():
                                 st.dataframe(df_changes, hide_index=True, use_container_width=True)
                     else:
                         # Full Generation
-                        df_uzio = generate_uzio_template(df_adp, resolved_field_map)
+                        df_uzio = generate_uzio_template(df_adp, resolved_field_map, fix_options=fix_options)
                         
                         # Apply Job Title Mapping
                         if src_job_col and src_job_col in df_adp.columns:

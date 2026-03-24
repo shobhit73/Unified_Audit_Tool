@@ -954,14 +954,17 @@ def selective_update_uzio(df_source, df_template, selected_uzio_cols, vendor_fie
                             formatted_val = str(val).strip()
                     elif std_name == 'License Expiration Date':
                         v_str = str(val).strip()
-                        if '00/00/0000' in v_str or v_str in ('0', '00', '0000'):
-                            formatted_val = ""
-                        else:
-                            try:
-                                dt = pd.to_datetime(v_str, errors='coerce')
-                                formatted_val = dt.strftime('%m/%d/%Y') if not pd.isna(dt) else ""
-                            except:
+                        if fix_options and fix_options.get('fix_license', False):
+                            if '00/00/0000' in v_str or v_str in ('0', '00', '0000'):
                                 formatted_val = ""
+                            else:
+                                try:
+                                    dt = pd.to_datetime(v_str, errors='coerce')
+                                    formatted_val = dt.strftime('%m/%d/%Y') if not pd.isna(dt) else ""
+                                except:
+                                    formatted_val = ""
+                        else:
+                            formatted_val = v_str
                     elif std_name == 'SSN':
                         formatted_val = str(val).replace("-", "").strip()
                     elif std_name == 'Gender':
@@ -990,6 +993,22 @@ def selective_update_uzio(df_source, df_template, selected_uzio_cols, vendor_fie
                             elif 'intern' in et_str: formatted_val = 'Part Time'
                         else:
                             formatted_val = str(val).strip()
+                    elif std_name == 'Termination Reason':
+                        tr_str = str(val).strip().lower()
+                        if "involuntary" in tr_str or "invluntary" in tr_str:
+                            formatted_val = "Involuntary Termination of Employment"
+                        elif "voluntary" in tr_str or "quit" in tr_str:
+                            formatted_val = "Voluntary Termination of Employment"
+                        elif "death" in tr_str:
+                            formatted_val = "Death"
+                        elif "retire" in tr_str:
+                            formatted_val = "Retirement"
+                        elif "disability" in tr_str:
+                            formatted_val = "Permanent Disability"
+                        elif "transfer" in tr_str:
+                            formatted_val = "Transfer"
+                        else:
+                            formatted_val = "Other"
                     else:
                         formatted_val = str(val).strip()
                 
@@ -1000,11 +1019,35 @@ def selective_update_uzio(df_source, df_template, selected_uzio_cols, vendor_fie
                     change_details.append({
                         'Employee ID': eid,
                         'Column': uzio_col,
-                        'Old Value': old_val,
-                        'New Value': formatted_val
+                        'From': old_val,
+                        'To': formatted_val
                     })
-            
-            updated_count += 1
+                    updated_count += 1
+
+            # Special case: Email Fallback (only if Work Email was selected and fix_emails is True)
+            if fix_options and fix_options.get('fix_emails', False):
+                work_email_col = next((c for c in selected_uzio_cols if UZIO_RAW_MAPPING.get(c) == 'Work Email'), None)
+                if work_email_col:
+                    current_work_email = df_updated.at[idx, work_email_col]
+                    if pd.isna(current_work_email) or str(current_work_email).strip() == "":
+                        pers_email_col = next((c for c in df_source.columns if norm_colname(c).casefold() == 'personal email'), None)
+                        if not pers_email_col:
+                             # Try fuzzy match if direct fails
+                             pers_email_col = next((c for c in df_source.columns if 'personal' in c.lower() and 'email' in c.lower()), None)
+                        
+                        if pers_email_col:
+                            fallback_email = str(source_row_data.get(pers_email_col, "")).strip()
+                            if fallback_email:
+                                df_updated.at[idx, work_email_col] = fallback_email
+                                summary_id = f"Email Fallback ({eid})"
+                                if not any(d['Employee ID'] == eid and d['Column'] == work_email_col for d in change_details):
+                                    change_details.append({
+                                        'Employee ID': eid,
+                                        'Column': work_email_col,
+                                        'From': '(blank)',
+                                        'To': fallback_email
+                                    })
+                                    updated_count += 1
 
     # --- Post-processing: License Rules on the updated template (Optional) ---
     if fix_options and fix_options.get('fix_license', False):

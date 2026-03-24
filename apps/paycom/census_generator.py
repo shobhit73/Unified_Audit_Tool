@@ -251,7 +251,16 @@ def render_ui():
             if col_pos:
                 val_pos = row.get(col_pos)
                 if pd.isna(val_pos) or str(val_pos).strip() == "":
-                    custom_missing.append("Position is blank")
+                    # Logic for position fix: Use Department_Desc if available
+                    if col_dep and pd.notna(row.get(col_dep)) and str(row.get(col_dep)).strip():
+                        paycom_pos_fixes.append({
+                            'Employee ID': emp_ref,
+                            'Original Position': '(blank)',
+                            'Suggested Fix': str(row.get(col_dep)).strip()
+                        })
+                        # Don't add to hard errors if we have a suggested fix (it's a soft warning now)
+                    else:
+                        custom_missing.append("Position is blank")
                         
             # 4. Emergency Contact Spanish Characters Check
             # Look for emergency contact name columns
@@ -573,13 +582,15 @@ def render_ui():
         with col_fix2:
             fix_status = st.checkbox("Auto-Map Employment Status (e.g. Inactive -> Terminated)", value=False, key="pc_fix_status")
             fix_type = st.checkbox("Auto-Map Worker Category (e.g. Intern -> Part Time)", value=False, key="pc_fix_type")
+            fix_position = st.checkbox("Auto-Fill blank Position with Department Description", value=False, key="pc_fix_position")
 
         fix_options = {
             'fix_flsa': fix_flsa,
             'fix_emails': fix_emails,
             'fix_license': fix_license,
             'fix_status': fix_status,
-            'fix_type': fix_type
+            'fix_type': fix_type,
+            'fix_position': fix_position
         }
 
         st.markdown("---")
@@ -619,6 +630,14 @@ def render_ui():
                         # Perform Merge
                         df_uzio, summary, df_changes = selective_update_uzio(df_paycom, df_template, selected_uzio_cols, resolved_field_map, fix_options=fix_options)
                         
+                        # Apply Position Fix (Optional)
+                        if fix_position and col_dep and col_dep in df_paycom.columns:
+                            # The target column in Uzio is 'Job Title' (which maps to 'Position' in Uzio Master Template)
+                            if 'Job Title' in df_uzio.columns and 'Job Title' in selected_uzio_cols:
+                                missing_pos_mask = df_uzio['Job Title'].isna() | (df_uzio['Job Title'].astype(str).str.strip() == "")
+                                # Note: selective_update_uzio handles merging, so we just fill blanks in the final df_uzio
+                                df_uzio.loc[missing_pos_mask, 'Job Title'] = df_paycom.loc[missing_pos_mask, col_dep]
+                        
                         st.info(summary)
                         if not df_changes.empty:
                             with st.expander("View Changes Preview", expanded=False):
@@ -636,6 +655,13 @@ def render_ui():
                         if src_loc_col and src_loc_col in df_paycom.columns:
                             stripped_locs = df_paycom[src_loc_col].astype(str).str.strip()
                             df_uzio['Work Location'] = stripped_locs.map(loc_dict).fillna(df_paycom[src_loc_col])
+
+                        # Apply Position Fix (Optional)
+                        if fix_position and col_dep and col_dep in df_paycom.columns:
+                            # The target column in Uzio is 'Job Title' (which maps to 'Position' in Uzio Master Template)
+                            if 'Job Title' in df_uzio.columns:
+                                missing_pos_mask = df_uzio['Job Title'].isna() | (df_uzio['Job Title'].astype(str).str.strip() == "")
+                                df_uzio.loc[missing_pos_mask, 'Job Title'] = df_paycom.loc[missing_pos_mask, col_dep]
 
                     # Apply Job Title Mapping
                     if src_job_col and src_job_col in df_paycom.columns:

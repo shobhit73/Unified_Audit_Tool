@@ -569,7 +569,7 @@ def validate_source_data(df_source, resolved_field_map):
         'anomalies': pd.DataFrame(anomalies)
     }
 
-def generate_uzio_template(df_source, vendor_field_map):
+def generate_uzio_template(df_source, vendor_field_map, fix_options=None):
     """
     Generate an Uzio Census Template DataFrame from a source DataFrame.
     """
@@ -631,11 +631,14 @@ def generate_uzio_template(df_source, vendor_field_map):
                     if pd.isna(x): return ""
                     s = str(x).strip().lower()
                     if not s: return ""
-                    if 'not hired' in s: return 'EXCLUDE'
-                    if 'inactive' in s: return 'TERMINATED'
-                    if 'leave' in s: return 'ACTIVE'
-                    if 'term' in s: return 'TERMINATED'
-                    if 'active' in s: return 'ACTIVE'
+                    
+                    if fix_options and fix_options.get('fix_status', False):
+                        if 'not hired' in s: return 'EXCLUDE'
+                        if 'inactive' in s: return 'TERMINATED'
+                        if 'leave' in s: return 'ACTIVE'
+                        if 'term' in s: return 'TERMINATED'
+                        if 'active' in s: return 'ACTIVE'
+                    
                     return str(x).strip().upper()
                 series = series.apply(format_status)
             elif std_name in ['Zip', 'Mailing Zip']:
@@ -655,11 +658,15 @@ def generate_uzio_template(df_source, vendor_field_map):
                 def format_emp_type(et):
                     if pd.isna(et) or str(et).strip() == "": return ""
                     et_str = str(et).strip().lower()
-                    if 'full' in et_str: return 'Full Time'
-                    if 'part' in et_str: return 'Part Time'
-                    if 'season' in et_str: return 'Seasonal'
-                    if 'other' in et_str: return 'Other'
-                    return ""
+                    
+                    if fix_options and fix_options.get('fix_type', False):
+                        if 'full' in et_str: return 'Full Time'
+                        if 'part' in et_str: return 'Part Time'
+                        if 'season' in et_str: return 'Seasonal'
+                        if 'other' in et_str: return 'Other'
+                        if 'intern' in et_str: return 'Part Time'
+                    
+                    return str(et).strip()
                 series = series.apply(format_emp_type)
             elif std_name == 'Termination Reason':
                 def format_term_reason(tr):
@@ -690,25 +697,27 @@ def generate_uzio_template(df_source, vendor_field_map):
     if 'Employment Status*' in df_uzio.columns:
         df_uzio = df_uzio[df_uzio['Employment Status*'] != 'EXCLUDE'].copy()
         
-    # Apply Work Email Fallback
-    if 'Official Email*' in df_uzio.columns and 'Personal Email' in df_uzio.columns:
-        # Fill missing Work Emails with Personal Email
-        missing_work_mask = df_uzio['Official Email*'].isna() | (df_uzio['Official Email*'].astype(str).str.strip() == "")
-        df_uzio.loc[missing_work_mask, 'Official Email*'] = df_uzio.loc[missing_work_mask, 'Personal Email']
+    # Apply Work Email Fallback (Optional)
+    if fix_options and fix_options.get('fix_emails', False):
+        if 'Official Email*' in df_uzio.columns and 'Personal Email' in df_uzio.columns:
+            # Fill missing Work Emails with Personal Email
+            missing_work_mask = df_uzio['Official Email*'].isna() | (df_uzio['Official Email*'].astype(str).str.strip() == "")
+            df_uzio.loc[missing_work_mask, 'Official Email*'] = df_uzio.loc[missing_work_mask, 'Personal Email']
 
-    # --- License Rules ---
-    # Rule 1: Never allow License Expiration Date if License Number is blank
-    # Rule 2: Never allow 00/00/0000 in License Expiration Date
-    lic_num_col = 'License Number*'
-    lic_exp_col = 'License Expiration Date'
-    if lic_exp_col in df_uzio.columns:
-        # Clear 00/00/0000 or similar invalid placeholders
-        bad_exp_mask = df_uzio[lic_exp_col].astype(str).str.strip().isin(['00/00/0000', '0', '00', '0000', 'nan', 'NaT', ''])
-        df_uzio.loc[bad_exp_mask, lic_exp_col] = ""
-        # Clear expiration date if no license number
-        if lic_num_col in df_uzio.columns:
-            no_license_mask = df_uzio[lic_num_col].isna() | (df_uzio[lic_num_col].astype(str).str.strip() == "") | (df_uzio[lic_num_col].astype(str).str.strip() == 'nan')
-            df_uzio.loc[no_license_mask, lic_exp_col] = ""
+    # --- License Rules (Optional) ---
+    if fix_options and fix_options.get('fix_license', False):
+        # Rule 1: Never allow License Expiration Date if License Number is blank
+        # Rule 2: Never allow 00/00/0000 in License Expiration Date
+        lic_num_col = 'License Number*'
+        lic_exp_col = 'License Expiration Date'
+        if lic_exp_col in df_uzio.columns:
+            # Clear 00/00/0000 or similar invalid placeholders
+            bad_exp_mask = df_uzio[lic_exp_col].astype(str).str.strip().isin(['00/00/0000', '0', '00', '0000', 'nan', 'NaT', ''])
+            df_uzio.loc[bad_exp_mask, lic_exp_col] = ""
+            # Clear expiration date if no license number
+            if lic_num_col in df_uzio.columns:
+                no_license_mask = df_uzio[lic_num_col].isna() | (df_uzio[lic_num_col].astype(str).str.strip() == "") | (df_uzio[lic_num_col].astype(str).str.strip() == 'nan')
+                df_uzio.loc[no_license_mask, lic_exp_col] = ""
 
     # Apply Pay Type rules
     if 'Pay Type*' in df_uzio.columns:
@@ -719,9 +728,11 @@ def generate_uzio_template(df_source, vendor_field_map):
         df_uzio.loc[hourly_mask, 'Pay Type*'] = "Hourly"
         if 'Annual Salary(Digits)**' in df_uzio.columns:
             df_uzio.loc[hourly_mask, 'Annual Salary(Digits)**'] = ""
-        # Enforce Hourly = Non-Exempt
-        if 'FLSA Classification' in df_uzio.columns:
-            df_uzio.loc[hourly_mask, 'FLSA Classification'] = "Non-Exempt"
+            # Apply Pay Type rules (Optional)
+            if fix_options and fix_options.get('fix_flsa', False):
+                # Enforce Hourly = Non-Exempt
+                if 'FLSA Classification' in df_uzio.columns:
+                    df_uzio.loc[hourly_mask, 'FLSA Classification'] = "Non-Exempt"
             
         # Salaried logic
         salary_mask = pay_type_series.str.contains('salar', na=False)
@@ -730,14 +741,17 @@ def generate_uzio_template(df_source, vendor_field_map):
             df_uzio.loc[salary_mask, 'Hourly Pay Rate**'] = 0
         if 'Working Hours per Week(Digits)**' in df_uzio.columns:
             df_uzio.loc[salary_mask, 'Working Hours per Week(Digits)**'] = ""
-        # Enforce Salaried = Exempt
-        if 'FLSA Classification' in df_uzio.columns:
-            df_uzio.loc[salary_mask, 'FLSA Classification'] = "Exempt"
+
+        # Enforce Salaried = Exempt (Optional)
+        if fix_options and fix_options.get('fix_flsa', False):
+            if 'FLSA Classification' in df_uzio.columns:
+                df_uzio.loc[salary_mask, 'FLSA Classification'] = "Exempt"
             
-        # Mandatory fallback: if FLSA is still blank, default to Non-Exempt as a safety measure
-        if 'FLSA Classification' in df_uzio.columns:
-            blank_flsa_mask = df_uzio['FLSA Classification'].isna() | (df_uzio['FLSA Classification'].astype(str).str.strip() == "")
-            df_uzio.loc[blank_flsa_mask, 'FLSA Classification'] = "Non-Exempt"
+        # Mandatory fallback: if FLSA is still blank, default to Non-Exempt as a safety measure (Optional)
+        if fix_options and fix_options.get('fix_flsa', False):
+            if 'FLSA Classification' in df_uzio.columns:
+                blank_flsa_mask = df_uzio['FLSA Classification'].isna() | (df_uzio['FLSA Classification'].astype(str).str.strip() == "")
+                df_uzio.loc[blank_flsa_mask, 'FLSA Classification'] = "Non-Exempt"
             
     return df_uzio
 
@@ -877,7 +891,7 @@ def read_uzio_template_df(file):
         print(f"Error reading Uzio template: {e}")
         return None
 
-def selective_update_uzio(df_source, df_template, selected_uzio_cols, vendor_field_map):
+def selective_update_uzio(df_source, df_template, selected_uzio_cols, vendor_field_map, fix_options=None):
     """
     Updates specific columns in df_template using data from df_source.
     Only updates employees present in df_source.
@@ -956,19 +970,26 @@ def selective_update_uzio(df_source, df_template, selected_uzio_cols, vendor_fie
                         elif g_str.startswith('f'): formatted_val = "Female"
                     elif std_name == 'Employment Status':
                         s = str(val).lower()
-                        if 'not hired' in s: formatted_val = 'EXCLUDE'
-                        elif 'inactive' in s or 'term' in s: formatted_val = 'TERMINATED'
-                        elif 'active' in s or 'leave' in s: formatted_val = 'ACTIVE'
-                        else: formatted_val = str(val).strip().upper()
+                        if fix_options and fix_options.get('fix_status', False):
+                            if 'not hired' in s: formatted_val = 'EXCLUDE'
+                            elif 'inactive' in s or 'term' in s: formatted_val = 'TERMINATED'
+                            elif 'active' in s or 'leave' in s: formatted_val = 'ACTIVE'
+                            else: formatted_val = str(val).strip().upper()
+                        else:
+                            formatted_val = str(val).strip().upper()
                     elif std_name in ['Zip', 'Mailing Zip']:
                         z_clean = re.sub(r'\D', '', str(val).strip())
                         formatted_val = z_clean.zfill(5)[:5] if z_clean else ""
                     elif std_name == 'Employment Type':
                         et_str = str(val).lower()
-                        if 'full' in et_str: formatted_val = 'Full Time'
-                        elif 'part' in et_str: formatted_val = 'Part Time'
-                        elif 'season' in et_str: formatted_val = 'Seasonal'
-                        elif 'other' in et_str: formatted_val = 'Other'
+                        if fix_options and fix_options.get('fix_type', False):
+                            if 'full' in et_str: formatted_val = 'Full Time'
+                            elif 'part' in et_str: formatted_val = 'Part Time'
+                            elif 'season' in et_str: formatted_val = 'Seasonal'
+                            elif 'other' in et_str: formatted_val = 'Other'
+                            elif 'intern' in et_str: formatted_val = 'Part Time'
+                        else:
+                            formatted_val = str(val).strip()
                     else:
                         formatted_val = str(val).strip()
                 
@@ -985,17 +1006,18 @@ def selective_update_uzio(df_source, df_template, selected_uzio_cols, vendor_fie
             
             updated_count += 1
 
-    # --- Post-processing: License Rules on the updated template ---
-    lic_num_col = 'License Number*'
-    lic_exp_col = 'License Expiration Date'
-    if lic_exp_col in df_updated.columns:
-        # Clear any 00/00/0000 or invalid placeholders
-        bad_mask = df_updated[lic_exp_col].astype(str).str.strip().isin(['00/00/0000', '0', '00', '0000', 'nan', 'NaT', ''])
-        df_updated.loc[bad_mask, lic_exp_col] = ""
-        # Clear expiration date when license number is blank
-        if lic_num_col in df_updated.columns:
-            no_lic_mask = df_updated[lic_num_col].isna() | (df_updated[lic_num_col].astype(str).str.strip() == "") | (df_updated[lic_num_col].astype(str).str.strip() == 'nan')
-            df_updated.loc[no_lic_mask, lic_exp_col] = ""
+    # --- Post-processing: License Rules on the updated template (Optional) ---
+    if fix_options and fix_options.get('fix_license', False):
+        lic_num_col = 'License Number*'
+        lic_exp_col = 'License Expiration Date'
+        if lic_exp_col in df_updated.columns:
+            # Clear any 00/00/0000 or invalid placeholders
+            bad_mask = df_updated[lic_exp_col].astype(str).str.strip().isin(['00/00/0000', '0', '00', '0000', 'nan', 'NaT', ''])
+            df_updated.loc[bad_mask, lic_exp_col] = ""
+            # Clear expiration date when license number is blank
+            if lic_num_col in df_updated.columns:
+                no_lic_mask = df_updated[lic_num_col].isna() | (df_updated[lic_num_col].astype(str).str.strip() == "") | (df_updated[lic_num_col].astype(str).str.strip() == 'nan')
+                df_updated.loc[no_lic_mask, lic_exp_col] = ""
 
     summary = f"Updated {updated_count} employees. Total {len(change_details)} cell changes."
     return df_updated, summary, pd.DataFrame(change_details)

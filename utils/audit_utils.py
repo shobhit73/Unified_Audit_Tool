@@ -810,8 +810,8 @@ def generate_uzio_template(df_source, vendor_field_map, fix_options=None):
             status_col = vendor_field_map.get('Employment Status')
             status_series = df_source[status_col].astype(str).str.lower().str.strip() if status_col and status_col in df_source.columns else pd.Series([""]*len(df_source))
             
-            # Mask for active employees with blank DOL_Status
-            is_active_mask = status_series.isin(['active', 'permanent', 'benefit eligible'])
+            # Mask for non-terminated employees with blank DOL_Status
+            is_active_mask = ~status_series.str.contains('term', na=False)
             blank_dol_mask = df_source[dol_col].isna() | (df_source[dol_col].astype(str).str.strip() == "")
             
             # Apply the fix: set Employment Type to 'Full Time'

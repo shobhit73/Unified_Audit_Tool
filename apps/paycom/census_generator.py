@@ -218,22 +218,13 @@ def render_ui():
         paycom_custom_errors = []
         paycom_pos_fixes = []
 
-        # Identify exact columns (normalized to lowercase)
-        col_dol = 'dol_status' if 'dol_status' in df_paycom.columns else None
-        col_pos = 'position' if 'position' in df_paycom.columns else None
-
-        col_dep = None
-        for cand in ['department_desc', 'department_dec', 'department', 'department_description', 'labor_allocation_details', 'delivery_station_code_desc']:
-            if cand in df_paycom.columns:
-                col_dep = cand
-                break
+        # Identify exact columns (normalized)
+        col_dol = next((c for c in df_paycom.columns if str(c).lower().strip().replace('_',' ') == 'dol status'), None)
+        col_pos = next((c for c in df_paycom.columns if str(c).lower().strip() in ['position', 'job title']), None)
+        col_dep = next((c for c in df_paycom.columns if str(c).lower().strip() in ['department_desc', 'department_dec', 'department', 'department_description', 'labor_allocation_details', 'delivery_station_code_desc']), None)
 
         # Find employee status column - check variations
-        col_emp_status = None
-        for cand in ['employee_status', 'employee status', 'employment status', 'status', 'ee status']:
-            if cand in df_paycom.columns:
-                col_emp_status = cand
-                break
+        col_emp_status = next((c for c in df_paycom.columns if str(c).lower().strip() in ['employee_status', 'employee status', 'employment status', 'status', 'ee status']), None)
 
         for idx, row in df_paycom.iterrows():
             emp_ref = f"Row {idx+2}"
@@ -477,9 +468,10 @@ def render_ui():
                 df_download.loc[mask, c_work] = df_download.loc[mask, c_pers]
 
         if fix_options.get('fix_dol_status') and col_dol:
-            mask_active = ~df_download[col_emp_status].astype(str).str.lower().str.contains('term', na=False) if col_emp_status else pd.Series([True]*len(df_download))
-            mask_blank = df_download[col_dol].isna() | (df_download[col_dol].astype(str).str.strip() == "")
-            df_download.loc[mask_active & mask_blank, col_dol] = "Full-Time"
+            # Active or Inactive (not yet Terminated) should be fixed
+            mask_terminated = df_download[col_emp_status].astype(str).str.lower().str.contains('term', na=False) if col_emp_status else pd.Series([False]*len(df_download))
+            mask_blank_dol = df_download[col_dol].isna() | (df_download[col_dol].astype(str).str.strip() == "")
+            df_download.loc[~mask_terminated & mask_blank_dol, col_dol] = "Full-Time"
 
         if fix_options.get('fix_status') and col_emp_status:
             # Inactive -> Terminated (Paycom specific logic)

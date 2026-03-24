@@ -780,6 +780,20 @@ def render_ui():
                         file_name=f"Uzio_Census_Template_Paycom_{timestamp}.xlsm",
                         mime="application/vnd.ms-excel.sheet.macroEnabled.12"
                     )
+
+                    # Export logic for Sanity Fixes
+                    fix_logs_df = getattr(df_uzio, 'attrs', {}).get('fix_logs', None)
+                    if fix_logs_df is not None and not fix_logs_df.empty:
+                        fix_out = io.BytesIO()
+                        fix_logs_df.to_csv(fix_out, index=False)
+                        fix_out.seek(0)
+                        st.download_button(
+                            label="Download Auto-Corrections Log (CSV)",
+                            data=fix_out.getvalue(),
+                            file_name=f"Auto_Corrections_Log_Paycom_{timestamp}.csv",
+                            mime="text/csv",
+                            key="paycom_fix_log_dl"
+                        )
                 except Exception as e:
                     import traceback
                     error_traceback = traceback.format_exc()

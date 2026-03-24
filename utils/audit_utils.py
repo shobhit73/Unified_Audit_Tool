@@ -767,23 +767,41 @@ def generate_uzio_template(df_source, vendor_field_map, fix_options=None):
             df_uzio[uzio_header] = series
         else:
             df_uzio[uzio_header] = ""
+    # Initialize log tracking
+    fix_logs = []
+    
     # Filter out excluded employees (e.g., 'not hired')
     if 'Employment Status*' in df_uzio.columns:
         df_uzio = df_uzio[df_uzio['Employment Status*'] != 'EXCLUDE'].copy()
+        
+    # Helper to get employee ID for logging
+    emp_ids = df_uzio['Employee ID*'] if 'Employee ID*' in df_uzio.columns else df_uzio.index
         
     # Apply Work Email Fallback (Optional)
     if fix_options and fix_options.get('fix_emails', False):
         if 'Official Email*' in df_uzio.columns and 'Personal Email' in df_uzio.columns:
             # Fill missing Work Emails with Personal Email
             missing_work_mask = df_uzio['Official Email*'].isna() | (df_uzio['Official Email*'].astype(str).str.strip() == "")
-            df_uzio.loc[missing_work_mask, 'Official Email*'] = df_uzio.loc[missing_work_mask, 'Personal Email']
+            has_personal_mask = df_uzio['Personal Email'].notna() & (df_uzio['Personal Email'].astype(str).str.strip() != "")
+            combined_mask = missing_work_mask & has_personal_mask
+            
+            for idx in df_uzio[combined_mask].index:
+                fix_logs.append({
+                    "Employee": emp_ids[idx],
+                    "Field Fixed": "Official Email*",
+                    "Original Value": "(Blank)",
+                    "New Value": df_uzio.loc[idx, 'Personal Email'],
+                    "Fix Applied": "Fallback to Personal Email"
+                })
+                
+            df_uzio.loc[combined_mask, 'Official Email*'] = df_uzio.loc[combined_mask, 'Personal Email']
 
     # Apply Position Auto-Fill (Optional - primarily Paycom)
     if fix_options and fix_options.get('fix_position', False):
         if 'Job Title' in df_uzio.columns:
             # We need to find the department description column in the source
             dept_desc_col = None
-            for cand in ['department_desc', 'department_dec', 'department', 'department_description']:
+            for cand in ['department_desc', 'department_dec', 'department', 'department_description', 'home department code']:
                 cand_col = next((c for c in df_source.columns if str(c).lower().strip() == cand), None)
                 if cand_col:
                     dept_desc_col = cand_col
@@ -791,19 +809,28 @@ def generate_uzio_template(df_source, vendor_field_map, fix_options=None):
                     
             if dept_desc_col:
                 missing_job_mask = df_uzio['Job Title'].isna() | (df_uzio['Job Title'].astype(str).str.strip() == "")
-                df_uzio.loc[missing_job_mask, 'Job Title'] = df_source.loc[missing_job_mask, dept_desc_col]
+                has_dept_mask = df_source[dept_desc_col].notna() & (df_source[dept_desc_col].astype(str).str.strip() != "")
+                combined_mask = missing_job_mask & has_dept_mask
+                
+                for idx in df_uzio[combined_mask].index:
+                    fix_logs.append({
+                        "Employee": emp_ids[idx],
+                        "Field Fixed": "Job Title",
+                        "Original Value": "(Blank)",
+                        "New Value": df_source.loc[idx, dept_desc_col],
+                        "Fix Applied": "Fallback to Department"
+                    })
+                    
+                df_uzio.loc[combined_mask, 'Job Title'] = df_source.loc[combined_mask, dept_desc_col]
 
     # Apply DOL_Status Auto-Fill (Optional - primarily Paycom)
     if fix_options and fix_options.get('fix_dol_status', False):
         dol_col = None
-        for cand in ['dol_status', 'dol status']:
-            cand_col = next((c in df_source.columns and c for c in [cand, cand.replace('_',' ')] if c in df_source.columns), None)
-            # Actually, simpler:
-            for c in df_source.columns:
-                if str(c).lower().strip().replace('_',' ') == 'dol status':
-                    dol_col = c
-                    break
-            if dol_col: break
+        for cand in ['dol_status', 'dol status', 'worker category description']:
+            cand_col = next((c for c in df_source.columns if str(c).lower().strip().replace('_',' ') == cand), None)
+            if cand_col:
+                dol_col = cand_col
+                break
 
         if dol_col and 'Employment Type*' in df_uzio.columns:
             # If DOL_Status maps to Employment Type, check if we need to fill it
@@ -813,9 +840,19 @@ def generate_uzio_template(df_source, vendor_field_map, fix_options=None):
             # Mask for non-terminated employees with blank DOL_Status
             is_active_mask = ~status_series.str.contains('term', na=False)
             blank_dol_mask = df_source[dol_col].isna() | (df_source[dol_col].astype(str).str.strip() == "")
+            combined_mask = is_active_mask & blank_dol_mask
+            
+            for idx in df_uzio[combined_mask].index:
+                fix_logs.append({
+                    "Employee": emp_ids[idx],
+                    "Field Fixed": "Employment Type*",
+                    "Original Value": "(Blank)",
+                    "New Value": "Full Time",
+                    "Fix Applied": "Default Active to Full Time"
+                })
             
             # Apply the fix: set Employment Type to 'Full Time'
-            df_uzio.loc[is_active_mask & blank_dol_mask, 'Employment Type*'] = "Full Time"
+            df_uzio.loc[combined_mask, 'Employment Type*'] = "Full Time"
 
     # --- License Rules (Optional) ---
     if fix_options and fix_options.get('fix_license', False):
@@ -826,11 +863,37 @@ def generate_uzio_template(df_source, vendor_field_map, fix_options=None):
         if lic_exp_col in df_uzio.columns:
             # Clear 00/00/0000 or similar invalid placeholders
             bad_exp_mask = df_uzio[lic_exp_col].astype(str).str.strip().isin(['00/00/0000', '0', '00', '0000', 'nan', 'NaT', ''])
+            
+            for idx in df_uzio[bad_exp_mask].index:
+                fix_logs.append({
+                    "Employee": emp_ids[idx],
+                    "Field Fixed": "License Expiration Date",
+                    "Original Value": df_uzio.loc[idx, lic_exp_col],
+                    "New Value": "(Blank)",
+                    "Fix Applied": "Cleared Invalid Date Placeholder"
+                })
+                
             df_uzio.loc[bad_exp_mask, lic_exp_col] = ""
+            
             # Clear expiration date if no license number
             if lic_num_col in df_uzio.columns:
                 no_license_mask = df_uzio[lic_num_col].isna() | (df_uzio[lic_num_col].astype(str).str.strip() == "") | (df_uzio[lic_num_col].astype(str).str.strip() == 'nan')
+                exp_not_blank = df_uzio[lic_exp_col].astype(str).str.strip() != ""
+                combined_mask = no_license_mask & exp_not_blank
+                
+                for idx in df_uzio[combined_mask].index:
+                    fix_logs.append({
+                        "Employee": emp_ids[idx],
+                        "Field Fixed": "License Expiration Date",
+                        "Original Value": df_uzio.loc[idx, lic_exp_col],
+                        "New Value": "(Blank)",
+                        "Fix Applied": "Cleared Date due to missing License Number"
+                    })
+                    
                 df_uzio.loc[no_license_mask, lic_exp_col] = ""
+
+    # Attach fix logs DataFrame as an attribute to the Uzio DataFrame
+    df_uzio.attrs['fix_logs'] = pd.DataFrame(fix_logs) if fix_logs else pd.DataFrame(columns=["Employee", "Field Fixed", "Original Value", "New Value", "Fix Applied"])
 
     # Apply Pay Type rules
     if 'Pay Type*' in df_uzio.columns:

@@ -716,6 +716,20 @@ def render_ui():
                         mime="application/vnd.ms-excel.sheet.macroEnabled.12",
                         key="adp_final_dl"
                     )
+
+                    # Export logic for Sanity Fixes
+                    fix_logs_df = getattr(df_uzio, 'attrs', {}).get('fix_logs', None)
+                    if fix_logs_df is not None and not fix_logs_df.empty:
+                        fix_out = io.BytesIO()
+                        fix_logs_df.to_csv(fix_out, index=False)
+                        fix_out.seek(0)
+                        st.download_button(
+                            label="Download Auto-Corrections Log (CSV)",
+                            data=fix_out.getvalue(),
+                            file_name=f"Auto_Corrections_Log_ADP_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+                            mime="text/csv",
+                            key="adp_fix_log_dl"
+                        )
                     
                 except Exception as e:
                     import traceback

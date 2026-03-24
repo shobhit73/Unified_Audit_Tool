@@ -882,11 +882,39 @@ def generate_uzio_template(df_source, vendor_field_map, fix_options=None):
                     
                 df_uzio.loc[no_license_mask, lic_exp_col] = ""
 
-    # Attach fix logs DataFrame as an attribute to the Uzio DataFrame
-    df_uzio.attrs['fix_logs'] = pd.DataFrame(fix_logs) if fix_logs else pd.DataFrame(columns=["Employee", "Field Fixed", "Original Value", "New Value", "Fix Applied"])
 
     # Apply Pay Type rules
     if 'Pay Type*' in df_uzio.columns:
+        # Special Rule: If Job Title contains 'Driver', force Hourly and Non-Exempt
+        if 'Job Title' in df_uzio.columns:
+            driver_mask = df_uzio['Job Title'].astype(str).str.lower().str.contains('driver', na=False)
+            
+            # Check for changes needed in Pay Type
+            # We want to log if we are changing it from blank or from something else to 'Hourly'
+            pt_to_fix = driver_mask & (df_uzio['Pay Type*'].astype(str).str.lower().str.strip() != 'hourly')
+            for idx in df_uzio[pt_to_fix].index:
+                fix_logs.append({
+                    "Employee": emp_ids[idx],
+                    "Field Fixed": "Pay Type*",
+                    "Original Value": df_uzio.loc[idx, 'Pay Type*'] if pd.notna(df_uzio.loc[idx, 'Pay Type*']) else "(Blank)",
+                    "New Value": "Hourly",
+                    "Fix Applied": "Forced Hourly for Driver Position"
+                })
+            df_uzio.loc[driver_mask, 'Pay Type*'] = "Hourly"
+
+            # Check for changes needed in FLSA
+            if 'FLSA Classification' in df_uzio.columns:
+                flsa_to_fix = driver_mask & (df_uzio['FLSA Classification'].astype(str).str.lower().str.strip() != 'non-exempt')
+                for idx in df_uzio[flsa_to_fix].index:
+                    fix_logs.append({
+                        "Employee": emp_ids[idx],
+                        "Field Fixed": "FLSA Classification",
+                        "Original Value": df_uzio.loc[idx, 'FLSA Classification'] if pd.notna(df_uzio.loc[idx, 'FLSA Classification']) else "(Blank)",
+                        "New Value": "Non-Exempt",
+                        "Fix Applied": "Forced Non-Exempt for Driver Position"
+                    })
+                df_uzio.loc[driver_mask, 'FLSA Classification'] = "Non-Exempt"
+
         pay_type_series = df_uzio['Pay Type*'].astype(str).str.lower().str.strip()
         
         # Hourly logic
@@ -919,6 +947,9 @@ def generate_uzio_template(df_source, vendor_field_map, fix_options=None):
                 blank_flsa_mask = df_uzio['FLSA Classification'].isna() | (df_uzio['FLSA Classification'].astype(str).str.strip() == "")
                 df_uzio.loc[blank_flsa_mask, 'FLSA Classification'] = "Non-Exempt"
             
+    # Final step: Attach logs
+    df_uzio.attrs['fix_logs'] = pd.DataFrame(fix_logs) if fix_logs else pd.DataFrame(columns=["Employee", "Field Fixed", "Original Value", "New Value", "Fix Applied"])
+
     return df_uzio
 
 def inject_into_uzio_template(df_uzio, template_path="templates/Uzio_Census_Template.xlsm"):

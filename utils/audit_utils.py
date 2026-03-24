@@ -61,20 +61,26 @@ def read_uzio_raw_file(uploaded_file):
         # Read Excel - header=3 means 4th row is header
         df = pd.read_excel(uploaded_file, sheet_name='Employee Details', header=3)
         
-        # Strip whitespace and replace newlines/multiple spaces with single space
-        df.columns = df.columns.astype(str).str.replace(r'\s+', ' ', regex=True).str.strip()
+        # Strip whitespace and normalize columns for matching
+        df.columns = [str(c).strip() for c in df.columns]
         
-        # Rename columns based on mapping
-        # Only rename columns that exist in the mapping
-        rename_dict = {k: v for k, v in UZIO_RAW_MAPPING.items() if k in df.columns}
-        df = df.rename(columns=rename_dict)
+        # Use robust normalization for mapping
+        norm_mapping = {norm_colname(k).casefold(): v for k, v in UZIO_RAW_MAPPING.items()}
         
+        new_cols = []
+        for col in df.columns:
+            nc = norm_colname(col).casefold()
+            if nc in norm_mapping:
+                new_cols.append(norm_mapping[nc])
+            else:
+                new_cols.append(col)
+        df.columns = new_cols
+            
         # Ensure 'Employee ID' is string (remove decimals if any)
         if 'Employee ID' in df.columns:
-            df['Employee ID'] = df['Employee ID'].astype(str).str.replace(r'\.0$', '', regex=True)
+            df['Employee ID'] = df['Employee ID'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
             
         print("Uzio Raw File Read Successfully.")
-        print(f"Columns Found: {list(df.columns)}")
         return df
 
     except Exception as e:
@@ -316,7 +322,13 @@ def validate_source_data(df_source, resolved_field_map):
     intern_corrections = []
     email_fallbacks = []
     salaried_drivers = []
-    anomalies = [] # New: For Hourly Exempt / Salaried Non-Exempt flags
+    anomalies = []
+    inactive_statuses = []
+    position_blanks = []
+    dol_status_blanks = []
+
+    # Get column names 
+    # Hourly Exempt / Salaried Non-Exempt flags
     
     # Resolve column references
     emp_id_col = resolved_field_map.get('Employee ID')
@@ -395,11 +407,24 @@ def validate_source_data(df_source, resolved_field_map):
             else:
                 pay_val = str(pay_val).strip().lower()
         
-        # 4. Blank Job Title
+        # 4. Blank Job Title -> Track in position_blanks and position it as a fixable/hard error
         if job_title_col and job_title_col in df_source.columns:
             val = row.get(job_title_col)
             if pd.isna(val) or str(val).strip() == "":
-                missing.append("Job Title")
+                missing.append("Job Title (blank)")
+                # Suggest Department Description as fix
+                dept_desc_col = None
+                for cand in ['department_desc', 'department_dec', 'department', 'department_description']:
+                    cand_col = next((c for c in df_source.columns if str(c).lower().strip() == cand), None)
+                    if cand_col:
+                        dept_desc_col = cand_col
+                        break
+                dept_val = str(row.get(dept_desc_col, "")).strip() if dept_desc_col else ""
+                position_blanks.append({
+                    'Employee ID': emp_ref,
+                    'Name': get_emp_name(row),
+                    'Suggested Fix': dept_val if dept_val else "Not available (Department missing)"
+                })
                 
         # 4b. Blank Work Location
         if location_col and location_col in df_source.columns:
@@ -557,6 +582,56 @@ def validate_source_data(df_source, resolved_field_map):
                     'Original Employment Type': str(type_val).strip(),
                     'Corrected Employment Type': 'Part Time'
                 })
+                
+        # 10. Inactive Status tracking
+        if status_col and status_col in df_source.columns:
+            emp_status_val = str(row.get(status_col)).strip().lower()
+            if emp_status_val == "inactive":
+                inactive_statuses.append({
+                    'Employee ID': emp_ref,
+                    'Name': get_emp_name(row),
+                    'Original Status': str(row.get(status_col)).strip(),
+                    'Has Termination Date': 'Yes' if (term_date_col and term_date_col in df_source.columns and pd.notna(row.get(term_date_col)) and str(row.get(term_date_col)).strip() != "") else 'No'
+                })
+                
+        # 11. Blank Position/Job Title tracking
+        if job_title_col and job_title_col in df_source.columns:
+            jt_val = row.get(job_title_col)
+            if pd.isna(jt_val) or str(jt_val).strip() == "":
+                # Try to find a department description column
+                dept_desc_col = None
+                for cand in ['department_desc', 'department_dec', 'department', 'department_description']:
+                    cand_col = next((c for c in df_source.columns if str(c).lower().strip() == cand), None)
+                    if cand_col:
+                        dept_desc_col = cand_col
+                        break
+                        
+                dept_val = str(row.get(dept_desc_col, "")).strip() if dept_desc_col else ""
+                if dept_val:
+                    position_blanks.append({
+                        'Employee ID': emp_ref,
+                        'Name': get_emp_name(row),
+                        'Suggested Fix': dept_val
+                    })
+
+        # 12. DOL_Status tracking (Paycom primarily, but safe to check if mapped)
+        dol_col = None
+        for cand in ['dol_status', 'dol status']:
+            cand_col = next((c for c in df_source.columns if str(c).lower().strip() == cand), None)
+            if cand_col:
+                dol_col = cand_col
+                break
+                
+        if dol_col:
+            dol_val = row.get(dol_col)
+            if pd.isna(dol_val) or str(dol_val).strip() == "":
+                emp_status_str = str(row.get(status_col)).strip().lower() if status_col and status_col in df_source.columns else ""
+                if "term" not in emp_status_str and emp_status_str != "inactive":
+                    dol_status_blanks.append({
+                        'Employee ID': emp_ref,
+                        'Name': get_emp_name(row),
+                        'Status': 'Active (DOL_Status blank)'
+                    })
     
     return {
         'hard_errors': pd.DataFrame(hard_errors),
@@ -566,7 +641,10 @@ def validate_source_data(df_source, resolved_field_map):
         'intern_corrections': pd.DataFrame(intern_corrections),
         'email_fallbacks': pd.DataFrame(email_fallbacks),
         'salaried_drivers': pd.DataFrame(salaried_drivers).assign(Name=lambda d: d['Employee ID'].map(lambda x: next((e['Name'] for e in hard_errors if e['Employee ID'] == x), "")) if not d.empty else ""),
-        'anomalies': pd.DataFrame(anomalies)
+        'anomalies': pd.DataFrame(anomalies),
+        'inactive_statuses': pd.DataFrame(inactive_statuses),
+        'position_blanks': pd.DataFrame(position_blanks),
+        'dol_status_blanks': pd.DataFrame(dol_status_blanks)
     }
 
 def generate_uzio_template(df_source, vendor_field_map, fix_options=None):
@@ -627,20 +705,30 @@ def generate_uzio_template(df_source, vendor_field_map, fix_options=None):
                     return ""
                 series = series.apply(format_gender)
             elif std_name == 'Employment Status':
-                def format_status(x):
+                def format_status(row):
+                    x = row[vendor_col]
                     if pd.isna(x): return ""
                     s = str(x).strip().lower()
                     if not s: return ""
                     
                     if fix_options and fix_options.get('fix_status', False):
                         if 'not hired' in s: return 'EXCLUDE'
-                        if 'inactive' in s: return 'TERMINATED'
                         if 'leave' in s: return 'ACTIVE'
                         if 'term' in s: return 'TERMINATED'
                         if 'active' in s: return 'ACTIVE'
                     
+                    if fix_options and fix_options.get('fix_inactive', False):
+                        if 'inactive' in s:
+                            # Only Terminate if Termination Date exists
+                            term_col = vendor_field_map.get('Termination Date')
+                            if term_col and pd.notna(row.get(term_col)) and str(row.get(term_col)).strip() != "":
+                                return 'TERMINATED'
+                            return 'ACTIVE' # Default inactive to active if no term date
+                    elif 'inactive' in s:
+                        return 'INACTIVE' # Preserve original if not fixed
+                    
                     return str(x).strip().upper()
-                series = series.apply(format_status)
+                series = df_source.apply(format_status, axis=1)
             elif std_name in ['Zip', 'Mailing Zip']:
                 def format_zip(z):
                     if pd.isna(z) or str(z).strip() == "": return ""
@@ -703,6 +791,45 @@ def generate_uzio_template(df_source, vendor_field_map, fix_options=None):
             # Fill missing Work Emails with Personal Email
             missing_work_mask = df_uzio['Official Email*'].isna() | (df_uzio['Official Email*'].astype(str).str.strip() == "")
             df_uzio.loc[missing_work_mask, 'Official Email*'] = df_uzio.loc[missing_work_mask, 'Personal Email']
+
+    # Apply Position Auto-Fill (Optional - primarily Paycom)
+    if fix_options and fix_options.get('fix_position', False):
+        if 'Job Title' in df_uzio.columns:
+            # We need to find the department description column in the source
+            dept_desc_col = None
+            for cand in ['department_desc', 'department_dec', 'department', 'department_description']:
+                cand_col = next((c for c in df_source.columns if str(c).lower().strip() == cand), None)
+                if cand_col:
+                    dept_desc_col = cand_col
+                    break
+                    
+            if dept_desc_col:
+                missing_job_mask = df_uzio['Job Title'].isna() | (df_uzio['Job Title'].astype(str).str.strip() == "")
+                df_uzio.loc[missing_job_mask, 'Job Title'] = df_source.loc[missing_job_mask, dept_desc_col]
+
+    # Apply DOL_Status Auto-Fill (Optional - primarily Paycom)
+    if fix_options and fix_options.get('fix_dol_status', False):
+        dol_col = None
+        for cand in ['dol_status', 'dol status']:
+            cand_col = next((c in df_source.columns and c for c in [cand, cand.replace('_',' ')] if c in df_source.columns), None)
+            # Actually, simpler:
+            for c in df_source.columns:
+                if str(c).lower().strip().replace('_',' ') == 'dol status':
+                    dol_col = c
+                    break
+            if dol_col: break
+
+        if dol_col and 'Employment Type*' in df_uzio.columns:
+            # If DOL_Status maps to Employment Type, check if we need to fill it
+            status_col = vendor_field_map.get('Employment Status')
+            status_series = df_source[status_col].astype(str).str.lower().str.strip() if status_col and status_col in df_source.columns else pd.Series([""]*len(df_source))
+            
+            # Mask for active employees with blank DOL_Status
+            is_active_mask = status_series.isin(['active', 'permanent', 'benefit eligible'])
+            blank_dol_mask = df_source[dol_col].isna() | (df_source[dol_col].astype(str).str.strip() == "")
+            
+            # Apply the fix: set Employment Type to 'Full Time'
+            df_uzio.loc[is_active_mask & blank_dol_mask, 'Employment Type*'] = "Full Time"
 
     # --- License Rules (Optional) ---
     if fix_options and fix_options.get('fix_license', False):

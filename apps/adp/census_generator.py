@@ -178,6 +178,9 @@ def render_ui():
         email_fallbacks = validation['email_fallbacks']
         salaried_drivers = validation.get('salaried_drivers', pd.DataFrame())
         anomalies = validation.get('anomalies', pd.DataFrame())
+        inactive_statuses = validation.get('inactive_statuses', pd.DataFrame())
+        position_blanks = validation.get('position_blanks', pd.DataFrame())
+        dol_status_blanks = validation.get('dol_status_blanks', pd.DataFrame())
         
         # Show soft warnings first (non-blocking)
         has_soft_warnings = not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty
@@ -226,6 +229,12 @@ def render_ui():
             with pd.ExcelWriter(err_xlsx, engine='openpyxl') as writer:
                 if not hard_errors.empty:
                     hard_errors.to_excel(writer, sheet_name="Critical Errors", index=False)
+                if not inactive_statuses.empty:
+                    inactive_statuses.to_excel(writer, sheet_name="Inactive Statuses", index=False)
+                if not position_blanks.empty:
+                    position_blanks.to_excel(writer, sheet_name="Blank Positions", index=False)
+                if not dol_status_blanks.empty:
+                    dol_status_blanks.to_excel(writer, sheet_name="Blank DOL_Status", index=False)
                 if not anomalies.empty:
                     anomalies.to_excel(writer, sheet_name="FLSA Anomalies", index=False)
                 if not salaried_drivers.empty:
@@ -500,13 +509,16 @@ def render_ui():
             # Note: fix_position is Paycom-only as per request
             fix_status = st.checkbox("Auto-Map Employment Status (e.g. Inactive -> Terminated)", value=False, key="adp_fix_status")
             fix_type = st.checkbox("Auto-Map Worker Category (e.g. Intern -> Part Time)", value=False, key="adp_fix_type")
+            fix_dol_status = st.checkbox("Auto-Fill blank DOL_Status to 'Full-Time' for Active Employees", value=False, key="adp_fix_dol_status")
 
         fix_options = {
             'fix_flsa': fix_flsa,
             'fix_emails': fix_emails,
             'fix_license': fix_license,
             'fix_status': fix_status,
-            'fix_type': fix_type
+            'fix_inactive': fix_status, # Coupling inactive fix to general status fix for simplicity in UI, as per user approval
+            'fix_type': fix_type,
+            'fix_dol_status': fix_dol_status
         }
 
         # --- STEP 4: Generate Template (only on button click) ---
@@ -534,8 +546,38 @@ def render_ui():
                         loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
 
                     # 2. Logic Branch: Full vs Selective
+                    
+                    # Pre-process DOL_Status if requested (affects Employment Type)
+                    if fix_dol_status:
+                        # Find DOL_Status column
+                        col_dol = None
+                        for cand in ['dol_status', 'dol status']:
+                            cand_col = next((c for c in df_adp.columns if str(c).lower().strip() == cand), None)
+                            if cand_col:
+                                col_dol = cand_col
+                                break
+                        
+                        # Find Employment Status column
+                        col_emp_status = None
+                        for cand in ['employee_status', 'employee status', 'employment status', 'status', 'ee status']:
+                            cand_col = next((c for c in df_adp.columns if str(c).lower().strip() == cand), None)
+                            if cand_col:
+                                col_emp_status = cand_col
+                                break
+                        
+                        # Apply transformation
+                        if col_dol and col_emp_status:
+                            type_col = resolved_field_map.get('Employment Type')
+                            if type_col and type_col in df_adp.columns:
+                                # Find active employees with blank DOL_Status
+                                active_mask = ~df_adp[col_emp_status].astype(str).str.lower().str.strip().str.contains('term') & (df_adp[col_emp_status].astype(str).str.lower().str.strip() != 'inactive')
+                                blank_dol_mask = df_adp[col_dol].isna() | (df_adp[col_dol].astype(str).str.strip() == "")
+                                # Set their source Employment Type column to Full-Time so it flows into Uzio
+                                df_adp.loc[active_mask & blank_dol_mask, type_col] = 'Full-Time'
+
                     if is_selective:
                         from utils.audit_utils import read_uzio_template_df, selective_update_uzio
+
                         
                         # Read template
                         df_template = read_uzio_template_df(uzio_template_file)

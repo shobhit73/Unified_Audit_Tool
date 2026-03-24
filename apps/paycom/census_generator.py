@@ -247,20 +247,7 @@ def render_ui():
                 elif str(val_emp).strip().lower() == "temporary":
                     custom_missing.append("Employee Status is 'Temporary' (Use Auto-Fix to set to 'Seasonal')")
 
-            # 3. Position and Department Desc check
-            if col_pos:
-                val_pos = row.get(col_pos)
-                if pd.isna(val_pos) or str(val_pos).strip() == "":
-                    # Logic for position fix: Use Department_Desc if available
-                    if col_dep and pd.notna(row.get(col_dep)) and str(row.get(col_dep)).strip():
-                        paycom_pos_fixes.append({
-                            'Employee ID': emp_ref,
-                            'Original Position': '(blank)',
-                            'Suggested Fix': str(row.get(col_dep)).strip()
-                        })
-                        # Don't add to hard errors if we have a suggested fix (it's a soft warning now)
-                    else:
-                        custom_missing.append("Position is blank")
+            # 3. Position and Department Desc check (Original manual logic replaced by audit_utils)
                         
             # 4. Emergency Contact Spanish Characters Check
             # Look for emergency contact name columns
@@ -300,6 +287,9 @@ def render_ui():
         email_fallbacks = validation['email_fallbacks']
         salaried_drivers = validation.get('salaried_drivers', pd.DataFrame())
         anomalies = validation.get('anomalies', pd.DataFrame())
+        inactive_statuses = validation.get('inactive_statuses', pd.DataFrame())
+        position_blanks = validation.get('position_blanks', pd.DataFrame())
+        dol_status_blanks = validation.get('dol_status_blanks', pd.DataFrame())
 
         # Merge custom Paycom hard errors with generic hard errors
         hard_errors_df = validation['hard_errors']
@@ -314,12 +304,12 @@ def render_ui():
             hard_errors = hard_errors_df
 
         # Show soft warnings first (non-blocking)
-        has_soft_warnings = paycom_pos_fixes or not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty or not anomalies.empty
+        has_soft_warnings = not position_blanks.empty or not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty or not anomalies.empty
         if has_soft_warnings:
             with st.expander("System Minor Warnings & Mapping Suggestions", expanded=False):
                 st.info("💡 **Note:** The following suggestions can be automatically applied by checking the corresponding boxes in **Step 3** before generating your file. Details are available in the Error Report download below.")
-                if paycom_pos_fixes:
-                    st.markdown(f"- ℹ️ **Position Auto-Fill:** {len(paycom_pos_fixes)} employee(s) have a blank Position. 'Department Description' can be used as a fallback.")
+                if not position_blanks.empty:
+                    st.markdown(f"- ℹ️ **Position Auto-Fill:** {len(position_blanks)} employee(s) have a blank Position. 'Department Description' can be used as a fallback.")
                 if not flsa_corrections.empty:
                     st.markdown(f"- ℹ️ **FLSA Mismatches:** {len(flsa_corrections)} employee(s) have mismatched FLSA classifications vs Pay Type. These can be auto-corrected.")
                 if not flsa_blanks.empty:
@@ -362,12 +352,16 @@ def render_ui():
             with pd.ExcelWriter(err_xlsx, engine='openpyxl') as writer:
                 if not hard_errors.empty:
                     hard_errors.to_excel(writer, sheet_name="Critical Errors", index=False)
+                if not inactive_statuses.empty:
+                    inactive_statuses.to_excel(writer, sheet_name="Inactive Statuses", index=False)
+                if not position_blanks.empty:
+                    position_blanks.to_excel(writer, sheet_name="Blank Positions", index=False)
+                if not dol_status_blanks.empty:
+                    dol_status_blanks.to_excel(writer, sheet_name="Blank DOL_Status", index=False)
                 if not anomalies.empty:
                     anomalies.to_excel(writer, sheet_name="FLSA Anomalies", index=False)
                 if not salaried_drivers.empty:
                     salaried_drivers.to_excel(writer, sheet_name="Salaried Driver Ex", index=False)
-                if paycom_pos_fixes:
-                    pd.DataFrame(paycom_pos_fixes).to_excel(writer, sheet_name="Position Fallbacks", index=False)
                 if not flsa_corrections.empty:
                     flsa_corrections.to_excel(writer, sheet_name="FLSA Mismatches", index=False)
                 if not flsa_blanks.empty:
@@ -599,14 +593,17 @@ def render_ui():
             fix_status = st.checkbox("Auto-Map Employment Status (e.g. Inactive -> Terminated)", value=False, key="pc_fix_status")
             fix_type = st.checkbox("Auto-Map Worker Category (e.g. Intern -> Part Time)", value=False, key="pc_fix_type")
             fix_position = st.checkbox("Auto-Fill blank Position with Department Description", value=False, key="pc_fix_position")
+            fix_dol_status = st.checkbox("Auto-Fill blank DOL_Status to 'Full-Time' for Active Employees", value=False, key="pc_fix_dol_status")
 
         fix_options = {
             'fix_flsa': fix_flsa,
             'fix_emails': fix_emails,
             'fix_license': fix_license,
             'fix_status': fix_status,
+            'fix_inactive': fix_status, # Coupling inactive fix to general status fix for simplicity in UI, as per user approval
             'fix_type': fix_type,
-            'fix_position': fix_position
+            'fix_position': fix_position,
+            'fix_dol_status': fix_dol_status
         }
 
         st.markdown("---")
@@ -634,6 +631,17 @@ def render_ui():
                         loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
 
                     # 2. Logic Branch: Full vs Selective
+                    
+                    # Pre-process DOL_Status if requested (affects Employment Type)
+                    if fix_dol_status and col_dol and col_emp_status:
+                        type_col = resolved_field_map.get('Employment Type')
+                        if type_col and type_col in df_paycom.columns:
+                            # Find active employees with blank DOL_Status
+                            active_mask = ~df_paycom[col_emp_status].astype(str).str.lower().str.strip().str.contains('term') & (df_paycom[col_emp_status].astype(str).str.lower().str.strip() != 'inactive')
+                            blank_dol_mask = df_paycom[col_dol].isna() | (df_paycom[col_dol].astype(str).str.strip() == "")
+                            # Set their source Employment Type column to Full-Time so it flows into Uzio
+                            df_paycom.loc[active_mask & blank_dol_mask, type_col] = 'Full-Time'
+
                     if is_selective:
                         from utils.audit_utils import read_uzio_template_df, selective_update_uzio
                         

@@ -26,7 +26,9 @@ ADP_FIELD_MAP = {
     'First Name': 'Legal First Name',
     'Last Name': 'Legal Last Name',
     'Middle Initial': 'Legal Middle Name',
+    'Suffix': 'Generation Suffix Code',
     'Employment Status': 'Position Status',
+    'Employment Type': 'Worker Category Description',
     'Hire Date': 'Hire/Rehire Date',
     'Original Hire Date': 'Hire Date',
     'Termination Date': 'Termination Date',
@@ -36,13 +38,12 @@ ADP_FIELD_MAP = {
     'Hourly Pay Rate': 'Regular Pay Rate Amount',
     'Working Hours': 'Standard Hours',
     'Job Title': 'Job Title Description',
-    'Department': 'Department Description',
+    'Department': 'Home Department Code',
     'Work Email': 'Work Contact: Work Email',
     'Personal Email': 'Personal Contact: Personal Email',
-    'Phone Number': 'Personal Contact: Personal Mobile',
     'SSN': 'Tax ID (SSN)',
     'DOB': 'Birth Date',
-    'Gender': 'Sex',
+    'Gender': 'Gender / Sex (Self-ID)',
     'Tobacco User': 'Tobacco User',
     'FLSA Classification': 'FLSA Description',
     'Address Line 1': 'Primary Address: Address Line 1',
@@ -55,14 +56,12 @@ ADP_FIELD_MAP = {
     'Mailing City': 'Legal / Preferred Address: City',
     'Mailing Zip': 'Legal / Preferred Address: Zip / Postal Code',
     'Mailing State': 'Legal / Preferred Address: State / Territory Code',
-    # Additional
     'Reports To ID': 'Reports To Associate ID',
     'Protected Veteran Status': 'Protected Veteran Status',
     'EEO Job Category': 'EEOC Job Classification',
     'Ethnicity': 'Race Description',
     'SOC Code': 'SOC Code',
-    'Work Location': 'Location Description',
-    'Employment Type': 'Worker Category Description'
+    'Work Location': 'Location Description'
 }
 
 # ---------- Helpers ----------

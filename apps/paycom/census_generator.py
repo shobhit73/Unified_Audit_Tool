@@ -251,7 +251,7 @@ def render_ui():
                 if pd.isna(val_dol) or str(val_dol).strip() == "":
                     emp_stat_str = str(row.get(col_emp_status)).strip().lower() if col_emp_status else ""
                     if "term" in emp_stat_str:
-                        custom_missing.append("DOL_Status is blank for Terminated employee (Use Auto-Fix to delete row)")
+                        custom_missing.append("DOL_Status is blank for Terminated employee (Use Auto-Fix to set to 'Full-Time')")
                     else:
                         custom_missing.append("DOL_Status is blank for Active employee (Use Auto-Fix to set to 'Full-Time')")
 
@@ -469,9 +469,8 @@ def render_ui():
 
         if fix_options.get('fix_dol_status') and col_dol:
             # Active or Inactive (not yet Terminated) should be fixed
-            mask_terminated = df_download[col_emp_status].astype(str).str.lower().str.contains('term', na=False) if col_emp_status else pd.Series([False]*len(df_download))
             mask_blank_dol = df_download[col_dol].isna() | (df_download[col_dol].astype(str).str.strip() == "")
-            df_download.loc[~mask_terminated & mask_blank_dol, col_dol] = "Full-Time"
+            df_download.loc[mask_blank_dol, col_dol] = "Full-Time"
 
         if fix_options.get('fix_status') and col_emp_status:
             # Inactive -> Terminated (Paycom specific logic)

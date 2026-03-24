@@ -391,9 +391,8 @@ def render_ui():
             col_dol = next((c for c in df_download.columns if str(c).lower().strip() in ['dol_status', 'dol status']), None)
             col_emp_status = next((c for c in df_download.columns if str(c).lower().strip() in ['employee_status', 'employee status', 'employment status', 'status', 'ee status']), None)
             if col_dol and col_emp_status:
-                mask_active = ~df_download[col_emp_status].astype(str).str.lower().str.contains('term', na=False)
                 mask_blank = df_download[col_dol].isna() | (df_download[col_dol].astype(str).str.strip() == "")
-                df_download.loc[mask_active & mask_blank, col_dol] = "Full-Time"
+                df_download.loc[mask_blank, col_dol] = "Full-Time"
 
         # Employment Status Fix (Inactive -> Terminated)
         if fix_options.get('fix_status'):

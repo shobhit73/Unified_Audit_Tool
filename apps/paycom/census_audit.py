@@ -27,9 +27,11 @@ PAYCOM_FIELD_MAP = {
     'First Name': 'Legal_Firstname',
     'Last Name': 'Legal_Lastname',
     'Middle Initial': 'Legal_Middle_Name',
+    'Suffix': 'Legal_Employee_Suffix',
     'Employment Status': 'Employee_Status',
+    'Employment Type': 'DOL_Status',
     'Hire Date': 'Most_Recent_Hire_Date',
-    'Original Hire Date': 'Hire Date',
+    'Original Hire Date': 'Hire_Date',
     'Termination Date': 'Termination_Date',
     'Termination Reason': 'Termination_Reason',
     'Pay Type': 'Pay_Type',
@@ -59,6 +61,10 @@ PAYCOM_FIELD_MAP = {
     'License Number': 'DriversLicense',
     'License Expiration Date': 'DLExpirationDate',
     'Work Location': 'Work_Location',
+    'Reports To ID': 'Supervisor_Primary_Code',
+    'Ethnicity': 'EEO1_Ethnicity',
+    'SOC Code': 'SOC_Code',
+    'EEO Job Category': 'EEO1_Category'
 }
 
 # ---------- Helpers ----------

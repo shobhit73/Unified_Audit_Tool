@@ -144,6 +144,31 @@ def render_ui():
         st.info("💡 Please select an action above to proceed.")
         return
 
+    # --- SHARED AUTO-CORRECTION OPTIONS (Manual Consent) ---
+    st.markdown("### 🛠️ **Auto-Correction Options (Manual Consent Required)**")
+    st.markdown("Select which automated fixes you would like to apply. These will affect both the Uzio generation and the 'Download Corrected Source' option.")
+    
+    col_fix1, col_fix2 = st.columns(2)
+    with col_fix1:
+        fix_flsa = st.checkbox("Enforce FLSA/Pay Type alignment (e.g. Salaried = Exempt)", value=False, key="adp_fix_flsa_global")
+        fix_emails = st.checkbox("Use Personal Email as fallback for missing Work Email", value=False, key="adp_fix_emails_global")
+        fix_license = st.checkbox("Strict License Validation (Clear dates if number missing)", value=False, key="adp_fix_license_global")
+    with col_fix2:
+        fix_status = st.checkbox("Auto-Map Employment Status (e.g. Inactive -> Terminated)", value=False, key="adp_fix_status_global")
+        fix_type = st.checkbox("Auto-Map Worker Category (e.g. Intern -> Part Time)", value=False, key="adp_fix_type_global")
+        fix_dol_status = st.checkbox("Auto-Fill blank DOL_Status to 'Full-Time' for Active Employees", value=False, key="adp_fix_dol_status_global")
+
+    fix_options = {
+        'fix_flsa': fix_flsa,
+        'fix_emails': fix_emails,
+        'fix_license': fix_license,
+        'fix_status': fix_status,
+        'fix_inactive': fix_status,
+        'fix_type': fix_type,
+        'fix_dol_status': fix_dol_status
+    }
+    st.markdown("---")
+
 
     if "Sanity Check" in action:
         
@@ -186,7 +211,7 @@ def render_ui():
         has_soft_warnings = not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty
         if has_soft_warnings:
             with st.expander("System Minor Warnings & Mapping Suggestions", expanded=False):
-                st.info("💡 **Note:** The following suggestions can be automatically applied by checking the corresponding boxes in **Step 3** before generating your file. Details are available in the Error Report download below.")
+                st.info("💡 **Note:** The following suggestions can be automatically applied by checking the corresponding boxes above in the **Auto-Correction Options** section. Details are available in the Error Report download below.")
                 if not flsa_corrections.empty:
                     st.markdown(f"- ℹ️ **FLSA Mismatches:** {len(flsa_corrections)} employee(s) have mismatched FLSA classifications vs Pay Type. These can be auto-corrected.")
                 if not flsa_blanks.empty:
@@ -351,6 +376,34 @@ def render_ui():
         st.markdown("You can download the partially cleaned source file containing all the fixes applied above.")
         
         df_download = df_adp.copy()
+
+        # APPLY GLOBAL FIXES TO DOWNLOADED SOURCE
+        # Email Fallback
+        if fix_options.get('fix_emails'):
+            c_work = next((col for col in df_download.columns if 'work_email' in str(col).lower()), None)
+            c_pers = next((col for col in df_download.columns if 'personal_email' in str(col).lower()), None)
+            if c_work and c_pers:
+                mask = df_download[c_work].isna() | (df_download[c_work].astype(str).str.strip() == "")
+                df_download.loc[mask, c_work] = df_download.loc[mask, c_pers]
+
+        # DOL_Status Fix
+        if fix_options.get('fix_dol_status'):
+            col_dol = next((c for c in df_download.columns if str(c).lower().strip() in ['dol_status', 'dol status']), None)
+            col_emp_status = next((c for c in df_download.columns if str(c).lower().strip() in ['employee_status', 'employee status', 'employment status', 'status', 'ee status']), None)
+            if col_dol and col_emp_status:
+                mask_active = ~df_download[col_emp_status].astype(str).str.lower().str.contains('term', na=False) & (df_download[col_emp_status].astype(str).str.lower().str.strip() != 'inactive')
+                mask_blank = df_download[col_dol].isna() | (df_download[col_dol].astype(str).str.strip() == "")
+                df_download.loc[mask_active & mask_blank, col_dol] = "Full-Time"
+
+        # Employment Status Fix (Inactive -> Terminated)
+        if fix_options.get('fix_status'):
+            col_emp_status = next((c for c in df_download.columns if str(c).lower().strip() in ['employee_status', 'employee status', 'employment status', 'status', 'ee status']), None)
+            col_term_date = next((c for c in df_download.columns if 'termination_date' in str(c).lower()), None)
+            if col_emp_status and col_term_date:
+                mask_inactive = df_download[col_emp_status].astype(str).str.lower().str.strip() == "inactive"
+                mask_term_present = df_download[col_term_date].notna() & (df_download[col_term_date].astype(str).str.strip() != "")
+                df_download.loc[mask_inactive & mask_term_present, col_emp_status] = "Terminated"
+
         
         # Sort by management hierarchy if requested
         if sort_by_manager and col_sup_code and col_sup_code in df_download.columns:
@@ -496,30 +549,7 @@ def render_ui():
             st.warning("Please fill out all mappings in the tables above before generating the template.")
             return
 
-        st.markdown("---")
-        st.markdown("### Step 3: Auto-Correction Options (Manual Consent Required)")
-        st.markdown("Select which automated fixes you would like to apply during generation. No changes will be made unless selected.")
-        
-        col_fix1, col_fix2 = st.columns(2)
-        with col_fix1:
-            fix_flsa = st.checkbox("Enforce FLSA/Pay Type alignment (e.g. Salaried = Exempt)", value=False, key="adp_fix_flsa")
-            fix_emails = st.checkbox("Use Personal Email as fallback for missing Work Email", value=False, key="adp_fix_emails")
-            fix_license = st.checkbox("Strict License Validation (Clear dates if number missing)", value=False, key="adp_fix_license")
-        with col_fix2:
-            # Note: fix_position is Paycom-only as per request
-            fix_status = st.checkbox("Auto-Map Employment Status (e.g. Inactive -> Terminated)", value=False, key="adp_fix_status")
-            fix_type = st.checkbox("Auto-Map Worker Category (e.g. Intern -> Part Time)", value=False, key="adp_fix_type")
-            fix_dol_status = st.checkbox("Auto-Fill blank DOL_Status to 'Full-Time' for Active Employees", value=False, key="adp_fix_dol_status")
-
-        fix_options = {
-            'fix_flsa': fix_flsa,
-            'fix_emails': fix_emails,
-            'fix_license': fix_license,
-            'fix_status': fix_status,
-            'fix_inactive': fix_status, # Coupling inactive fix to general status fix for simplicity in UI, as per user approval
-            'fix_type': fix_type,
-            'fix_dol_status': fix_dol_status
-        }
+        # (Fix options now handled globally)
 
         # --- STEP 4: Generate Template (only on button click) ---
         st.markdown("---")

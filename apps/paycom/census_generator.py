@@ -221,10 +221,8 @@ def render_ui():
         # Identify exact columns (normalized)
         col_dol = next((c for c in df_paycom.columns if str(c).lower().strip().replace('_',' ') == 'dol status'), None)
         col_pos = next((c for c in df_paycom.columns if str(c).lower().strip() in ['position', 'job title']), None)
-        # Robust search for Department description or Code
+        # Robust search for Department description (STRICTLY NO CODES)
         col_dep = next((c for c in df_paycom.columns if str(c).lower().strip().replace(' ','_') == 'department_desc' or str(c).lower().strip() == 'department_description'), None)
-        if not col_dep:
-            col_dep = next((c for c in df_paycom.columns if str(c).lower().strip() == 'department'), None)
 
         # Find employee status column - check variations
         col_emp_status = next((c for c in df_paycom.columns if str(c).lower().strip() in ['employee_status', 'employee status', 'employment status', 'status', 'ee status']), None)
@@ -462,15 +460,9 @@ def render_ui():
                 if c_norm:
                     mask = df_download[c_norm].isna() | (df_download[c_norm].astype(str).str.strip() == "")
                     
-                    # Fill from col_dep (Description or Code)
-                    df_download.loc[mask, c_norm] = df_download.loc[mask, col_dep]
-                    
-                    # If still blank (e.g. col_dep was blank for that row), try just 'department' if col_dep wasn't already it
-                    if col_dep != 'department':
-                        col_dep_code = next((c for c in df_download.columns if str(c).lower().strip() == 'department'), None)
-                        if col_dep_code:
-                            mask_still_blank = df_download[c_norm].isna() | (df_download[c_norm].astype(str).str.strip() == "")
-                            df_download.loc[mask_still_blank, c_norm] = df_download.loc[mask_still_blank, col_dep_code]
+                    # Fill from col_dep (Description only)
+                    if col_dep:
+                        df_download.loc[mask, c_norm] = df_download.loc[mask, col_dep]
 
         if fix_options.get('fix_emails'):
             c_work = next((col for col in df_download.columns if 'work_email' in str(col).lower()), None)

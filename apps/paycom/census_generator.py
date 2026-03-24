@@ -221,7 +221,7 @@ def render_ui():
         # Identify exact columns (normalized)
         col_dol = next((c for c in df_paycom.columns if str(c).lower().strip().replace('_',' ') == 'dol status'), None)
         col_pos = next((c for c in df_paycom.columns if str(c).lower().strip() in ['position', 'job title']), None)
-        col_dep = next((c for c in df_paycom.columns if str(c).lower().strip() in ['department_desc', 'department_dec', 'department', 'department_description', 'labor_allocation_details', 'delivery_station_code_desc']), None)
+        col_dep = next((c for c in df_paycom.columns if str(c).lower().strip() == 'department_desc'), None)
 
         # Find employee status column - check variations
         col_emp_status = next((c for c in df_paycom.columns if str(c).lower().strip() in ['employee_status', 'employee status', 'employment status', 'status', 'ee status']), None)

@@ -585,13 +585,8 @@ def validate_source_data(df_source, resolved_field_map):
         if job_title_col and job_title_col in df_source.columns:
             jt_val = row.get(job_title_col)
             if pd.isna(jt_val) or str(jt_val).strip() == "":
-                # Try to find a department description column
-                dept_desc_col = None
-                for cand in ['department_desc', 'department_dec', 'department', 'department_description']:
-                    cand_col = next((c for c in df_source.columns if str(c).lower().strip() == cand), None)
-                    if cand_col:
-                        dept_desc_col = cand_col
-                        break
+                # Try to find exactly department_desc column for position fallback
+                dept_desc_col = next((c for c in df_source.columns if str(c).lower().strip() == 'department_desc'), None)
                         
                 dept_val = str(row.get(dept_desc_col, "")).strip() if dept_desc_col else ""
                 position_blanks.append({
@@ -799,13 +794,8 @@ def generate_uzio_template(df_source, vendor_field_map, fix_options=None):
     # Apply Position Auto-Fill (Optional - primarily Paycom)
     if fix_options and fix_options.get('fix_position', False):
         if 'Job Title' in df_uzio.columns:
-            # We need to find the department description column in the source
-            dept_desc_col = None
-            for cand in ['department_desc', 'department_dec', 'department', 'department_description', 'home department code']:
-                cand_col = next((c for c in df_source.columns if str(c).lower().strip() == cand), None)
-                if cand_col:
-                    dept_desc_col = cand_col
-                    break
+            # We need to find exactly the department_desc column in the source
+            dept_desc_col = next((c for c in df_source.columns if str(c).lower().strip() == 'department_desc'), None)
                     
             if dept_desc_col:
                 missing_job_mask = df_uzio['Job Title'].isna() | (df_uzio['Job Title'].astype(str).str.strip() == "")

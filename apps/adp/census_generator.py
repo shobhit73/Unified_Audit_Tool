@@ -183,17 +183,17 @@ def render_ui():
         has_soft_warnings = not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty
         if has_soft_warnings:
             with st.expander("System Minor Warnings & Mapping Suggestions", expanded=False):
-                st.info("💡 **Note:** The following suggestions can be automatically applied by checking the corresponding boxes in **Step 3** before generating your file.")
+                st.info("💡 **Note:** The following suggestions can be automatically applied by checking the corresponding boxes in **Step 3** before generating your file. Details are available in the Error Report download below.")
                 if not flsa_corrections.empty:
-                    st.markdown(f"- ℹ️ **FLSA Auto-Corrections:** {len(flsa_corrections)} employee(s) had mismatched FLSA classifications. These have been auto-corrected.")
+                    st.markdown(f"- ℹ️ **FLSA Mismatches:** {len(flsa_corrections)} employee(s) have mismatched FLSA classifications vs Pay Type. These can be auto-corrected.")
                 if not flsa_blanks.empty:
                     st.markdown(f"- ⚠️ **Blank FLSA Classification:** {len(flsa_blanks)} employee(s) have a Pay Type set but FLSA Classification is blank.")
                 if not anomalies.empty:
                     st.markdown(f"- ⚠️ **FLSA Anomalies:** {len(anomalies)} employee(s) have Hourly Exempt or Salaried Non-Exempt mismatches.")
                 if not intern_corrections.empty:
-                    st.markdown(f"- ⚠️ **Intern → Part Time:** {len(intern_corrections)} employee(s) had 'Intern' as Worker Category. Changed to **Part Time**.")
+                    st.markdown(f"- ⚠️ **Intern → Part Time:** {len(intern_corrections)} employee(s) have 'Intern' as Worker Category. These can be changed to **Part Time**.")
                 if not email_fallbacks.empty:
-                    st.markdown(f"- ℹ️ **Email Fallback:** {len(email_fallbacks)} employee(s) had blank Work Email. Personal Email was used instead.")
+                    st.markdown(f"- ℹ️ **Email Fallback:** {len(email_fallbacks)} employee(s) have a blank Work Email. Personal Email can be used instead.")
         
         # Show hard errors (non-blocking — user can still proceed)
         if not hard_errors.empty:
@@ -218,24 +218,38 @@ def render_ui():
             # Full details in expander
             with st.expander(f"View All {len(hard_errors)} Error Details", expanded=False):
                 st.dataframe(hard_errors, hide_index=True, use_container_width=True)
-            
+        else:
+            st.success("✅ Source data passed all critical sanity checks (no blocking errors)!")
+
+        if not hard_errors.empty or has_soft_warnings:
             err_xlsx = io.BytesIO()
             with pd.ExcelWriter(err_xlsx, engine='openpyxl') as writer:
-                hard_errors.to_excel(writer, sheet_name="Critical Errors", index=False)
+                if not hard_errors.empty:
+                    hard_errors.to_excel(writer, sheet_name="Critical Errors", index=False)
                 if not anomalies.empty:
                     anomalies.to_excel(writer, sheet_name="FLSA Anomalies", index=False)
                 if not salaried_drivers.empty:
-                    salaried_drivers.to_excel(writer, sheet_name="Salaried Driver Exceptions", index=False)
+                    salaried_drivers.to_excel(writer, sheet_name="Salaried Driver Ex", index=False)
+                if not flsa_corrections.empty:
+                    flsa_corrections.to_excel(writer, sheet_name="FLSA Mismatches", index=False)
+                if not flsa_blanks.empty:
+                    flsa_blanks.to_excel(writer, sheet_name="Blank FLSA Classes", index=False)
+                if not intern_corrections.empty:
+                    intern_corrections.to_excel(writer, sheet_name="Intern Overrides", index=False)
+                if not email_fallbacks.empty:
+                    email_fallbacks.to_excel(writer, sheet_name="Email Fallbacks", index=False)
             err_xlsx.seek(0)
+            
+            st.markdown("---")
+            st.markdown("### 📥 Download Full Sanity Check Report")
+            st.markdown("Download this Excel file to see exactly which employees have critical errors or are flagged for auto-correction suggestions.")
             st.download_button(
-                label="Download Error Report (XLSX)",
+                label="Download Validation & Suggestion Report (XLSX)",
                 data=err_xlsx.getvalue(),
-                file_name=f"Source_Validation_Errors_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                file_name=f"Source_Validation_Report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="adp_hard_err_dl"
             )
-        else:
-            st.success("✅ Source data passed all sanity checks!")
             
 
 

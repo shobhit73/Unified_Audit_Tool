@@ -24,7 +24,7 @@ ADP_FIELD_MAP = {
     'Hourly Pay Rate': ['Regular Pay Rate Amount'],
     'Working Hours': ['Standard Hours'],
     'Job Title': ['Job Title Description'],
-    'Department': ['Home Department Code'],
+    'Department': ['Department Description'],
     'Work Email': ['Work Contact: Work Email'],
     'Personal Email': ['Personal Contact: Personal Email'],
     'SSN': ['Tax ID (SSN)'],

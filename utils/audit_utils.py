@@ -407,24 +407,11 @@ def validate_source_data(df_source, resolved_field_map):
             else:
                 pay_val = str(pay_val).strip().lower()
         
-        # 4. Blank Job Title -> Track in position_blanks and position it as a fixable/hard error
+        # 4. Blank Job Title -> Flag as hard error
         if job_title_col and job_title_col in df_source.columns:
             val = row.get(job_title_col)
             if pd.isna(val) or str(val).strip() == "":
                 missing.append("Job Title (blank)")
-                # Suggest Department Description as fix
-                dept_desc_col = None
-                for cand in ['department_desc', 'department_dec', 'department', 'department_description']:
-                    cand_col = next((c for c in df_source.columns if str(c).lower().strip() == cand), None)
-                    if cand_col:
-                        dept_desc_col = cand_col
-                        break
-                dept_val = str(row.get(dept_desc_col, "")).strip() if dept_desc_col else ""
-                position_blanks.append({
-                    'Employee ID': emp_ref,
-                    'Name': get_emp_name(row),
-                    'Suggested Fix': dept_val if dept_val else "Not available (Department missing)"
-                })
                 
         # 4b. Blank Work Location
         if location_col and location_col in df_source.columns:
@@ -607,12 +594,11 @@ def validate_source_data(df_source, resolved_field_map):
                         break
                         
                 dept_val = str(row.get(dept_desc_col, "")).strip() if dept_desc_col else ""
-                if dept_val:
-                    position_blanks.append({
-                        'Employee ID': emp_ref,
-                        'Name': get_emp_name(row),
-                        'Suggested Fix': dept_val
-                    })
+                position_blanks.append({
+                    'Employee ID': emp_ref,
+                    'Name': get_emp_name(row),
+                    'Suggested Fix': dept_val if dept_val else "Not available (Department missing)"
+                })
 
         # 12. DOL_Status tracking (Paycom primarily, but safe to check if mapped)
         dol_col = None

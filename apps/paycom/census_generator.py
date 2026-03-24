@@ -448,7 +448,7 @@ def render_ui():
                 
         # --- Download Corrected Source ---
         st.markdown("### 📥 Download Cleaned Source Data")
-        st.markdown("You can download the partially cleaned source file containing all the fixes applied above.")
+        st.markdown("You can download the partially cleaned source file containing all the fixes applied above. **We have also automatically added a new 'CRITICAL_WARNINGS' column at the very beginning of the sheet highlighting any unresolved issues so your implementor knows exactly what to fix!**")
         
         df_download = df_paycom.copy()
 
@@ -496,8 +496,22 @@ def render_ui():
                 # Sort: Managers first (most reportees at top), then keeping original relative order
                 df_download = df_download.sort_values(by='__mgr_sort', ascending=False, kind='stable').drop(columns=['__mgr_sort'])
 
-        restored_cols = [norm_to_orig.get(c, c) for c in df_download.columns]
-        df_download.columns = restored_cols
+        # Add a column for critical errors so the implementor knows what to fix
+        if not hard_errors.empty:
+            emp_id_col = resolved_field_map.get('Employee ID')
+            if emp_id_col and emp_id_col in df_download.columns:
+                # Create a map of Employee ID -> Issue
+                error_map = dict(zip(hard_errors['Employee ID'].astype(str), hard_errors['Issue']))
+                
+                # Append a new column highlighting the issue as the first column
+                df_download.insert(0, 'CRITICAL_WARNINGS', df_download[emp_id_col].astype(str).map(error_map).fillna(""))
+
+        restored_cols = [norm_to_orig.get(c, c) for c in df_download.columns if c in norm_to_orig]
+        # Keep our new column if it was added
+        if 'CRITICAL_WARNINGS' in df_download.columns:
+            df_download.columns = ['CRITICAL_WARNINGS'] + restored_cols
+        else:
+            df_download.columns = restored_cols
         
         dl_col1, dl_col2 = st.columns(2)
         with dl_col1:

@@ -66,6 +66,10 @@ graph TD
     C3 --> F1[utils/audit_utils.py]
     C3 --> F2[utils/preprocess_source_data.py]
     C3 --> F3[utils/withholding_core.py]
+
+    C4[Common Tools]
+    B --> C4
+    C4 --> G1[apps/common/employee_extractor.py]
 ```
 
 ---
@@ -129,6 +133,11 @@ flowchart TD
     I --> J["inject_into_uzio_template()\nWrite to .xlsm template\nPreserve all sheets & VBA"]
 
     J --> K["Excel Output Bundle:\n• Employee Details sheet\n• Fix Log sheet\n• Validation Warnings sheet"]
+
+    subgraph Common["🛠️ Universal Tools"]
+        L["Selective Employee Extractor\n(Bulk ID 'Carve Out')"]
+    end
+    L -- "Preserve Logic" --> B
 ```
 
 ### Audit Reconciliation Flow (Census Audit)
@@ -189,6 +198,12 @@ flowchart TD
 | **Emergency Audit** | `apps/paycom/emergency_audit.py` | Reviews emergency contact data from Paycom vs. Uzio. |
 | **Time Off Audit** | `apps/paycom/timeoff_audit.py` | Reconciles Paycom PTO/vacation data against Uzio. |
 
+### Common Tools
+
+| Tool | Module | Purpose |
+|---|---|---|
+| **Selective Employee Extractor** | `apps/common/employee_extractor.py` | Extract a specific subset of employees from ANY census while preserving all original formatting and leading zeros. |
+
 ---
 
 ## Census Generator Deep Dive
@@ -205,6 +220,7 @@ Output: Excel report with multiple validation sheets.
 
 | Check | Severity | Auto-Fix Available |
 |---|---|---|
+| **Duplicate Column Header** | 🔴 Critical Error | No — Must Delete Duplicates |
 | Blank SSN | 🔴 Hard Error | No |
 | Blank Employment Status | 🔴 Hard Error | No |
 | Blank Employment Type / DOL Status | 🟡 Warning | ✅ Yes — defaults to Full Time |

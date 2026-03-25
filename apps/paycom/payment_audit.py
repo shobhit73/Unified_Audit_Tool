@@ -27,13 +27,15 @@ def norm_str(x):
     return str(x).strip()
 
 def norm_digits(x):
-    """Keep only digits, remove spaces/dashes."""
+    """Keep only digits, remove spaces/dashes. Preserves leading zeros."""
     if x is None:
         return ""
     if isinstance(x, (float, int)):
         if pd.isna(x):
             return ""
+        # Handle float like 123.0 -> '123'
         return str(int(x))
+    # For strings, just remove non-digits. This preserves leading zeros like '00123'.
     return re.sub(r"\D", "", str(x))
 
 def norm_money(x):
@@ -178,8 +180,8 @@ def run_audit(uzio_file, paycom_file):
             uzio_emp_names[emp_id] = name_str
         
         acc = {
-            "Routing": norm_digits(row.get(col_map["Routing"])).lstrip("0"),
-            "Account": norm_digits(row.get(col_map["Account"])).lstrip("0"),
+            "Routing": norm_digits(row.get(col_map["Routing"])),
+            "Account": norm_digits(row.get(col_map["Account"])),
             "Type": norm_str(row.get(col_map["Type"])),
             "Percent": norm_money(row.get(col_map["Percent"])),
             "Amount": norm_money(row.get(col_map["Amount"])),

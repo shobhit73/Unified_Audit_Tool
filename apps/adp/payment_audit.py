@@ -44,13 +44,15 @@ def norm_str(x):
     return str(x).strip()
 
 def norm_digits(x):
-    """Keep only digits, remove spaces/dashes."""
+    """Keep only digits, remove spaces/dashes. Preserves leading zeros."""
     if x is None:
         return ""
     if isinstance(x, (float, int)):
         if pd.isna(x):
             return ""
+        # Handle float like 123.0 -> '123'
         return str(int(x))
+    # For strings, just remove non-digits. This preserves leading zeros like '00123'.
     return re.sub(r"\D", "", str(x))
 
 def norm_money(x):
@@ -121,7 +123,7 @@ def _compare_field(field, u_val, p_val, u_rec, p_rec):
 def run_audit(file_uzio, file_adp):
     # 1. Load Uzio Data
     # Uzio Export typically starts at Row 2 (Header=1)
-    df_uzio = pd.read_excel(file_uzio, header=1)
+    df_uzio = pd.read_excel(file_uzio, header=1, dtype=str)
     
     # Map Uzio Columns
     # Clean column names first (remove newlines/extra spaces)
@@ -167,8 +169,8 @@ def run_audit(file_uzio, file_adp):
             uzio_map[emp_id] = []
         
         acc = {
-            "Routing": norm_digits(row.get(u_cols["Routing"])).lstrip("0"),
-            "Account": norm_digits(row.get(u_cols["Account"])).lstrip("0"),
+            "Routing": norm_digits(row.get(u_cols["Routing"])),
+            "Account": norm_digits(row.get(u_cols["Account"])),
             "Type": normalize_account_type(row.get(u_cols["Type"])),
             "Percent": norm_money(row.get(u_cols["Percent"])),
             "Amount": norm_money(row.get(u_cols["Amount"])),
@@ -181,7 +183,7 @@ def run_audit(file_uzio, file_adp):
                 uzio_map[emp_id].append(acc)
 
     # 2. Load ADP Data
-    df_adp = pd.read_excel(file_adp)
+    df_adp = pd.read_excel(file_adp, dtype=str)
     df_adp.columns = [str(c).strip() for c in df_adp.columns]
     
     # Map ADP Columns
@@ -233,8 +235,8 @@ def run_audit(file_uzio, file_adp):
              
         acc = {
             "EmpID": emp_id,
-            "Routing": norm_digits(row.get(a_cols["Routing"])).lstrip("0"),
-            "Account": norm_digits(row.get(a_cols["Account"])).lstrip("0"),
+            "Routing": norm_digits(row.get(a_cols["Routing"])),
+            "Account": norm_digits(row.get(a_cols["Account"])),
             "Type": normalize_account_type(row.get(a_cols["Deduction"])),
             "Percent": pct,
             "Amount": amt,

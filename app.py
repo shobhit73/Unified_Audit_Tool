@@ -111,7 +111,7 @@ with st.sidebar:
     st.markdown("---")
     
     # 1. Select Provider
-    provider = st.radio("Select Provider", ["ADP", "Paycom"], index=0)
+    provider = st.radio("Select Provider", ["ADP", "Paycom", "Common Utilities"], index=0)
     
     
     # 2. Dynamic Tool Selection based on Provider
@@ -147,6 +147,12 @@ with st.sidebar:
             "Paycom - Deduction Audit",
             "Paycom - Emergency Contact Audit",
             "Paycom - Time Off Tool"
+        ], index=0, label_visibility="collapsed")
+        
+    elif provider == "Common Utilities":
+        st.markdown('<div class="provider-header">Universal Tools</div>', unsafe_allow_html=True)
+        tool_option = st.radio("Select Universal Tool", [
+            "Selective Employee Extractor"
         ], index=0, label_visibility="collapsed")
 
     # Footer
@@ -265,3 +271,8 @@ elif tool_option == "Paycom - Time Off Tool":
     from apps.paycom import timeoff_audit
     importlib.reload(timeoff_audit)
     timeoff_audit.render_ui()
+
+elif tool_option == "Selective Employee Extractor":
+    from apps.common import employee_extractor
+    importlib.reload(employee_extractor)
+    employee_extractor.render_employee_extractor()

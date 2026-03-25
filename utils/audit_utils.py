@@ -5,6 +5,37 @@ import re
 import numpy as np
 from datetime import datetime, date
 
+def check_duplicate_columns(file_obj):
+    """
+    Checks for duplicate column headers in an uploaded file.
+    Returns: list of duplicate column names, or None if no duplicates.
+    """
+    try:
+        if file_obj.name.lower().endswith('.csv'):
+            file_obj.seek(0)
+            # Read only first row to see raw headers
+            df_h = pd.read_csv(file_obj, header=None, nrows=1)
+        else:
+            file_obj.seek(0)
+            df_h = pd.read_excel(file_obj, header=None, nrows=1)
+        
+        if df_h.empty: return None
+        
+        headers = [str(h).strip() for h in df_h.iloc[0].tolist() if pd.notna(h) and str(h).strip() != ""]
+        
+        seen = set()
+        dupes = []
+        for h in headers:
+            if h in seen:
+                if h not in dupes: dupes.append(h)
+            seen.add(h)
+        
+        file_obj.seek(0) # Reset for next read
+        return dupes if dupes else None
+    except Exception:
+        file_obj.seek(0)
+        return None
+
 # --- Hardcoded Mappings ---
 
 # Map Uzio Raw Headers -> Internal Standard Names

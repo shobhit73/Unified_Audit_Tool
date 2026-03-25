@@ -1,7 +1,7 @@
 import io
 import pandas as pd
 import streamlit as st
-from utils.audit_utils import generate_uzio_template
+from utils.audit_utils import generate_uzio_template, check_duplicate_columns
 
 APP_TITLE = "Paycom to Uzio Census Template Generator"
 
@@ -70,6 +70,14 @@ def norm_colname(c: str) -> str:
 
 def preprocess_paycom_file(paycom_file):
     """Common logic for reading and normalizing Paycom file."""
+    # --- CRITICAL ERROR: Duplicate Column Check ---
+    dupes = check_duplicate_columns(paycom_file)
+    if dupes:
+        st.error(f"⛔ **Critical Error: Duplicate Column Headers Found!**")
+        st.markdown(f"The following column headers appear multiple times in your file: **{', '.join(dupes)}**")
+        st.warning("Pandas cannot process files with duplicate headers accurately. Please delete the duplicate columns and re-upload the file.")
+        return None, None, None, None
+
     try:
         if paycom_file.name.lower().endswith('.csv'):
             try:
@@ -178,6 +186,7 @@ def render_census_sanity_check():
     df_paycom, original_columns, norm_to_orig, resolved_field_map = preprocess_paycom_file(paycom_file)
     if df_paycom is None: return
 
+    # --- MANAGER DETECTION ---
     has_managers, top_manager_id, top_manager_name, col_sup_code = get_manager_info(df_paycom, resolved_field_map)
     sort_by_manager = False
     if has_managers and top_manager_id:
@@ -186,6 +195,35 @@ def render_census_sanity_check():
         sort_by_manager = st.checkbox("Sort all reporting managers to the top of download file", value=True, key="pc_sanity_sort_mgr")
 
     fix_options = render_auto_fix_options("pc_sanity")
+    
+    # --- MAPPING UI ---
+    st.markdown("### 🗺️ Mapping Configuration (Optional)")
+    st.info("Provide mappings here to include them in the **Corrected Source** download.")
+    
+    src_job_col = resolved_field_map.get('Job Title')
+    src_loc_col = resolved_field_map.get('Work Location')
+    unique_jobs = sorted([str(j).strip() for j in df_paycom[src_job_col].dropna().unique()]) if src_job_col and src_job_col in df_paycom.columns else []
+    unique_locs = sorted([str(l).strip() for l in df_paycom[src_loc_col].dropna().unique()]) if src_loc_col and src_loc_col in df_paycom.columns else []
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("**Job Title Mapping**")
+        edited_jobs = st.data_editor(
+            pd.DataFrame({"Source Job Title": unique_jobs, "Mapped Uzio Job Title": [None]*len(unique_jobs)}),
+            column_config={"Mapped Uzio Job Title": st.column_config.SelectboxColumn("Select Uzio Role", options=ALLOWED_JOB_TITLES, required=False)},
+            hide_index=True, use_container_width=True, key="pc_sanity_job_editor"
+        )
+    with col2:
+        st.write("**Work Location Mapping**")
+        edited_locs = st.data_editor(
+            pd.DataFrame({"Source Work Location": unique_locs, "Mapped Uzio Work Location": [""]*len(unique_locs)}),
+            column_config={"Mapped Uzio Work Location": st.column_config.TextColumn("Enter Uzio Location", required=False)},
+            hide_index=True, use_container_width=True, key="pc_sanity_loc_editor"
+        )
+    
+    job_dict = dict(zip(edited_jobs['Source Job Title'], edited_jobs['Mapped Uzio Job Title']))
+    loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
+
     st.markdown("---")
     
     # --- PRE-GENERATION SANITY CHECKS ---
@@ -253,6 +291,12 @@ def render_census_sanity_check():
         if fix_options.get('fix_dol_status') and col_dol:
             mask_blank_dol = df_download[col_dol].isna() | (df_download[col_dol].astype(str).str.strip() == "")
             df_download.loc[mask_blank_dol, col_dol] = "Full-Time"
+
+        # Apply Mappings to download file
+        if src_job_col and src_job_col in df_download.columns:
+            df_download[src_job_col] = df_download[src_job_col].astype(str).str.strip().map(lambda x: job_dict.get(x, x))
+        if src_loc_col and src_loc_col in df_download.columns:
+            df_download[src_loc_col] = df_download[src_loc_col].astype(str).str.strip().map(lambda x: loc_dict.get(x, x))
 
         # Add CRITICAL_WARNINGS column if errors exist
         if not hard_errors.empty:

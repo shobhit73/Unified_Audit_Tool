@@ -137,10 +137,15 @@ def render_employee_extractor():
     # Final column subset
     df_result = df_result[selected_cols]
 
-    # 7. DATA CLEANING (Paycom Exception)
+    # 7. DATA CLEANING (Paycom Exception + Timestamp cleanup)
     for col in df_result.columns:
+        # Clear 00/00/0000 dates
         if df_result[col].astype(str).str.contains('00/00/0000', regex=False).any():
             df_result[col] = df_result[col].replace('00/00/0000', '')
+        
+        # Cleanup trailing 00:00:00 from pandas read_excel(dtype=str)
+        if df_result[col].astype(str).str.endswith(' 00:00:00').any():
+            df_result[col] = df_result[col].astype(str).str.replace(' 00:00:00', '', regex=False).replace('nan', '')
 
     # 8. RESULTS & DOWNLOAD
     st.markdown("---")

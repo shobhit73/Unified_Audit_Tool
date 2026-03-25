@@ -387,31 +387,69 @@ def validate_source_data(df_source, resolved_field_map):
             if pd.isna(val) or str(val).strip() == "":
                 missing.append("Employment Status")
         
-        # 2. Blank Employment Type -> Added to hard errors as per user request
+        # 2. Blank Employment Type / DOL Status
+        # Find DOL_Status column (it maps to Employment Type in Uzio)
+        dol_col = next((c for c in df_source.columns if str(c).lower().strip().replace('_',' ') in ['dol status', 'dol_status', 'worker category description']), None)
+        
         if type_col and type_col in df_source.columns:
             val = row.get(type_col)
             if pd.isna(val) or str(val).strip() == "":
-                missing.append("Employment Type")
-                type_blanks.append({
+                missing.append("Employment Type (DOL Status)")
+                dol_status_blanks.append({
                     'Employee ID': emp_ref,
-                    'Original Employment Type': '(blank)'
+                    'Current DOL Status': '(Blank)',
+                    'Suggestion': 'Auto-fill to Full-Time'
                 })
         
         # 3. Blank Pay Type
         pay_val = ""
+        is_pay_type_blank = False
         if pay_type_col and pay_type_col in df_source.columns:
             pay_val = row.get(pay_type_col)
             if pd.isna(pay_val) or str(pay_val).strip() == "":
-                missing.append("Pay Type")
+                is_pay_type_blank = True
                 pay_val = ""
             else:
                 pay_val = str(pay_val).strip().lower()
         
-        # 4. Blank Job Title -> Flag as hard error
+        # 4. Blank Job Title
+        job_val_raw = row.get(job_title_col) if job_title_col and job_title_col in df_source.columns else ""
+        job_val = str(job_val_raw).strip().lower() if pd.notna(job_val_raw) else ""
+        is_driver = "driver" in job_val
+        
         if job_title_col and job_title_col in df_source.columns:
-            val = row.get(job_title_col)
-            if pd.isna(val) or str(val).strip() == "":
+            if not job_val:
                 missing.append("Job Title (blank)")
+                position_blanks.append({
+                    'Employee ID': emp_ref,
+                    'Original Job Title': '(Blank)',
+                    'Suggestion': 'Fallback to Department'
+                })
+
+        # 4c. FLSA Blank Check (Special logic for Drivers)
+        is_flsa_blank = False
+        if flsa_col and flsa_col in df_source.columns:
+            flsa_val = row.get(flsa_col)
+            if pd.isna(flsa_val) or str(flsa_val).strip() == "":
+                is_flsa_blank = True
+                
+        if is_flsa_blank:
+            if is_driver and is_pay_type_blank:
+                # User specifically asked for this case
+                flsa_blanks.append({
+                    'Employee ID': emp_ref,
+                    'Issue': 'Blank FLSA & Pay Type (Driver Position)',
+                    'Suggestion': 'Auto-fix to Non-Exempt / Hourly'
+                })
+            else:
+                flsa_blanks.append({
+                    'Employee ID': emp_ref,
+                    'Issue': 'Blank FLSA Classification',
+                    'Suggestion': 'Auto-fill based on Pay Type'
+                })
+        
+        if is_pay_type_blank and not (is_driver and is_flsa_blank):
+            missing.append("Pay Type")
                 
         # 4b. Blank Work Location
         if location_col and location_col in df_source.columns:
@@ -823,10 +861,6 @@ def generate_uzio_template(df_source, vendor_field_map, fix_options=None):
                 break
 
         if dol_col and 'Employment Type*' in df_uzio.columns:
-            # If DOL_Status maps to Employment Type, check if we need to fill it
-            status_col = vendor_field_map.get('Employment Status')
-            status_series = df_source[status_col].astype(str).str.lower().str.strip() if status_col and status_col in df_source.columns else pd.Series([""]*len(df_source))
-            
             # Mask for ALL employees with blank DOL_Status
             blank_dol_mask = df_source[dol_col].isna() | (df_source[dol_col].astype(str).str.strip() == "")
             combined_mask = blank_dol_mask
@@ -884,31 +918,29 @@ def generate_uzio_template(df_source, vendor_field_map, fix_options=None):
 
     # Apply Pay Type rules
     if 'Pay Type*' in df_uzio.columns:
-        # Special Rule: If Job Title contains 'Driver', force Hourly and Non-Exempt
+        # Special Rule: If Job Title contains 'Driver', force Hourly and Non-Exempt (especially if blank)
         if 'Job Title' in df_uzio.columns:
             driver_mask = df_uzio['Job Title'].astype(str).str.lower().str.contains('driver', na=False)
             
-            # Check for changes needed in Pay Type
-            # We want to log if we are changing it from blank or from something else to 'Hourly'
-            pt_to_fix = driver_mask & (df_uzio['Pay Type*'].astype(str).str.lower().str.strip() != 'hourly')
+            # Force Hourly and Non-Exempt for ALL drivers (user request)
+            pt_to_fix = driver_mask & ((df_uzio['Pay Type*'].astype(str).str.lower().str.strip() != 'hourly') | df_uzio['Pay Type*'].isna() | (df_uzio['Pay Type*'] == ""))
             for idx in df_uzio[pt_to_fix].index:
                 fix_logs.append({
                     "Employee": emp_ids[idx],
                     "Field Fixed": "Pay Type*",
-                    "Original Value": df_uzio.loc[idx, 'Pay Type*'] if pd.notna(df_uzio.loc[idx, 'Pay Type*']) else "(Blank)",
+                    "Original Value": df_uzio.loc[idx, 'Pay Type*'] if pd.notna(df_uzio.loc[idx, 'Pay Type*']) and str(df_uzio.loc[idx, 'Pay Type*']).strip() else "(Blank)",
                     "New Value": "Hourly",
                     "Fix Applied": "Forced Hourly for Driver Position"
                 })
             df_uzio.loc[driver_mask, 'Pay Type*'] = "Hourly"
 
-            # Check for changes needed in FLSA
             if 'FLSA Classification' in df_uzio.columns:
-                flsa_to_fix = driver_mask & (df_uzio['FLSA Classification'].astype(str).str.lower().str.strip() != 'non-exempt')
+                flsa_to_fix = driver_mask & ((df_uzio['FLSA Classification'].astype(str).str.lower().str.strip() != 'non-exempt') | df_uzio['FLSA Classification'].isna() | (df_uzio['FLSA Classification'] == ""))
                 for idx in df_uzio[flsa_to_fix].index:
                     fix_logs.append({
                         "Employee": emp_ids[idx],
                         "Field Fixed": "FLSA Classification",
-                        "Original Value": df_uzio.loc[idx, 'FLSA Classification'] if pd.notna(df_uzio.loc[idx, 'FLSA Classification']) else "(Blank)",
+                        "Original Value": df_uzio.loc[idx, 'FLSA Classification'] if pd.notna(df_uzio.loc[idx, 'FLSA Classification']) and str(df_uzio.loc[idx, 'FLSA Classification']).strip() else "(Blank)",
                         "New Value": "Non-Exempt",
                         "Fix Applied": "Forced Non-Exempt for Driver Position"
                     })

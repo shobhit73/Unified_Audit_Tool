@@ -68,22 +68,8 @@ def norm_colname(c: str) -> str:
     c = c.strip('"').strip("'")
     return c.lower()
 
-def render_ui():
-    st.title(APP_TITLE)
-    st.markdown("""
-    **Instructions**:
-    1. Upload your **Paycom Census Export** (.csv or .xlsx).
-    2. Map your **Job Titles** and **Work Locations** in the tables below.
-    3. Click **Generate Uzio Template**.
-    4. Download the correctly formatted Uzio `.xlsx` file.
-    """)
-    
-    paycom_file = st.file_uploader("Upload Paycom Census Export", type=["xlsx", "csv"], key="pc_gen_upload")
-    
-    if not paycom_file:
-        return
-    
-    # --- STEP 1: Read and process the source file (runs on every rerun) ---
+def preprocess_paycom_file(paycom_file):
+    """Common logic for reading and normalizing Paycom file."""
     try:
         if paycom_file.name.lower().endswith('.csv'):
             try:
@@ -95,8 +81,8 @@ def render_ui():
             df_paycom = pd.read_excel(paycom_file, dtype=str)
     except Exception as e:
         st.error(f"Error reading file: {e}")
-        return
-        
+        return None, None, None, None
+
     # Save original column headers before normalization
     original_columns = list(df_paycom.columns)
     
@@ -118,12 +104,38 @@ def render_ui():
                 break
         if not found:
             resolved_field_map[std_name] = norm_colname(vendor_cols[0])
+            
+    return df_paycom, original_columns, norm_to_orig, resolved_field_map
 
-    # Extract name columns for validation
-    col_fname = resolved_field_map.get('First Name')
-    col_lname = resolved_field_map.get('Last Name')
+def render_auto_fix_options(key_prefix):
+    """Shared auto-correction options UI."""
+    st.markdown("### 🛠️ **Auto-Correction Options (Manual Consent Required)**")
+    st.markdown("Select which automated fixes you would like to apply.")
+    
+    col_fix1, col_fix2 = st.columns(2)
+    with col_fix1:
+        fix_flsa = st.checkbox("Enforce FLSA/Pay Type alignment (e.g. Salaried = Exempt)", value=False, key=f"{key_prefix}_fix_flsa")
+        fix_emails = st.checkbox("Use Personal Email as fallback for missing Work Email", value=False, key=f"{key_prefix}_fix_emails")
+        fix_license = st.checkbox("Strict License Validation (Clear dates if number missing)", value=False, key=f"{key_prefix}_fix_license")
+    with col_fix2:
+        fix_status = st.checkbox("Auto-Map Employment Status (e.g. Inactive -> Terminated)", value=False, key=f"{key_prefix}_fix_status")
+        fix_type = st.checkbox("Auto-Map Worker Category (e.g. Intern -> Part Time)", value=False, key=f"{key_prefix}_fix_type")
+        fix_position = st.checkbox("Auto-Fill blank Position with Department Description", value=False, key=f"{key_prefix}_fix_position")
+        fix_dol_status = st.checkbox("Auto-Fill blank DOL_Status to 'Full-Time' for Active Employees", value=True, key=f"{key_prefix}_fix_dol_status")
 
-    # --- MANAGER DETECTION (PAYCOM) ---
+    return {
+        'fix_flsa': fix_flsa,
+        'fix_emails': fix_emails,
+        'fix_license': fix_license,
+        'fix_status': fix_status,
+        'fix_inactive': fix_status,
+        'fix_type': fix_type,
+        'fix_position': fix_position,
+        'fix_dol_status': fix_dol_status
+    }
+
+def get_manager_info(df_paycom, resolved_field_map):
+    """Detection logic for top manager."""
     col_sup_code = None
     for cand in ['supervisor_primary_code', 'supervisor primary code', 'supervisorcode']:
         if cand in df_paycom.columns:
@@ -135,15 +147,12 @@ def render_ui():
     has_managers = False
 
     if col_sup_code:
-        # Filter out blanks
         valid_sups = df_paycom[df_paycom[col_sup_code].notna() & (df_paycom[col_sup_code].astype(str).str.strip() != "")]
         if not valid_sups.empty:
             has_managers = True
             sup_counts = valid_sups[col_sup_code].value_counts()
             if not sup_counts.empty:
                 top_manager_id = str(sup_counts.index[0]).strip()
-
-                # Try to get their name
                 emp_code_col = resolved_field_map.get('Employee ID')
                 if emp_code_col and emp_code_col in df_paycom.columns:
                     match = df_paycom[df_paycom[emp_code_col].astype(str).str.strip() == top_manager_id]
@@ -152,317 +161,87 @@ def render_ui():
                         ln = match.iloc[0].get(resolved_field_map.get('Last Name'), '')
                         if pd.notna(fn) and pd.notna(ln):
                             top_manager_name = f"{str(fn).strip()} {str(ln).strip()}".strip()
+    return has_managers, top_manager_id, top_manager_name, col_sup_code
 
+def render_census_sanity_check():
+    st.title("Paycom Census Sanity Check")
+    st.markdown("""
+    **Instructions**:
+    1. Upload your **Paycom Census Export**.
+    2. Review the detected errors and mapping suggestions.
+    3. Download the **Corrected Source Data** containing automated fixes.
+    """)
+    
+    paycom_file = st.file_uploader("Upload Paycom Census Export", type=["xlsx", "csv"], key="pc_sanity_upload")
+    if not paycom_file: return
+
+    df_paycom, original_columns, norm_to_orig, resolved_field_map = preprocess_paycom_file(paycom_file)
+    if df_paycom is None: return
+
+    has_managers, top_manager_id, top_manager_name, col_sup_code = get_manager_info(df_paycom, resolved_field_map)
     sort_by_manager = False
-    if has_managers:
-        if top_manager_id:
-            name_disp = f" ({top_manager_name})" if top_manager_name else ""
-            st.info(f"**Top Manager Detected:** Employee **{top_manager_id}**{name_disp} supervises the most employees.")
-        
-        sort_by_manager = st.checkbox(
-            "Sort all reporting managers to the **very top** of all generated files (ordered by number of reportees).",
-            value=True, key="paycom_sort_managers_global"
-        )
-    
-    # --- STEP 2: Choose Action ---
+    if has_managers and top_manager_id:
+        name_disp = f" ({top_manager_name})" if top_manager_name else ""
+        st.info(f"**Top Manager Detected:** Employee **{top_manager_id}**{name_disp}")
+        sort_by_manager = st.checkbox("Sort all reporting managers to the top of download file", value=True, key="pc_sanity_sort_mgr")
+
+    fix_options = render_auto_fix_options("pc_sanity")
     st.markdown("---")
-    st.markdown("### 🚀 **What would you like to do?**")
-    action = st.radio(
-        label="Action Selection",
-        options=[
-            "🩺 Run Sanity Check on Source File",
-            "🆕 Generate Entire New Uzio Census File",
-            "🔄 Update Existing Uzio Census File (Selective Sync)"
-        ],
-        index=None, # Require explicit selection
-        help="Choose 'Sanity Check' to audit your source file. Choose 'Generate New' for a fresh Uzio file. Choose 'Update Existing' to sync specific columns to an existing template.",
-        label_visibility="collapsed",
-        key="pc_action_v3" # New key to reset state
-    )
     
-    st.markdown("---")
+    # --- PRE-GENERATION SANITY CHECKS ---
+    from utils.audit_utils import validate_source_data
+    validation = validate_source_data(df_paycom, resolved_field_map)
 
-    if action is None:
-        st.info("💡 Please select an action above to proceed.")
-        return
+    hard_errors = validation['hard_errors']
+    flsa_corrections = validation['flsa_corrections']
+    flsa_blanks = validation['flsa_blanks']
+    intern_corrections = validation['intern_corrections']
+    email_fallbacks = validation['email_fallbacks']
+    salaried_drivers = validation.get('salaried_drivers', pd.DataFrame())
+    anomalies = validation.get('anomalies', pd.DataFrame())
+    inactive_statuses = validation.get('inactive_statuses', pd.DataFrame())
+    position_blanks = validation.get('position_blanks', pd.DataFrame())
+    dol_status_blanks = validation.get('dol_status_blanks', pd.DataFrame())
 
-    # --- SHARED AUTO-CORRECTION OPTIONS (Manual Consent) ---
-    st.markdown("### 🛠️ **Auto-Correction Options (Manual Consent Required)**")
-    st.markdown("Select which automated fixes you would like to apply. These will affect both the Uzio generation and the 'Download Corrected Source' option.")
-    
-    col_fix1, col_fix2 = st.columns(2)
-    with col_fix1:
-        fix_flsa = st.checkbox("Enforce FLSA/Pay Type alignment (e.g. Salaried = Exempt)", value=False, key="pc_fix_flsa_global")
-        fix_emails = st.checkbox("Use Personal Email as fallback for missing Work Email", value=False, key="pc_fix_emails_global")
-        fix_license = st.checkbox("Strict License Validation (Clear dates if number missing)", value=False, key="pc_fix_license_global")
-    with col_fix2:
-        fix_status = st.checkbox("Auto-Map Employment Status (e.g. Inactive -> Terminated)", value=False, key="pc_fix_status_global")
-        fix_type = st.checkbox("Auto-Map Worker Category (e.g. Intern -> Part Time)", value=False, key="pc_fix_type_global")
-        fix_position = st.checkbox("Auto-Fill blank Position with Department Description", value=False, key="pc_fix_position_global")
-        fix_dol_status = st.checkbox("Auto-Fill blank DOL_Status to 'Full-Time' for Active Employees", value=False, key="pc_fix_dol_status_global")
+    # Show soft warnings first
+    has_soft_warnings = not position_blanks.empty or not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty or not anomalies.empty
+    if has_soft_warnings:
+        with st.expander("System Minor Warnings & Mapping Suggestions", expanded=False):
+            st.info("💡 **Note:** The following suggestions can be automatically applied by checking the corresponding boxes above in the **Auto-Correction Options** section.")
+            if not position_blanks.empty:
+                st.markdown(f"- ℹ️ **Position Auto-Fill:** {len(position_blanks)} employee(s) have a blank Position. 'Department Description' can be used as a fallback.")
+            if not flsa_corrections.empty:
+                st.markdown(f"- ℹ️ **FLSA Mismatches:** {len(flsa_corrections)} employee(s) have mismatched FLSA classifications vs Pay Type.")
+            if not flsa_blanks.empty:
+                st.markdown(f"- ⚠️ **Blank FLSA Classification:** {len(flsa_blanks)} employee(s) have a Pay Type set but FLSA Classification is blank.")
+            if not anomalies.empty:
+                st.markdown(f"- ⚠️ **FLSA Anomalies:** {len(anomalies)} employee(s) have Hourly Exempt or Salaried Non-Exempt mismatches.")
+            if not intern_corrections.empty:
+                st.markdown(f"- ⚠️ **Intern → Part Time:** {len(intern_corrections)} employee(s) have 'Intern' as Worker Category.")
 
-    fix_options = {
-        'fix_flsa': fix_flsa,
-        'fix_emails': fix_emails,
-        'fix_license': fix_license,
-        'fix_status': fix_status,
-        'fix_inactive': fix_status,
-        'fix_type': fix_type,
-        'fix_position': fix_position,
-        'fix_dol_status': fix_dol_status
-    }
-    st.markdown("---")
+    # Show hard errors
+    if not hard_errors.empty:
+        st.error(f"**⛔ {len(hard_errors)} Critical Error(s) Found in Source Data!**")
+        with st.expander(f"View All {len(hard_errors)} Error Details", expanded=False):
+            st.dataframe(hard_errors, hide_index=True, use_container_width=True)
+    else:
+        st.success("✅ Source data passed all critical sanity checks!")
 
-    if "Sanity Check" in action:
-        # --- PAYCOM SPECIFIC PRE-PROCESSING & VALIDATION ---
-        paycom_custom_errors = []
-        paycom_pos_fixes = []
-
-        # Identify exact columns (normalized)
-        col_dol = next((c for c in df_paycom.columns if str(c).lower().strip().replace('_',' ') == 'dol status'), None)
-        col_pos = next((c for c in df_paycom.columns if str(c).lower().strip() in ['position', 'job title']), None)
-        # Robust search for Department description (STRICTLY NO CODES)
-        col_dep = next((c for c in df_paycom.columns if str(c).lower().strip().replace(' ','_') == 'department_desc' or str(c).lower().strip() == 'department_description'), None)
-
-        # Find employee status column - check variations
-        col_emp_status = next((c for c in df_paycom.columns if str(c).lower().strip() in ['employee_status', 'employee status', 'employment status', 'status', 'ee status']), None)
-
-        for idx, row in df_paycom.iterrows():
-            emp_ref = f"Row {idx+2}"
-            if 'employee_code' in df_paycom.columns and pd.notna(row.get('employee_code')) and str(row.get('employee_code')).strip():
-                emp_ref = str(row.get('employee_code')).strip()
-            elif 'employee code' in df_paycom.columns and pd.notna(row.get('employee code')) and str(row.get('employee code')).strip():
-                emp_ref = str(row.get('employee code')).strip()
-
-            fname = ""
-            lname = ""
-            if col_fname:
-                val = row.get(col_fname)
-                fname = str(val).strip() if pd.notna(val) else ""
-            if col_lname:
-                val = row.get(col_lname)
-                lname = str(val).strip() if pd.notna(val) else ""
-            emp_name = f"{fname} {lname}".strip()
-
-            custom_missing = []
-
-            # 1. DOL_Status blank check
-            if col_dol:
-                val_dol = row.get(col_dol)
-                if pd.isna(val_dol) or str(val_dol).strip() == "":
-                    emp_stat_str = str(row.get(col_emp_status)).strip().lower() if col_emp_status else ""
-                    if "term" in emp_stat_str:
-                        custom_missing.append("DOL_Status is blank for Terminated employee (Use Auto-Fix to set to 'Full-Time')")
-                    else:
-                        custom_missing.append("DOL_Status is blank for Active employee (Use Auto-Fix to set to 'Full-Time')")
-
-            # 2. Employee Status blank check & "Inactive" / "Temporary" check
-            if col_emp_status:
-                val_emp = row.get(col_emp_status)
-                if pd.isna(val_emp) or str(val_emp).strip() == "":
-                    custom_missing.append("Employee Status is blank")
-                elif str(val_emp).strip().lower() == "inactive":
-                    custom_missing.append("Employee Status is 'Inactive' (Use Auto-Fix to set to 'Terminated')")
-                elif str(val_emp).strip().lower() == "temporary":
-                    custom_missing.append("Employee Status is 'Temporary' (Use Auto-Fix to set to 'Seasonal')")
-
-            # 3. Position and Department Desc check (Original manual logic replaced by audit_utils)
-                        
-            # 4. Emergency Contact Spanish Characters Check
-            # Look for emergency contact name columns
-            emg_cols = [c for c in df_paycom.columns if 'emergency' in c and ('name' in c or 'contact' in c)]
-            for ec in emg_cols:
-                val_ec = row.get(ec)
-                if pd.notna(val_ec) and str(val_ec).strip():
-                    # Regex to find non-ASCII characters (often Spanish characters like á, é, í, ó, ú, ñ)
-                    import re
-                    if re.search(r'[^\x00-\x7F]', str(val_ec)):
-                        custom_missing.append(f"Special/Spanish character found in {norm_to_orig.get(ec, ec)}: '{str(val_ec)}'. Please correct it.")
-
-            if custom_missing:
-                paycom_custom_errors.append({
-                    'Employee ID': emp_ref,
-                    'Name': emp_name,
-                    'Issue': ", ".join(custom_missing)
-                })
-
-        # --- CHECK: State column must exist (Non-Blocking) ---
-        state_col = resolved_field_map.get('State')
-        if not state_col or state_col not in df_paycom.columns:
-            st.warning("⚠️ **'Primary_State/Province' (or similar State) column not found!** State validation will be skipped.")
-
-        # --- CHECK: Zip column must exist (Non-Blocking) ---
-        zip_col = resolved_field_map.get('Zip')
-        if not zip_col or zip_col not in df_paycom.columns:
-            st.warning("⚠️ **'Primary_Zip/Postal_Code' (or similar Zip) column not found!** Zip code validation will be skipped.")
-
-        # --- PRE-GENERATION SANITY CHECKS ---
-        from utils.audit_utils import validate_source_data
-        validation = validate_source_data(df_paycom, resolved_field_map)
-
-        flsa_corrections = validation['flsa_corrections']
-        flsa_blanks = validation['flsa_blanks']
-        intern_corrections = validation['intern_corrections']
-        email_fallbacks = validation['email_fallbacks']
-        salaried_drivers = validation.get('salaried_drivers', pd.DataFrame())
-        anomalies = validation.get('anomalies', pd.DataFrame())
-        inactive_statuses = validation.get('inactive_statuses', pd.DataFrame())
-        position_blanks = validation.get('position_blanks', pd.DataFrame())
-        dol_status_blanks = validation.get('dol_status_blanks', pd.DataFrame())
-
-        # Merge custom Paycom hard errors with generic hard errors
-        hard_errors_df = validation['hard_errors']
-        if paycom_custom_errors:
-            df_custom = pd.DataFrame(paycom_custom_errors)
-            if not hard_errors_df.empty:
-                # Merge and keep Name if possible
-                hard_errors = pd.concat([hard_errors_df, df_custom]).groupby(['Employee ID', 'Name'])['Issue'].apply(lambda x: ', '.join(x)).reset_index()
-            else:
-                hard_errors = df_custom
-        else:
-            hard_errors = hard_errors_df
-
-        # Show soft warnings first (non-blocking)
-        has_soft_warnings = not position_blanks.empty or not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty or not anomalies.empty
-        if has_soft_warnings:
-            with st.expander("System Minor Warnings & Mapping Suggestions", expanded=False):
-                st.info("💡 **Note:** The following suggestions can be automatically applied by checking the corresponding boxes above in the **Auto-Correction Options** section. Details are available in the Error Report download below.")
-                if not position_blanks.empty:
-                    st.markdown(f"- ℹ️ **Position Auto-Fill:** {len(position_blanks)} employee(s) have a blank Position. 'Department Description' can be used as a fallback.")
-                if not flsa_corrections.empty:
-                    st.markdown(f"- ℹ️ **FLSA Mismatches:** {len(flsa_corrections)} employee(s) have mismatched FLSA classifications vs Pay Type. These can be auto-corrected.")
-                if not flsa_blanks.empty:
-                    st.markdown(f"- ⚠️ **Blank FLSA Classification:** {len(flsa_blanks)} employee(s) have a Pay Type set but FLSA Classification is blank.")
-                if not anomalies.empty:
-                    st.markdown(f"- ⚠️ **FLSA Anomalies:** {len(anomalies)} employee(s) have Hourly Exempt or Salaried Non-Exempt mismatches.")
-                if not intern_corrections.empty:
-                    st.markdown(f"- ⚠️ **Intern → Part Time:** {len(intern_corrections)} employee(s) have 'Intern' as Worker Category. These can be changed to **Part Time**.")
-                if not email_fallbacks.empty:
-                    st.markdown(f"- ℹ️ **Email Fallback:** {len(email_fallbacks)} employee(s) have a blank Work Email. Personal Email can be used instead.")
-
-        # Show hard errors (non-blocking — user can still proceed)
-        if not hard_errors.empty:
-            st.error(f"**⛔ {len(hard_errors)} Critical Error(s) Found in Source Data!** You can fix these manually, use Auto-Fix below, or proceed as-is.")
-
-            # --- Summary breakdown by issue type ---
-            all_issues = []
-            for issues_str in hard_errors['Issue']:
-                for issue in str(issues_str).split(", "):
-                    import re
-                    clean = re.sub(r"\s*\(.*?\)", "", issue).strip()
-                    if clean:
-                        all_issues.append(clean)
-
-            from collections import Counter
-            issue_counts = Counter(all_issues)
-
-            st.markdown("**Summary:**")
-            for issue, count in issue_counts.most_common():
-                st.markdown(f"- **{count}** employee(s): {issue}")
-
-            # Full details in expander
-            with st.expander(f"View All {len(hard_errors)} Error Details", expanded=False):
-                st.dataframe(hard_errors, hide_index=True, use_container_width=True)
-        else:
-            st.success("✅ Source data passed all critical sanity checks (no blocking errors)!")
-
-        if not hard_errors.empty or has_soft_warnings:
-            err_xlsx = io.BytesIO()
-            with pd.ExcelWriter(err_xlsx, engine='openpyxl') as writer:
-                if not hard_errors.empty:
-                    hard_errors.to_excel(writer, sheet_name="Critical Errors", index=False)
-                if not inactive_statuses.empty:
-                    inactive_statuses.to_excel(writer, sheet_name="Inactive Statuses", index=False)
-                if not position_blanks.empty:
-                    position_blanks.to_excel(writer, sheet_name="Blank Positions", index=False)
-                if not dol_status_blanks.empty:
-                    dol_status_blanks.to_excel(writer, sheet_name="Blank DOL_Status", index=False)
-                if not anomalies.empty:
-                    anomalies.to_excel(writer, sheet_name="FLSA Anomalies", index=False)
-                if not salaried_drivers.empty:
-                    salaried_drivers.to_excel(writer, sheet_name="Salaried Driver Ex", index=False)
-                if not flsa_corrections.empty:
-                    flsa_corrections.to_excel(writer, sheet_name="FLSA Mismatches", index=False)
-                if not flsa_blanks.empty:
-                    flsa_blanks.to_excel(writer, sheet_name="Blank FLSA Classes", index=False)
-                if not intern_corrections.empty:
-                    intern_corrections.to_excel(writer, sheet_name="Intern Overrides", index=False)
-                if not email_fallbacks.empty:
-                    email_fallbacks.to_excel(writer, sheet_name="Email Fallbacks", index=False)
-            err_xlsx.seek(0)
-            
-            st.markdown("---")
-            st.markdown("### 📥 Download Full Sanity Check Report")
-            st.markdown("Download this Excel file to see exactly which employees have critical errors or are flagged for auto-correction suggestions.")
-            st.download_button(
-                label="Download Validation & Suggestion Report (XLSX)",
-                data=err_xlsx.getvalue(),
-                file_name=f"Source_Validation_Report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="pc_hard_err_dl"
-            )
-            
-
-
-
-
-
-
-
-
-        # --- Optional Location Mapping (in Tab 1) ---
-        src_loc_col_af = resolved_field_map.get('Work Location')
-        unique_locs_af = []
-        if src_loc_col_af and src_loc_col_af in df_paycom.columns:
-            unique_locs_af = sorted([str(l).strip() for l in df_paycom[src_loc_col_af].dropna().unique() if str(l).strip()])
-
-        fix_loc_mapping = False
-        edited_locs_af = None
-
-        if unique_locs_af:
-            st.markdown("---")
-            fix_loc_mapping = st.checkbox(
-                f"**Map Work Locations (Optional)** — Map {len(unique_locs_af)} unique Work Location(s) directly in the source data",
-                value=False, key="pc_fix_locs"
-            )
-
-        if fix_loc_mapping:
-            df_loc_map_af = pd.DataFrame({"Source Work Location": unique_locs_af, "Mapped Work Location": pd.Series([""]*len(unique_locs_af), dtype=str)})
-            edited_locs_af = st.data_editor(
-                df_loc_map_af,
-                column_config={
-                    "Source Work Location": st.column_config.Column(disabled=True),
-                    "Mapped Work Location": st.column_config.TextColumn("Enter Standardized Location", required=True)
-                },
-                hide_index=True, use_container_width=True, key="pc_af_loc_editor"
-            )
-            
-            # Immediately apply this mapping to df_paycom so the download includes it
-            if edited_locs_af is not None and not edited_locs_af.empty:
-                # Only applying mappings that are actually filled out
-                valid_maps = edited_locs_af[edited_locs_af['Mapped Work Location'].str.strip() != ""]
-                if not valid_maps.empty:
-                    loc_dict_af = dict(zip(valid_maps['Source Work Location'], valid_maps['Mapped Work Location']))
-                    stripped_locs = df_paycom[src_loc_col_af].astype(str).str.strip()
-                    df_paycom[src_loc_col_af] = stripped_locs.map(loc_dict_af).fillna(df_paycom[src_loc_col_af])
-                    st.success(f"**Work Location Mapping:** Applied mapping for {len(loc_dict_af)} unique location(s).")
-                
-        # --- Download Corrected Source ---
-        st.markdown("### 📥 Download Cleaned Source Data")
-        st.markdown("You can download the partially cleaned source file containing all the fixes applied above. **We have also automatically added a new 'CRITICAL_WARNINGS' column at the very beginning of the sheet highlighting any unresolved issues so your implementor knows exactly what to fix!**")
-        
+    if st.button("Download Corrected Source"):
         df_download = df_paycom.copy()
+        
+        # Resolve Position and Department Desc columns (normalized)
+        col_dol = next((c for c in df_download.columns if str(c).lower().strip().replace('_',' ') == 'dol status'), None)
+        col_emp_status = next((c for c in df_download.columns if str(c).lower().strip() in ['employee_status', 'employee status', 'employment status', 'status', 'ee status']), None)
+        col_dep = next((c for c in df_download.columns if str(c).lower().strip().replace(' ','_') == 'department_desc' or str(c).lower().strip() == 'department_description'), None)
 
-        # APPLY GLOBAL FIXES TO DOWNLOADED SOURCE
+        # Apply Fixes
         if fix_options.get('fix_position') and col_dep:
             for c in ['position', 'job title']:
                 c_norm = next((col for col in df_download.columns if str(col).lower().strip() == c), None)
                 if c_norm:
                     mask = df_download[c_norm].isna() | (df_download[c_norm].astype(str).str.strip() == "")
-                    
-                    # Fill from col_dep (Description only)
-                    if col_dep:
-                        df_download.loc[mask, c_norm] = df_download.loc[mask, col_dep]
+                    df_download.loc[mask, c_norm] = df_download.loc[mask, col_dep]
 
         if fix_options.get('fix_emails'):
             c_work = next((col for col in df_download.columns if 'work_email' in str(col).lower()), None)
@@ -472,348 +251,174 @@ def render_ui():
                 df_download.loc[mask, c_work] = df_download.loc[mask, c_pers]
 
         if fix_options.get('fix_dol_status') and col_dol:
-            # Active or Inactive (not yet Terminated) should be fixed
             mask_blank_dol = df_download[col_dol].isna() | (df_download[col_dol].astype(str).str.strip() == "")
             df_download.loc[mask_blank_dol, col_dol] = "Full-Time"
 
-        if fix_options.get('fix_status') and col_emp_status:
-            # Inactive -> Terminated (Paycom specific logic)
-            mask_inactive = df_download[col_emp_status].astype(str).str.lower().str.strip() == "inactive"
-            # We skip safety check for simple source download or apply it? 
-            # Better to apply safety: check termination date
-            col_term_date = next((c for c in df_download.columns if 'termination_date' in str(c).lower()), None)
-            if col_term_date:
-                mask_term_present = df_download[col_term_date].notna() & (df_download[col_term_date].astype(str).str.strip() != "")
-                df_download.loc[mask_inactive & mask_term_present, col_emp_status] = "Terminated"
-        
-        # Sort by management hierarchy if requested
-        if sort_by_manager and col_sup_code and col_sup_code in df_download.columns:
-            emp_id_col = resolved_field_map.get('Employee ID')
-            if emp_id_col and emp_id_col in df_download.columns:
-                # Count reportees
-                sup_counts = df_download[df_download[col_sup_code].notna() & (df_download[col_sup_code].astype(str).str.strip() != "")][col_sup_code].value_counts().to_dict()
-                
-                # Add temporary column for sorting
-                df_download['__mgr_sort'] = df_download[emp_id_col].astype(str).str.strip().map(lambda x: sup_counts.get(x, 0))
-                
-                # Sort: Managers first (most reportees at top), then keeping original relative order
-                df_download = df_download.sort_values(by='__mgr_sort', ascending=False, kind='stable').drop(columns=['__mgr_sort'])
-
-        # Add a column for critical errors so the implementor knows what to fix
+        # Add CRITICAL_WARNINGS column if errors exist
         if not hard_errors.empty:
             emp_id_col = resolved_field_map.get('Employee ID')
             if emp_id_col and emp_id_col in df_download.columns:
-                # Create a map of Employee ID -> Issue
                 error_map = dict(zip(hard_errors['Employee ID'].astype(str), hard_errors['Issue']))
-                
-                # Append a new column highlighting the issue as the first column
                 df_download.insert(0, 'CRITICAL_WARNINGS', df_download[emp_id_col].astype(str).map(error_map).fillna(""))
 
+        # Restore original column headers
         restored_cols = [norm_to_orig.get(c, c) for c in df_download.columns if c in norm_to_orig]
-        # Keep our new column if it was added
         if 'CRITICAL_WARNINGS' in df_download.columns:
             df_download.columns = ['CRITICAL_WARNINGS'] + restored_cols
         else:
             df_download.columns = restored_cols
-        
-        dl_col1, dl_col2 = st.columns(2)
-        with dl_col1:
-            corrected_csv = io.BytesIO()
-            df_download.to_csv(corrected_csv, index=False)
-            corrected_csv.seek(0)
-            st.download_button(
-                label="📥 Download Corrected Source (CSV)",
-                data=corrected_csv.getvalue(),
-                file_name=f"Paycom_Cleaned_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv",
-                key="pc_corrected_csv_dl"
-            )
-        with dl_col2:
-            corrected_xlsx = io.BytesIO()
-            df_download.to_excel(corrected_xlsx, index=False, engine='openpyxl')
-            corrected_xlsx.seek(0)
-            st.download_button(
-                label="📥 Download Corrected Source (XLSX)",
-                data=corrected_xlsx.getvalue(),
-                file_name=f"Paycom_Cleaned_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="pc_corrected_xlsx_dl"
-            )
 
-        st.markdown("---")
-        
-    elif "Generate Entire New" in action or "Update Existing" in action:
-        is_selective = ("Update Existing" in action)
-        
-        uzio_template_file = None
-        selected_uzio_cols = []
-        df_template = None
-        job_seeds = {}
-        loc_seeds = {}
-        
-        if is_selective:
-            st.info("💡 **Mode: Selective Update**. We will update specific columns for employees in your source file into an existing Uzio template.")
-            
-            from utils.audit_utils import UZIO_RAW_MAPPING, read_uzio_raw_file, extract_mappings_from_uzio
-            
-            available_cols = list(UZIO_RAW_MAPPING.keys())
-            selected_uzio_cols = st.multiselect(
-                "🎯 Select Uzio Columns to Sync/Update",
-                options=available_cols,
-                default=["Employee SSN"] if "Employee SSN" in available_cols else [],
-                help="Only these columns will be modified in the uploaded template.",
-                key="pc_sel_cols_v2"
-            )
-            if not selected_uzio_cols:
-                st.warning("Please select at least one column to update.")
+        corrected_xlsx = io.BytesIO()
+        df_download.to_excel(corrected_xlsx, index=False, engine='openpyxl')
+        corrected_xlsx.seek(0)
+        st.download_button(
+            label="📥 Download Corrected Source (XLSX)",
+            data=corrected_xlsx.getvalue(),
+            file_name=f"Paycom_Cleaned_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
-            uzio_template_file = st.file_uploader("📤 Upload Pre-filled Uzio Template (.xlsm)", type=["xlsm"], key="pc_uzio_template_v2")
-            
-            if uzio_template_file:
-                df_template = read_uzio_raw_file(uzio_template_file)
+def render_census_generator():
+    st.title("Paycom - Census Generator")
+    st.markdown("""
+    **Instructions**:
+    1. Upload your **Paycom Census Export**.
+    2. Map **Job Titles** and **Work Locations**.
+    3. Download the fresh **Uzio Census Template**.
+    """)
+    
+    paycom_file = st.file_uploader("Upload Paycom Census Export", type=["xlsx", "csv"], key="pc_gen_upload")
+    if not paycom_file: return
+
+    df_paycom, _, _, resolved_field_map = preprocess_paycom_file(paycom_file)
+    if df_paycom is None: return
+
+    fix_options = render_auto_fix_options("pc_gen")
+    
+    # Mapping Logic
+    src_job_col = resolved_field_map.get('Job Title')
+    src_loc_col = resolved_field_map.get('Work Location')
+    unique_jobs = sorted([str(j).strip() for j in df_paycom[src_job_col].dropna().unique()]) if src_job_col else []
+    unique_locs = sorted([str(l).strip() for l in df_paycom[src_loc_col].dropna().unique()]) if src_loc_col else []
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("**Job Title Mapping**")
+        edited_jobs = st.data_editor(
+            pd.DataFrame({"Source Job Title": unique_jobs, "Mapped Uzio Job Title": [None]*len(unique_jobs)}),
+            column_config={"Mapped Uzio Job Title": st.column_config.SelectboxColumn("Select Uzio Role", options=ALLOWED_JOB_TITLES, required=True)},
+            hide_index=True, use_container_width=True, key="pc_job_editor"
+        )
+    with col2:
+        st.write("**Work Location Mapping**")
+        edited_locs = st.data_editor(
+            pd.DataFrame({"Source Work Location": unique_locs, "Mapped Uzio Work Location": [""]*len(unique_locs)}),
+            column_config={"Mapped Uzio Work Location": st.column_config.TextColumn("Enter Uzio Location", required=True)},
+            hide_index=True, use_container_width=True, key="pc_loc_editor"
+        )
+
+    if st.button("Generate Uzio Template", type="primary", key="pc_gen_btn"):
+        with st.spinner("Processing..."):
+            try:
+                job_dict = dict(zip(edited_jobs['Source Job Title'], edited_jobs['Mapped Uzio Job Title']))
+                loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
                 
-                if df_template is not None:
-                    # Auto-fetch mappings
-                    with st.spinner("Auto-fetching mappings from template..."):
-                        job_seeds, loc_seeds = extract_mappings_from_uzio(df_paycom, df_template, resolved_field_map)
-                        if job_seeds or loc_seeds:
-                            st.success(f"✅ Auto-fetched {len(job_seeds)} Job Roles and {len(loc_seeds)} Work Locations from the template.")
+                df_uzio = generate_uzio_template(df_paycom, resolved_field_map, fix_options=fix_options)
+                
+                # Apply Mappings
+                if src_job_col: df_uzio['Job Title'] = df_paycom[src_job_col].astype(str).str.strip().map(job_dict).fillna(df_paycom[src_job_col])
+                if src_loc_col: df_uzio['Work Location'] = df_paycom[src_loc_col].astype(str).str.strip().map(loc_dict).fillna(df_paycom[src_loc_col])
 
-        st.markdown("---")
-        st.markdown("### Step 2: Map Data to Uzio Format")
-        st.markdown("Please map the unique Job Titles and Work Locations found in your source file to the acceptable Uzio formats.")
+                # Inject into template
+                from utils.audit_utils import inject_into_uzio_template
+                wb = inject_into_uzio_template(df_uzio, template_path="templates/Uzio_Census_Template.xlsm")
+                out = io.BytesIO()
+                wb.save(out)
+                out.seek(0)
 
-        src_job_col = resolved_field_map.get('Job Title')
-        src_loc_col = resolved_field_map.get('Work Location')
+                st.success("Template Generated!")
+                st.download_button("Download Uzio Template", out.getvalue(), f"Uzio_Paycom_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12")
+            except Exception as e:
+                st.error(f"Error: {e}")
 
-        # Extract unique Jobs
-        unique_jobs = []
-        if src_job_col and src_job_col in df_paycom.columns:
-            unique_jobs = sorted([str(j).strip() for j in df_paycom[src_job_col].dropna().unique() if str(j).strip()])
+def render_selective_census_generator():
+    st.title("Paycom - Selective Census Generator")
+    st.markdown("""
+    **Instructions**:
+    1. Upload your **Paycom Census Export**.
+    2. Select columns to update and upload an existing **Uzio Template**.
+    3. Download the updated template.
+    """)
+    
+    paycom_file = st.file_uploader("Upload Paycom Census Export", type=["xlsx", "csv"], key="pc_sel_upload")
+    if not paycom_file: return
 
-        # Extract unique Locations
-        unique_locs = []
-        if src_loc_col and src_loc_col in df_paycom.columns:
-            unique_locs = sorted([str(l).strip() for l in df_paycom[src_loc_col].dropna().unique() if str(l).strip()])
+    df_paycom, _, _, resolved_field_map = preprocess_paycom_file(paycom_file)
+    if df_paycom is None: return
 
-        # Create mapping dataframes for the editor
-        # Seed with auto-fetched values
-        job_map_list = [job_seeds.get(j) for j in unique_jobs]
-        loc_map_list = [loc_seeds.get(l, "") for l in unique_locs]
+    fix_options = render_auto_fix_options("pc_sel")
+    
+    from utils.audit_utils import UZIO_RAW_MAPPING, read_uzio_raw_file, extract_mappings_from_uzio
+    selected_uzio_cols = st.multiselect("🎯 Select Uzio Columns to Sync/Update", options=list(UZIO_RAW_MAPPING.keys()), default=["Employee SSN"], key="pc_sel_cols")
+    
+    uzio_template_file = st.file_uploader("📤 Upload Pre-filled Uzio Template (.xlsm)", type=["xlsm"], key="pc_uzio_template_v2")
+    
+    job_seeds, loc_seeds = {}, {}
+    if uzio_template_file:
+        df_seeds = read_uzio_raw_file(uzio_template_file)
+        if df_seeds is not None:
+            job_seeds, loc_seeds = extract_mappings_from_uzio(df_paycom, df_seeds, resolved_field_map)
+        uzio_template_file.seek(0)
 
-        df_job_map = pd.DataFrame({
-            "Source Job Title": unique_jobs, 
-            "Mapped Uzio Job Title": pd.Series(job_map_list, dtype="object")
-        })
-        df_loc_map = pd.DataFrame({
-            "Source Work Location": unique_locs, 
-            "Mapped Uzio Work Location": pd.Series(loc_map_list, dtype=str)
-        })
+    src_job_col = resolved_field_map.get('Job Title')
+    src_loc_col = resolved_field_map.get('Work Location')
+    unique_jobs = sorted([str(j).strip() for j in df_paycom[src_job_col].dropna().unique()]) if src_job_col else []
+    unique_locs = sorted([str(l).strip() for l in df_paycom[src_loc_col].dropna().unique()]) if src_loc_col else []
 
-        col1, col2 = st.columns(2)
+    col1, col2 = st.columns(2)
+    with col1:
+        edited_jobs = st.data_editor(
+            pd.DataFrame({"Source Job Title": unique_jobs, "Mapped Uzio Job Title": [job_seeds.get(j) for j in unique_jobs]}),
+            column_config={"Mapped Uzio Job Title": st.column_config.SelectboxColumn("Select Uzio Role", options=ALLOWED_JOB_TITLES, required=True)},
+            hide_index=True, use_container_width=True, key="pc_job_editor_sel"
+        )
+    with col2:
+        edited_locs = st.data_editor(
+            pd.DataFrame({"Source Work Location": unique_locs, "Mapped Uzio Work Location": [loc_seeds.get(l, "") for l in unique_locs]}),
+            column_config={"Mapped Uzio Work Location": st.column_config.TextColumn("Enter Uzio Location", required=True)},
+            hide_index=True, use_container_width=True, key="pc_loc_editor_sel"
+        )
 
-        with col1:
-            st.write("**Job Title Mapping**")
-            edited_jobs = st.data_editor(
-                df_job_map, 
-                column_config={
-                    "Source Job Title": st.column_config.Column(disabled=True),
-                    "Mapped Uzio Job Title": st.column_config.SelectboxColumn("Select Uzio Role", options=ALLOWED_JOB_TITLES, required=True)
-                },
-                hide_index=True,
-                use_container_width=True,
-                key="pc_job_editor"
-            )
+    if st.button("Update Uzio Template", type="primary", key="pc_gen_btn_sel"):
+        if not uzio_template_file: return st.error("Upload Uzio Template first.")
+        with st.spinner("Processing..."):
+            try:
+                from utils.audit_utils import read_uzio_template_df, selective_update_uzio
+                df_template = read_uzio_template_df(uzio_template_file)
+                df_uzio, summary, _ = selective_update_uzio(df_paycom, df_template, selected_uzio_cols, resolved_field_map, fix_options=fix_options)
+                
+                # Apply Mappings
+                job_dict = dict(zip(edited_jobs['Source Job Title'], edited_jobs['Mapped Uzio Job Title']))
+                loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
+                if src_job_col: df_uzio['Job Title'] = df_paycom[src_job_col].astype(str).str.strip().map(job_dict).fillna(df_paycom[src_job_col])
+                if src_loc_col: df_uzio['Work Location'] = df_paycom[src_loc_col].astype(str).str.strip().map(loc_dict).fillna(df_paycom[src_loc_col])
 
-        with col2:
-            st.write("**Work Location Mapping**")
-            edited_locs = st.data_editor(
-                df_loc_map,
-                column_config={
-                    "Source Work Location": st.column_config.Column(disabled=True),
-                    "Mapped Uzio Work Location": st.column_config.TextColumn("Enter Uzio Location", required=True)
-                },
-                hide_index=True,
-                use_container_width=True,
-                key="pc_loc_editor"
-            )
+                from utils.audit_utils import inject_into_uzio_template
+                uzio_template_file.seek(0)
+                wb = inject_into_uzio_template(df_uzio, uzio_template_file)
+                out = io.BytesIO()
+                wb.save(out)
+                out.seek(0)
 
-        # Check if mapping is completely filled out
-        job_map_complete = not edited_jobs['Mapped Uzio Job Title'].isna().any() if not edited_jobs.empty else True
-        loc_map_complete = not edited_locs['Mapped Uzio Work Location'].isna().any() and not (edited_locs['Mapped Uzio Work Location'] == "").any() if not edited_locs.empty else True
+                st.success(summary)
+                st.download_button("Download Updated Template", out.getvalue(), f"Uzio_Updated_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsm")
+            except Exception as e:
+                st.error(f"Error: {e}")
 
-        if not job_map_complete or not loc_map_complete:
-            st.warning("Please fill out all mappings in the tables above before generating the template.")
-            return
-
-        # (Fix options now handled globally)
-
-        st.markdown("---")
-        st.markdown("### Step 4: Finalize & Generate")
-
-        # --- STEP 4: Generate Template (only on button click) ---
-        btn_label = "Update Uzio Template" if is_selective else "Generate Uzio Template"
-        if st.button(btn_label, type="primary", key="pc_gen_btn"):
-            if is_selective and not uzio_template_file:
-                st.error("Please upload the Pre-filled Uzio Template first.")
-                return
-            if is_selective and not selected_uzio_cols:
-                st.error("Please select at least one column to update.")
-                return
-
-            with st.spinner("Processing..."):
-                try:
-                    # 1. Prepare Mappings (Job Titles and Locations)
-                    job_dict = {}
-                    if src_job_col and src_job_col in df_paycom.columns:
-                        job_dict = dict(zip(edited_jobs['Source Job Title'], edited_jobs['Mapped Uzio Job Title']))
-                    
-                    loc_dict = {}
-                    if src_loc_col and src_loc_col in df_paycom.columns:
-                        loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
-
-                    # 2. Logic Branch: Full vs Selective
-                    
-                    # Pre-process DOL_Status if requested (affects Employment Type)
-                    if fix_dol_status and col_dol and col_emp_status:
-                        type_col = resolved_field_map.get('Employment Type')
-                        if type_col and type_col in df_paycom.columns:
-                            # Find active employees with blank DOL_Status
-                            active_mask = ~df_paycom[col_emp_status].astype(str).str.lower().str.strip().str.contains('term') & (df_paycom[col_emp_status].astype(str).str.lower().str.strip() != 'inactive')
-                            blank_dol_mask = df_paycom[col_dol].isna() | (df_paycom[col_dol].astype(str).str.strip() == "")
-                            # Set their source Employment Type column to Full-Time so it flows into Uzio
-                            df_paycom.loc[active_mask & blank_dol_mask, type_col] = 'Full-Time'
-
-                    if is_selective:
-                        from utils.audit_utils import read_uzio_template_df, selective_update_uzio
-                        
-                        # Read template
-                        df_template = read_uzio_template_df(uzio_template_file)
-                        if df_template is None:
-                            st.error("Could not read Uzio template. Please ensure it's a valid .xlsm file with an 'Employee Details' sheet.")
-                            return
-                        
-                        # Perform Merge
-                        df_uzio, summary, df_changes = selective_update_uzio(df_paycom, df_template, selected_uzio_cols, resolved_field_map, fix_options=fix_options)
-                        
-                        # Apply Position Fix (Optional)
-                        if fix_position and col_dep and col_dep in df_paycom.columns:
-                            # The target column in Uzio is 'Job Title' (which maps to 'Position' in Uzio Master Template)
-                            if 'Job Title' in df_uzio.columns and 'Job Title' in selected_uzio_cols:
-                                missing_pos_mask = df_uzio['Job Title'].isna() | (df_uzio['Job Title'].astype(str).str.strip() == "")
-                                # Note: selective_update_uzio handles merging, so we just fill blanks in the final df_uzio
-                                df_uzio.loc[missing_pos_mask, 'Job Title'] = df_paycom.loc[missing_pos_mask, col_dep]
-                        
-                        st.info(summary)
-                        if not df_changes.empty:
-                            with st.expander("View Changes Preview", expanded=False):
-                                st.dataframe(df_changes, hide_index=True, use_container_width=True)
-                    else:
-                        # Full Generation
-                        df_uzio = generate_uzio_template(df_paycom, resolved_field_map, fix_options=fix_options)
-                        
-                        # Apply Job Title Mapping
-                        if src_job_col and src_job_col in df_paycom.columns:
-                            stripped_jobs = df_paycom[src_job_col].astype(str).str.strip()
-                            df_uzio['Job Title'] = stripped_jobs.map(job_dict).fillna(df_paycom[src_job_col])
-                        
-                        # Apply Work Location Mapping
-                        if src_loc_col and src_loc_col in df_paycom.columns:
-                            stripped_locs = df_paycom[src_loc_col].astype(str).str.strip()
-                            df_uzio['Work Location'] = stripped_locs.map(loc_dict).fillna(df_paycom[src_loc_col])
-
-                        # Apply Position Fix (Optional)
-                        if fix_position and col_dep and col_dep in df_paycom.columns:
-                            # The target column in Uzio is 'Job Title' (which maps to 'Position' in Uzio Master Template)
-                            if 'Job Title' in df_uzio.columns:
-                                missing_pos_mask = df_uzio['Job Title'].isna() | (df_uzio['Job Title'].astype(str).str.strip() == "")
-                                df_uzio.loc[missing_pos_mask, 'Job Title'] = df_paycom.loc[missing_pos_mask, col_dep]
-
-                    # Apply Job Title Mapping
-                    if src_job_col and src_job_col in df_paycom.columns:
-                        job_dict = dict(zip(edited_jobs['Source Job Title'], edited_jobs['Mapped Uzio Job Title']))
-                        stripped_jobs = df_paycom[src_job_col].astype(str).str.strip()
-                        df_uzio['Job Title'] = stripped_jobs.map(job_dict).fillna(df_paycom[src_job_col])
-
-                    # Apply Work Location Mapping
-                    if src_loc_col and src_loc_col in df_paycom.columns:
-                        loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
-                        stripped_locs = df_paycom[src_loc_col].astype(str).str.strip()
-                        df_uzio['Work Location'] = stripped_locs.map(loc_dict).fillna(df_paycom[src_loc_col])
-
-                    # Sort by management hierarchy for Uzio sheet if requested
-                    if sort_by_manager:
-                        # Find the Employee ID column in df_uzio (case-insensitive)
-                        uzio_id_col = next(
-                            (c for c in df_uzio.columns
-                             if str(c).strip().lower().replace('_', ' ') == 'employee id' or str(c).strip().lower() == 'employee id*'),
-                            None
-                        )
-                        # Find the Reports To ID column in Uzio template (mapped from Paycom col_sup_col)
-                        uzio_sup_col = 'Reports To Associate ID' if 'Reports To Associate ID' in df_uzio.columns else 'Reports To ID'
-                        
-                        if uzio_id_col and uzio_id_col in df_uzio.columns and uzio_sup_col in df_uzio.columns:
-                            # Count reportees using the IDs present in the Uzio dataset
-                            sup_counts_uz = df_uzio[df_uzio[uzio_sup_col].notna() & (df_uzio[uzio_sup_col].astype(str).str.strip() != "")][uzio_sup_col].value_counts().to_dict()
-                            
-                            df_uzio['__mgr_sort_uz'] = df_uzio[uzio_id_col].astype(str).str.strip().map(lambda x: sup_counts_uz.get(x, 0))
-                            df_uzio = df_uzio.sort_values(by='__mgr_sort_uz', ascending=False, kind='stable').drop(columns=['__mgr_sort_uz'])
-
-                    # Validate Uzio Data
-                    from utils.audit_utils import validate_uzio_data
-                    df_errors = validate_uzio_data(df_uzio)
-
-                    if not df_errors.empty:
-                        st.warning("Some mandatory fields are blank or missing in the generated census. Please download the Validation Errors report.")
-                        err_out = io.BytesIO()
-                        df_errors.to_csv(err_out, index=False)
-                        err_out.seek(0)
-
-                        st.download_button(
-                            label="Download Validation Errors (CSV)",
-                            data=err_out.getvalue(),
-                            file_name=f"Validation_Errors_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
-                            mime="text/csv"
-                        )
-
-                    # Inject into the Master Template
-                    from utils.audit_utils import inject_into_uzio_template
-                    if is_selective:
-                        uzio_template_file.seek(0)
-                        wb = inject_into_uzio_template(df_uzio, uzio_template_file)
-                    else:
-                        wb = inject_into_uzio_template(df_uzio, template_path="templates/Uzio_Census_Template.xlsm")
-
-                    # Write to buffer
-                    out = io.BytesIO()
-                    wb.save(out)
-                    out.seek(0)
-
-                    st.success("Uzio Template Generated Successfully!")
-                    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
-                    st.download_button(
-                        label="Download Uzio Template",
-                        data=out.getvalue(),
-                        file_name=f"Uzio_Census_Template_Paycom_{timestamp}.xlsm",
-                        mime="application/vnd.ms-excel.sheet.macroEnabled.12"
-                    )
-
-                    # Export logic for Sanity Fixes
-                    fix_logs_df = getattr(df_uzio, 'attrs', {}).get('fix_logs', None)
-                    if fix_logs_df is not None and not fix_logs_df.empty:
-                        fix_out = io.BytesIO()
-                        fix_logs_df.to_csv(fix_out, index=False)
-                        fix_out.seek(0)
-                        st.download_button(
-                            label="Download Auto-Corrections Log (CSV)",
-                            data=fix_out.getvalue(),
-                            file_name=f"Auto_Corrections_Log_Paycom_{timestamp}.csv",
-                            mime="text/csv",
-                            key="paycom_fix_log_dl"
-                        )
-                except Exception as e:
-                    import traceback
-                    error_traceback = traceback.format_exc()
-                    st.error(f"**Error generating template:** {e}")
-                    with st.expander("View Detailed Error Log (Traceback)", expanded=False):
-                        st.code(error_traceback, language="python")
+def render_ui():
+    """Dispatcher for app.py (Optional)"""
+    st.sidebar.title("Census Tools")
+    tool = st.sidebar.selectbox("Select Tool", ["Sanity Check", "Full Generation", "Selective Sync"], key="pc_tool_select")
+    if tool == "Sanity Check": render_census_sanity_check()
+    elif tool == "Full Generation": render_census_generator()
+    else: render_selective_census_generator()

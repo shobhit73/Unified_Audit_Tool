@@ -123,7 +123,9 @@ with st.sidebar:
             "ADP - Deduction Audit", 
             "ADP - Prior Payroll Audit",
             "ADP - Census Audit",
-            "ADP - Census Generator",
+            "ADP - Census Sanity Check",
+            "ADP - Full Census Generation",
+            "ADP - Selective Census Sync",
             "ADP - Prior Payroll Generator",
             "ADP - Payment Audit",
             "ADP - Emergency Contact Audit",
@@ -136,7 +138,9 @@ with st.sidebar:
         st.markdown('<div class="provider-header">Paycom Tools</div>', unsafe_allow_html=True)
         tool_option = st.radio("Select Paycom Tool", [
             "Paycom - Census Audit",
-            "Paycom - Census Generator",
+            "Paycom - Census Sanity Check",
+            "Paycom - Full Census Generation",
+            "Paycom - Selective Census Sync",
             "Paycom - Prior Payroll Generator",
             "Paycom - Withholding Audit",
             "Paycom - Payment Audit",
@@ -167,10 +171,20 @@ elif tool_option == "ADP - Census Audit":
     importlib.reload(census_audit)
     census_audit.render_ui()
 
-elif tool_option == "ADP - Census Generator":
+elif tool_option == "ADP - Census Sanity Check":
     from apps.adp import census_generator
     importlib.reload(census_generator)
-    census_generator.render_ui()
+    census_generator.render_census_sanity_check()
+
+elif tool_option == "ADP - Full Census Generation":
+    from apps.adp import census_generator
+    importlib.reload(census_generator)
+    census_generator.render_census_generator()
+
+elif tool_option == "ADP - Selective Census Sync":
+    from apps.adp import census_generator
+    importlib.reload(census_generator)
+    census_generator.render_selective_census_generator()
 
 elif tool_option == "ADP - Prior Payroll Generator":
     from apps.adp import prior_payroll_generator
@@ -202,10 +216,20 @@ elif tool_option == "Paycom - Census Audit":
     importlib.reload(census_audit)
     census_audit.render_ui()
 
-elif tool_option == "Paycom - Census Generator":
+elif tool_option == "Paycom - Census Sanity Check":
     from apps.paycom import census_generator
     importlib.reload(census_generator)
-    census_generator.render_ui()
+    census_generator.render_census_sanity_check()
+
+elif tool_option == "Paycom - Full Census Generation":
+    from apps.paycom import census_generator
+    importlib.reload(census_generator)
+    census_generator.render_census_generator()
+
+elif tool_option == "Paycom - Selective Census Sync":
+    from apps.paycom import census_generator
+    importlib.reload(census_generator)
+    census_generator.render_selective_census_generator()
 
 elif tool_option == "Paycom - Prior Payroll Generator":
     from apps.paycom import prior_payroll_generator

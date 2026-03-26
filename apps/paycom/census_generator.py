@@ -200,28 +200,16 @@ def render_census_sanity_check():
     st.markdown("### 🗺️ Mapping Configuration (Optional)")
     st.info("Provide mappings here to include them in the **Corrected Source** download.")
     
-    src_job_col = resolved_field_map.get('Job Title')
     src_loc_col = resolved_field_map.get('Work Location')
-    unique_jobs = sorted([str(j).strip() for j in df_paycom[src_job_col].dropna().unique()]) if src_job_col and src_job_col in df_paycom.columns else []
     unique_locs = sorted([str(l).strip() for l in df_paycom[src_loc_col].dropna().unique()]) if src_loc_col and src_loc_col in df_paycom.columns else []
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write("**Job Title Mapping**")
-        edited_jobs = st.data_editor(
-            pd.DataFrame({"Source Job Title": unique_jobs, "Mapped Uzio Job Title": [None]*len(unique_jobs)}),
-            column_config={"Mapped Uzio Job Title": st.column_config.SelectboxColumn("Select Uzio Role", options=ALLOWED_JOB_TITLES, required=False)},
-            hide_index=True, use_container_width=True, key="pc_sanity_job_editor"
-        )
-    with col2:
-        st.write("**Work Location Mapping**")
-        edited_locs = st.data_editor(
-            pd.DataFrame({"Source Work Location": unique_locs, "Mapped Uzio Work Location": [""]*len(unique_locs)}),
-            column_config={"Mapped Uzio Work Location": st.column_config.TextColumn("Enter Uzio Location", required=False)},
-            hide_index=True, use_container_width=True, key="pc_sanity_loc_editor"
-        )
+    st.write("**Work Location Mapping**")
+    edited_locs = st.data_editor(
+        pd.DataFrame({"Source Work Location": unique_locs, "Mapped Uzio Work Location": [""]*len(unique_locs)}),
+        column_config={"Mapped Uzio Work Location": st.column_config.TextColumn("Enter Uzio Location", required=False)},
+        hide_index=True, use_container_width=True, key="pc_sanity_loc_editor"
+    )
     
-    job_dict = dict(zip(edited_jobs['Source Job Title'], edited_jobs['Mapped Uzio Job Title']))
     loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
 
     st.markdown("---")
@@ -293,8 +281,6 @@ def render_census_sanity_check():
             df_download.loc[mask_blank_dol, col_dol] = "Full-Time"
 
         # Apply Mappings to download file
-        if src_job_col and src_job_col in df_download.columns:
-            df_download[src_job_col] = df_download[src_job_col].astype(str).str.strip().map(lambda x: job_dict.get(x, x))
         if src_loc_col and src_loc_col in df_download.columns:
             df_download[src_loc_col] = df_download[src_loc_col].astype(str).str.strip().map(lambda x: loc_dict.get(x, x))
 

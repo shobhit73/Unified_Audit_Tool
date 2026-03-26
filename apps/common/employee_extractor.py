@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
-from utils.audit_utils import check_duplicate_columns
+from utils.audit_utils import check_duplicate_columns, format_datetime_strings
 
 def render_employee_extractor():
     st.title("Selective Employee Extractor (Selective Sync & Sequence)")
@@ -137,15 +137,20 @@ def render_employee_extractor():
     # Final column subset
     df_result = df_result[selected_cols]
 
-    # 7. DATA CLEANING (Paycom Exception + Timestamp cleanup)
+    # 7. DATA CLEANING
     for col in df_result.columns:
-        # Clear 00/00/0000 dates
+        # Clear 00/00/0000 dates (Paycom exception)
         if df_result[col].astype(str).str.contains('00/00/0000', regex=False).any():
             df_result[col] = df_result[col].replace('00/00/0000', '')
-        
-        # Cleanup trailing 00:00:00 from pandas read_excel(dtype=str)
-        if df_result[col].astype(str).str.endswith(' 00:00:00').any():
-            df_result[col] = df_result[col].astype(str).str.replace(' 00:00:00', '', regex=False).replace('nan', '')
+
+    # Auto-detect and format all date-like columns to MM/DD/YYYY
+    date_keywords = ['date', 'dob', 'birth', 'hire', 'termination', 'expir', 'expiration']
+    date_like_cols = [
+        col for col in df_result.columns
+        if any(kw in str(col).lower() for kw in date_keywords)
+    ]
+    if date_like_cols:
+        df_result = format_datetime_strings(df_result, date_like_cols)
 
     # 8. RESULTS & DOWNLOAD
     st.markdown("---")

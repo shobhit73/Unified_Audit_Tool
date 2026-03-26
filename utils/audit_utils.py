@@ -58,6 +58,67 @@ def format_datetime_strings(df, columns):
             df[col] = df[col].apply(_clean_date_val)
     return df
 
+# --- US State Name to Abbreviation ---
+US_STATE_TO_ABBR = {
+    'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR',
+    'california': 'CA', 'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE',
+    'florida': 'FL', 'georgia': 'GA', 'hawaii': 'HI', 'idaho': 'ID',
+    'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA', 'kansas': 'KS',
+    'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
+    'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS',
+    'missouri': 'MO', 'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV',
+    'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',
+    'north carolina': 'NC', 'north dakota': 'ND', 'ohio': 'OH', 'oklahoma': 'OK',
+    'oregon': 'OR', 'pennsylvania': 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
+    'south dakota': 'SD', 'tennessee': 'TN', 'texas': 'TX', 'utah': 'UT',
+    'vermont': 'VT', 'virginia': 'VA', 'washington': 'WA', 'west virginia': 'WV',
+    'wisconsin': 'WI', 'wyoming': 'WY', 'district of columbia': 'DC',
+    'puerto rico': 'PR', 'guam': 'GU', 'virgin islands': 'VI',
+    'american samoa': 'AS', 'northern mariana islands': 'MP',
+}
+# Common misspellings
+US_STATE_TO_ABBR['forida'] = 'FL'
+US_STATE_TO_ABBR['califronia'] = 'CA'
+US_STATE_TO_ABBR['massachuetts'] = 'MA'
+US_STATE_TO_ABBR['pennsylvannia'] = 'PA'
+US_STATE_TO_ABBR['conneticut'] = 'CT'
+US_STATE_TO_ABBR['tennesee'] = 'TN'
+US_STATE_TO_ABBR['missisippi'] = 'MS'
+US_STATE_TO_ABBR['flordia'] = 'FL'
+US_STATE_TO_ABBR['goergia'] = 'GA'
+US_STATE_TO_ABBR['viginia'] = 'VA'
+US_STATE_TO_ABBR['west virgnia'] = 'WV'
+US_STATE_TO_ABBR['minnesotta'] = 'MN'
+US_STATE_TO_ABBR['louisianna'] = 'LA'
+
+# Reverse map for validation (abbreviation -> True)
+VALID_ABBRS = set(US_STATE_TO_ABBR.values())
+
+def convert_state_to_abbreviation(df, column):
+    """
+    Converts full US state names in the given column to 2-letter abbreviations.
+    Already-abbreviated values are uppercased. Non-state values are left untouched.
+    """
+    if column not in df.columns:
+        return df
+    
+    def _convert(val):
+        if pd.isna(val) or str(val).strip() == '':
+            return ''
+        val_clean = str(val).strip()
+        # If already a valid 2-letter abbreviation (case-insensitive)
+        if val_clean.upper() in VALID_ABBRS:
+            return val_clean.upper()
+        # Try full name lookup
+        lookup = val_clean.lower().strip()
+        if lookup in US_STATE_TO_ABBR:
+            return US_STATE_TO_ABBR[lookup]
+        # Not a recognized state — return as-is (could be a license number, etc.)
+        return val_clean
+    
+    df[column] = df[column].apply(_convert)
+    return df
+
 # --- Hardcoded Mappings ---
 
 # Map Uzio Raw Headers -> Internal Standard Names

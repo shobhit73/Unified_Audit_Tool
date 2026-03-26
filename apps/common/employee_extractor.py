@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
-from utils.audit_utils import check_duplicate_columns, format_datetime_strings
+from utils.audit_utils import check_duplicate_columns, format_datetime_strings, convert_state_to_abbreviation
 
 def render_employee_extractor():
     st.title("Selective Employee Extractor (Selective Sync & Sequence)")
@@ -179,6 +179,10 @@ def render_employee_extractor():
     ]
     if date_like_cols:
         df_result = format_datetime_strings(df_result, date_like_cols)
+
+    # Convert full state names to 2-letter abbreviations (License/Emergency reports)
+    if 'Issued By' in df_result.columns:
+        df_result = convert_state_to_abbreviation(df_result, 'Issued By')
 
     # 8. RESULTS & DOWNLOAD
     st.markdown("---")

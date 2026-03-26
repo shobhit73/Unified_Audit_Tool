@@ -284,12 +284,13 @@ def render_census_sanity_check():
         if src_loc_col and src_loc_col in df_download.columns:
             df_download[src_loc_col] = df_download[src_loc_col].astype(str).str.strip().map(lambda x: loc_dict.get(x, x))
 
-        # Standardize Date Formats to MM/DD/YYYY
+        # Standardize ALL Date Columns to MM/DD/YYYY
         date_cols = [
-            resolved_field_map.get('Hire Date'),
-            resolved_field_map.get('Birth Date'),
-            resolved_field_map.get('Termination Date'),
-            resolved_field_map.get('Effective Date')
+            resolved_field_map.get('Hire Date'),              # Most_Recent_Hire_Date
+            resolved_field_map.get('Original Hire Date'),     # Hire_Date
+            resolved_field_map.get('Termination Date'),       # Termination_Date
+            resolved_field_map.get('DOB'),                    # Birth_Date_(MM/DD/YYYY)
+            resolved_field_map.get('License Expiration Date'),# DLExpirationDate
         ]
         date_cols = [c for c in date_cols if c is not None]
         df_download = format_datetime_strings(df_download, date_cols)

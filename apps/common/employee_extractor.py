@@ -118,34 +118,43 @@ def render_employee_extractor():
             st.warning("Both Reference File and Manual IDs provided. **Using Manual List** for final sequence.")
         ordered_ids = manual_ids
 
-    # --- ID MISMATCH FLAGGING (Source vs Reference) ---
-    # Normalize helper: strip hyphens, spaces, leading zeros (for matching only)
-    def _normalize_id(val):
-        """Normalize an ID for matching: strip hyphens, spaces, leading zeros."""
-        s = str(val).strip().replace('-', '').replace(' ', '')
-        return s.lstrip('0') or '0'  # Keep at least '0' if all zeros
+    # --- PROGRESSIVE ID MATCHING HELPERS ---
+    def _strip_separators(val):
+        """Level 2: strip hyphens and spaces only."""
+        return str(val).strip().replace('-', '').replace(' ', '')
     
+    def _strip_all(val):
+        """Level 3: strip hyphens, spaces, AND leading zeros."""
+        s = _strip_separators(val)
+        return s.lstrip('0') or '0'
+
+    # Try to find a name column for collision alerts
+    name_col = None
+    for c in all_cols:
+        cl = str(c).lower().strip()
+        if cl in ['name', 'legal first name', 'legal_firstname', 'first name']:
+            name_col = c
+            break
+
+    # --- ID MISMATCH FLAGGING (Source vs Reference) ---
     if ref_ids_set and not manual_ids_input.strip():
-        source_ids_norm = set(_normalize_id(x) for x in df_source[id_col_source].astype(str).str.strip().dropna().unique())
-        ref_ids_norm = set(_normalize_id(x) for x in ref_ids_set)
+        source_ids_raw = set(df_source[id_col_source].astype(str).str.strip().dropna().unique())
+        source_ids_l2 = set(_strip_separators(x) for x in source_ids_raw)
+        ref_ids_l2 = set(_strip_separators(x) for x in ref_ids_set)
         
-        in_ref_not_source = sorted(ref_ids_set - set(df_source[id_col_source].astype(str).str.strip().dropna().unique()))
-        in_source_not_ref = sorted(set(df_source[id_col_source].astype(str).str.strip().dropna().unique()) - ref_ids_set)
+        in_ref_not_source = sorted([x for x in ref_ids_set if _strip_separators(x) not in source_ids_l2])
+        in_source_not_ref = sorted([x for x in source_ids_raw if _strip_separators(x) not in ref_ids_l2])
         
-        # Use normalized comparison for accurate flagging
-        in_ref_not_source_norm = sorted([x for x in ref_ids_set if _normalize_id(x) not in source_ids_norm])
-        in_source_not_ref_norm = sorted([x for x in df_source[id_col_source].astype(str).str.strip().dropna().unique() if _normalize_id(x) not in ref_ids_norm])
-        
-        if in_ref_not_source_norm or in_source_not_ref_norm:
+        if in_ref_not_source or in_source_not_ref:
             st.warning(f"⚠️ **ID Mismatch Detected** — Sequencing may be affected!")
-            if in_ref_not_source_norm:
-                with st.expander(f"🟡 {len(in_ref_not_source_norm)} ID(s) in Uzio Reference but MISSING from Source", expanded=False):
+            if in_ref_not_source:
+                with st.expander(f"🟡 {len(in_ref_not_source)} ID(s) in Uzio Reference but MISSING from Source", expanded=False):
                     st.markdown("These employees exist in your Uzio template but were **not found** in the uploaded source file. They will be **skipped** in the output.")
-                    st.dataframe(pd.DataFrame({"Missing Employee ID": in_ref_not_source_norm}), hide_index=True, use_container_width=True)
-            if in_source_not_ref_norm:
-                with st.expander(f"🔵 {len(in_source_not_ref_norm)} ID(s) in Source but MISSING from Uzio Reference", expanded=False):
+                    st.dataframe(pd.DataFrame({"Missing Employee ID": in_ref_not_source}), hide_index=True, use_container_width=True)
+            if in_source_not_ref:
+                with st.expander(f"🔵 {len(in_source_not_ref)} ID(s) in Source but MISSING from Uzio Reference", expanded=False):
                     st.markdown("These employees exist in your source file but are **not listed** in the Uzio reference. They will be **excluded** from the output since sequencing follows the reference order.")
-                    st.dataframe(pd.DataFrame({"Extra Employee ID": in_source_not_ref_norm}), hide_index=True, use_container_width=True)
+                    st.dataframe(pd.DataFrame({"Extra Employee ID": in_source_not_ref}), hide_index=True, use_container_width=True)
         else:
             st.success("✅ All IDs match perfectly between Source and Uzio Reference!")
 
@@ -153,30 +162,88 @@ def render_employee_extractor():
         st.info("Waiting for Reference File or Manual ID list to define the sequence...")
         return
 
-    # 6. EXTRACTION LOGIC (Fuzzy ID Matching)
-    # Build a normalized index: normalized_id -> list of original source IDs
+    # 6. EXTRACTION LOGIC — 3-Level Progressive Matching
     df_source[id_col_source] = df_source[id_col_source].astype(str).str.strip()
+    source_id_set = set(df_source[id_col_source].tolist())
     
-    # Create temp normalized column for matching (will be dropped before output)
-    df_source['__norm_id'] = df_source[id_col_source].apply(_normalize_id)
+    # Build Level 2 & Level 3 lookup indexes: normalized -> [list of original source IDs]
+    from collections import defaultdict
+    l2_index = defaultdict(set)  # separator-stripped -> original IDs
+    l3_index = defaultdict(set)  # fully-stripped -> original IDs
+    for sid in source_id_set:
+        l2_index[_strip_separators(sid)].add(sid)
+        l3_index[_strip_all(sid)].add(sid)
     
-    # Normalize the ordered IDs for comparison
-    norm_ordered = [_normalize_id(i) for i in ordered_ids]
+    # Process each user-entered ID through 3 levels
+    matched_source_ids = []  # Original source IDs that matched
+    collision_alerts = []    # IDs that had collisions
+    unmatched_ids = []       # IDs that could not be matched
+    input_to_pos = {}        # matched_source_id -> sequence position
     
-    # Build position map based on normalized input order
-    norm_to_pos = {norm_id: i for i, norm_id in enumerate(norm_ordered)}
+    for pos, user_id in enumerate(ordered_ids):
+        user_id_clean = user_id.strip()
+        
+        # LEVEL 1: Exact Match
+        if user_id_clean in source_id_set:
+            matched_source_ids.append(user_id_clean)
+            input_to_pos[user_id_clean] = pos
+            continue
+        
+        # LEVEL 2: Strip Hyphens/Spaces
+        l2_key = _strip_separators(user_id_clean)
+        l2_candidates = l2_index.get(l2_key, set())
+        if len(l2_candidates) == 1:
+            orig_id = list(l2_candidates)[0]
+            matched_source_ids.append(orig_id)
+            input_to_pos[orig_id] = pos
+            continue
+        elif len(l2_candidates) > 1:
+            # Collision at Level 2 — multiple source IDs normalize to same value
+            collision_alerts.append((user_id_clean, 'hyphens/spaces', l2_candidates))
+            continue
+        
+        # LEVEL 3: Strip Leading Zeros
+        l3_key = _strip_all(user_id_clean)
+        l3_candidates = l3_index.get(l3_key, set())
+        if len(l3_candidates) == 1:
+            orig_id = list(l3_candidates)[0]
+            matched_source_ids.append(orig_id)
+            input_to_pos[orig_id] = pos
+            continue
+        elif len(l3_candidates) > 1:
+            # Collision at Level 3 — multiple source IDs normalize to same value
+            collision_alerts.append((user_id_clean, 'leading zeros', l3_candidates))
+            continue
+        
+        # No match at any level
+        unmatched_ids.append(user_id_clean)
     
-    # Find matching rows using normalized IDs
-    existing_norm_ids = set(df_source['__norm_id'].tolist())
-    matched_norm_ids = [n for n in norm_ordered if n in existing_norm_ids]
+    # --- COLLISION ALERTS ---
+    if collision_alerts:
+        st.error(f"🔴 **{len(collision_alerts)} ID(s) have collisions** — Please provide the exact ID from the source file.")
+        for user_id, level, candidates in collision_alerts:
+            with st.expander(f"⚠️ Collision for '{user_id}' (ambiguous after stripping {level})", expanded=True):
+                st.markdown(f"You entered **`{user_id}`** but multiple employees in the source file normalize to the same value. **Which one did you mean?**")
+                # Build a detail table with names if available
+                detail_rows = []
+                for cand_id in sorted(candidates):
+                    row_data = {"Source Employee ID (use this exact value)": cand_id}
+                    if name_col:
+                        name_matches = df_source[df_source[id_col_source] == cand_id][name_col].dropna().unique()
+                        row_data["Employee Name"] = name_matches[0] if len(name_matches) > 0 else "—"
+                    detail_rows.append(row_data)
+                st.dataframe(pd.DataFrame(detail_rows), hide_index=True, use_container_width=True)
+                st.info("👆 Copy the **exact Employee ID** from above and paste it in the manual input box to resolve this collision.")
     
-    # Filter and Sort using the normalized column
-    df_result = df_source[df_source['__norm_id'].isin(matched_norm_ids)].copy()
-    df_result['sort_key'] = df_result['__norm_id'].map(norm_to_pos)
-    df_result = df_result.sort_values('sort_key').drop(columns=['sort_key', '__norm_id'])
+    if unmatched_ids:
+        with st.expander(f"🔻 {len(unmatched_ids)} ID(s) not found in source at any level", expanded=False):
+            st.dataframe(pd.DataFrame({"Unmatched ID": unmatched_ids}), hide_index=True, use_container_width=True)
     
-    # Also drop the temp column from source
-    df_source.drop(columns=['__norm_id'], inplace=True, errors='ignore')
+    # Filter and Sort using matched source IDs
+    matched_set = set(matched_source_ids)
+    df_result = df_source[df_source[id_col_source].isin(matched_set)].copy()
+    df_result['sort_key'] = df_result[id_col_source].map(input_to_pos)
+    df_result = df_result.sort_values('sort_key').drop(columns=['sort_key'])
     
     # Final column subset
     df_result = df_result[selected_cols]

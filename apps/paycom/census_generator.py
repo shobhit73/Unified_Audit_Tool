@@ -1,7 +1,7 @@
 import io
 import pandas as pd
 import streamlit as st
-from utils.audit_utils import generate_uzio_template, check_duplicate_columns
+from utils.audit_utils import generate_uzio_template, check_duplicate_columns, format_datetime_strings
 
 APP_TITLE = "Paycom to Uzio Census Template Generator"
 
@@ -283,6 +283,16 @@ def render_census_sanity_check():
         # Apply Mappings to download file
         if src_loc_col and src_loc_col in df_download.columns:
             df_download[src_loc_col] = df_download[src_loc_col].astype(str).str.strip().map(lambda x: loc_dict.get(x, x))
+
+        # Standardize Date Formats to MM/DD/YYYY
+        date_cols = [
+            resolved_field_map.get('Hire Date'),
+            resolved_field_map.get('Birth Date'),
+            resolved_field_map.get('Termination Date'),
+            resolved_field_map.get('Effective Date')
+        ]
+        date_cols = [c for c in date_cols if c is not None]
+        df_download = format_datetime_strings(df_download, date_cols)
 
         # Add CRITICAL_WARNINGS column if errors exist
         if not hard_errors.empty:

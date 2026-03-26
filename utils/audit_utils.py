@@ -36,6 +36,28 @@ def check_duplicate_columns(file_obj):
         file_obj.seek(0)
         return None
 
+def format_datetime_strings(df, columns):
+    """
+    Attempts to convert values in specified columns to MM/DD/YYYY format.
+    Safely handles strings, NaNs, and various date formats.
+    """
+    import pandas as pd
+    for col in columns:
+        if col in df.columns:
+            def _clean_date_val(val):
+                if pd.isna(val) or str(val).strip() == "" or str(val).strip().lower() in ["nan", "nat"]:
+                    return ""
+                try:
+                    # Use pd.to_datetime for robust parsing
+                    d = pd.to_datetime(str(val).strip(), errors='coerce')
+                    if pd.notna(d):
+                        return d.strftime('%m/%d/%Y')
+                except (ValueError, TypeError):
+                    pass
+                return str(val).strip()
+            df[col] = df[col].apply(_clean_date_val)
+    return df
+
 # --- Hardcoded Mappings ---
 
 # Map Uzio Raw Headers -> Internal Standard Names

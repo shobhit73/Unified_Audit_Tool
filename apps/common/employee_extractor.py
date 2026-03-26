@@ -92,6 +92,7 @@ def render_employee_extractor():
     st.markdown("### 3. Define Employee Sequence")
     
     ordered_ids = []
+    ref_ids_set = set()
     if ref_file:
         try:
             # Attempt to read Uzio Multi-Client Template
@@ -100,6 +101,7 @@ def render_employee_extractor():
             ref_id_col = ' Employee ID*'
             if ref_id_col in df_ref.columns:
                 ordered_ids = df_ref[ref_id_col].dropna().unique().tolist()
+                ref_ids_set = set(ordered_ids)
                 st.info(f"Loaded **{len(ordered_ids)}** IDs from Uzio Reference (Order strictly matched).")
             else:
                 st.error("Reference file uploaded but ' Employee ID*' column not found in 'Employee Details' sheet.")
@@ -115,6 +117,26 @@ def render_employee_extractor():
         if ordered_ids:
             st.warning("Both Reference File and Manual IDs provided. **Using Manual List** for final sequence.")
         ordered_ids = manual_ids
+
+    # --- ID MISMATCH FLAGGING (Source vs Reference) ---
+    if ref_ids_set and not manual_ids_input.strip():
+        source_ids_set = set(df_source[id_col_source].astype(str).str.strip().dropna().unique())
+        
+        in_ref_not_source = sorted(ref_ids_set - source_ids_set)
+        in_source_not_ref = sorted(source_ids_set - ref_ids_set)
+        
+        if in_ref_not_source or in_source_not_ref:
+            st.warning(f"⚠️ **ID Mismatch Detected** — Sequencing may be affected!")
+            if in_ref_not_source:
+                with st.expander(f"🟡 {len(in_ref_not_source)} ID(s) in Uzio Reference but MISSING from Source", expanded=False):
+                    st.markdown("These employees exist in your Uzio template but were **not found** in the uploaded source file. They will be **skipped** in the output.")
+                    st.dataframe(pd.DataFrame({"Missing Employee ID": in_ref_not_source}), hide_index=True, use_container_width=True)
+            if in_source_not_ref:
+                with st.expander(f"🔵 {len(in_source_not_ref)} ID(s) in Source but MISSING from Uzio Reference", expanded=False):
+                    st.markdown("These employees exist in your source file but are **not listed** in the Uzio reference. They will be **excluded** from the output since sequencing follows the reference order.")
+                    st.dataframe(pd.DataFrame({"Extra Employee ID": in_source_not_ref}), hide_index=True, use_container_width=True)
+        else:
+            st.success("✅ All IDs match perfectly between Source and Uzio Reference!")
 
     if not ordered_ids:
         st.info("Waiting for Reference File or Manual ID list to define the sequence...")

@@ -17,7 +17,7 @@ def render_employee_extractor():
     # 1. FILE UPLOADERS
     col_u1, col_u2 = st.columns(2)
     with col_u1:
-        source_file = st.file_uploader("1. Upload SOURCE Census (ADP/Paycom)", type=["xlsx", "csv", "xlsm"], key="ee_source")
+        source_file = st.file_uploader("1. Upload SOURCE File (ADP/Paycom Census or ADP Direct Deposit)", type=["xlsx", "csv", "xlsm"], key="ee_source")
     with col_u2:
         ref_file = st.file_uploader("2. Upload REFERENCE Order (Uzio Census) - OPTIONAL", type=["xlsx", "xlsm"], key="ee_ref")
 
@@ -36,7 +36,7 @@ def render_employee_extractor():
             header_idx = 0
             for idx, row in df_header.iterrows():
                 row_vals = [str(x).lower().strip() for x in row.tolist() if pd.notna(x)]
-                if any(k in row_vals for k in ['associate id', 'employee_code', 'employee id*', 'legal first name']):
+                if any(k in row_vals for k in ['associate id', 'employee_code', 'employee id*', 'legal first name', 'name', 'company code']):
                     header_idx = idx
                     break
             source_file.seek(0)
@@ -50,13 +50,14 @@ def render_employee_extractor():
     # 3. IDENTIFY ID COLUMN (Source)
     id_col_source = None
     all_cols = df_source.columns.tolist()
-    candidates = ['Associate ID', 'Employee_Code', ' Employee ID*', 'Employee ID', 'Employee Code', 'EE ID']
+    # Candidates cover: ADP Census, Paycom, Uzio, ADP Direct Deposit (ASSOCIATE ID - uppercase)
+    candidates = ['ASSOCIATE ID', 'Associate ID', 'Employee_Code', ' Employee ID*', 'Employee ID', 'Employee Code', 'EE ID']
     for cand in candidates:
         if cand in all_cols:
             id_col_source = cand
             break
     if not id_col_source:
-        # Fuzzy
+        # Fuzzy match
         for col in all_cols:
             c_norm = str(col).lower().strip().replace('*', '').replace(' ', '_')
             if c_norm in ['associate_id', 'employee_id', 'employee_code', 'ee_id', 'eid']:
@@ -66,6 +67,11 @@ def render_employee_extractor():
     if not id_col_source:
         st.error("Could not identify 'Employee ID' column in source. Headers found: " + ", ".join(all_cols[:10]))
         return
+
+    # Detect if this is a Direct Deposit file (can have multiple rows per employee)
+    is_direct_deposit = 'ROUTING NUMBER' in all_cols or 'ACCOUNT NUMBER' in all_cols
+    if is_direct_deposit:
+        st.info("📋 **ADP Direct Deposit report detected.** Multiple rows per employee (split accounts) will all be included in the output.")
 
     # 4. COLUMN SELECTOR
     st.markdown("---")

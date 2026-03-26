@@ -119,22 +119,33 @@ def render_employee_extractor():
         ordered_ids = manual_ids
 
     # --- ID MISMATCH FLAGGING (Source vs Reference) ---
+    # Normalize helper: strip hyphens, spaces, leading zeros (for matching only)
+    def _normalize_id(val):
+        """Normalize an ID for matching: strip hyphens, spaces, leading zeros."""
+        s = str(val).strip().replace('-', '').replace(' ', '')
+        return s.lstrip('0') or '0'  # Keep at least '0' if all zeros
+    
     if ref_ids_set and not manual_ids_input.strip():
-        source_ids_set = set(df_source[id_col_source].astype(str).str.strip().dropna().unique())
+        source_ids_norm = set(_normalize_id(x) for x in df_source[id_col_source].astype(str).str.strip().dropna().unique())
+        ref_ids_norm = set(_normalize_id(x) for x in ref_ids_set)
         
-        in_ref_not_source = sorted(ref_ids_set - source_ids_set)
-        in_source_not_ref = sorted(source_ids_set - ref_ids_set)
+        in_ref_not_source = sorted(ref_ids_set - set(df_source[id_col_source].astype(str).str.strip().dropna().unique()))
+        in_source_not_ref = sorted(set(df_source[id_col_source].astype(str).str.strip().dropna().unique()) - ref_ids_set)
         
-        if in_ref_not_source or in_source_not_ref:
+        # Use normalized comparison for accurate flagging
+        in_ref_not_source_norm = sorted([x for x in ref_ids_set if _normalize_id(x) not in source_ids_norm])
+        in_source_not_ref_norm = sorted([x for x in df_source[id_col_source].astype(str).str.strip().dropna().unique() if _normalize_id(x) not in ref_ids_norm])
+        
+        if in_ref_not_source_norm or in_source_not_ref_norm:
             st.warning(f"⚠️ **ID Mismatch Detected** — Sequencing may be affected!")
-            if in_ref_not_source:
-                with st.expander(f"🟡 {len(in_ref_not_source)} ID(s) in Uzio Reference but MISSING from Source", expanded=False):
+            if in_ref_not_source_norm:
+                with st.expander(f"🟡 {len(in_ref_not_source_norm)} ID(s) in Uzio Reference but MISSING from Source", expanded=False):
                     st.markdown("These employees exist in your Uzio template but were **not found** in the uploaded source file. They will be **skipped** in the output.")
-                    st.dataframe(pd.DataFrame({"Missing Employee ID": in_ref_not_source}), hide_index=True, use_container_width=True)
-            if in_source_not_ref:
-                with st.expander(f"🔵 {len(in_source_not_ref)} ID(s) in Source but MISSING from Uzio Reference", expanded=False):
+                    st.dataframe(pd.DataFrame({"Missing Employee ID": in_ref_not_source_norm}), hide_index=True, use_container_width=True)
+            if in_source_not_ref_norm:
+                with st.expander(f"🔵 {len(in_source_not_ref_norm)} ID(s) in Source but MISSING from Uzio Reference", expanded=False):
                     st.markdown("These employees exist in your source file but are **not listed** in the Uzio reference. They will be **excluded** from the output since sequencing follows the reference order.")
-                    st.dataframe(pd.DataFrame({"Extra Employee ID": in_source_not_ref}), hide_index=True, use_container_width=True)
+                    st.dataframe(pd.DataFrame({"Extra Employee ID": in_source_not_ref_norm}), hide_index=True, use_container_width=True)
         else:
             st.success("✅ All IDs match perfectly between Source and Uzio Reference!")
 
@@ -142,25 +153,30 @@ def render_employee_extractor():
         st.info("Waiting for Reference File or Manual ID list to define the sequence...")
         return
 
-    # 6. EXTRACTION LOGIC
-    # Re-indexing is the best way to maintain exact sequence
-    # Note: We must handle IDs present in Uzio but missing in Source (they will result in blank rows)
-    # The user said "carve out those employee rows", implying we keep those found.
-    
+    # 6. EXTRACTION LOGIC (Fuzzy ID Matching)
+    # Build a normalized index: normalized_id -> list of original source IDs
     df_source[id_col_source] = df_source[id_col_source].astype(str).str.strip()
     
-    # We filter first to existing rows to avoid creating empty "NaN" rows 
-    # unless specified (but usually users want existing data only)
-    existing_ids = set(df_source[id_col_source].tolist())
-    final_id_list = [i for i in ordered_ids if i in existing_ids]
-
-    # Map target ID to its position in the requested sequence
-    id_to_pos = {id_val: i for i, id_val in enumerate(ordered_ids)}
+    # Create temp normalized column for matching (will be dropped before output)
+    df_source['__norm_id'] = df_source[id_col_source].apply(_normalize_id)
     
-    # Filter and Sort
-    df_result = df_source[df_source[id_col_source].isin(final_id_list)].copy()
-    df_result['sort_key'] = df_result[id_col_source].map(id_to_pos)
-    df_result = df_result.sort_values('sort_key').drop(columns=['sort_key'])
+    # Normalize the ordered IDs for comparison
+    norm_ordered = [_normalize_id(i) for i in ordered_ids]
+    
+    # Build position map based on normalized input order
+    norm_to_pos = {norm_id: i for i, norm_id in enumerate(norm_ordered)}
+    
+    # Find matching rows using normalized IDs
+    existing_norm_ids = set(df_source['__norm_id'].tolist())
+    matched_norm_ids = [n for n in norm_ordered if n in existing_norm_ids]
+    
+    # Filter and Sort using the normalized column
+    df_result = df_source[df_source['__norm_id'].isin(matched_norm_ids)].copy()
+    df_result['sort_key'] = df_result['__norm_id'].map(norm_to_pos)
+    df_result = df_result.sort_values('sort_key').drop(columns=['sort_key', '__norm_id'])
+    
+    # Also drop the temp column from source
+    df_source.drop(columns=['__norm_id'], inplace=True, errors='ignore')
     
     # Final column subset
     df_result = df_result[selected_cols]

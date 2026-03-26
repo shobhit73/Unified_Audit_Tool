@@ -249,9 +249,9 @@ def render_census_sanity_check():
         
         # Apply Fixes
         if fix_options.get('fix_emails'):
-            c_work = next((col for col in df_download.columns if 'work_email' in str(col).lower()), None)
-            c_pers = next((col for col in df_download.columns if 'personal_email' in str(col).lower()), None)
-            if c_work and c_pers:
+            c_work = resolved_field_map.get('Work Email')
+            c_pers = resolved_field_map.get('Personal Email')
+            if c_work and c_pers and c_work in df_download.columns and c_pers in df_download.columns:
                 mask = df_download[c_work].isna() | (df_download[c_work].astype(str).str.strip() == "")
                 df_download.loc[mask, c_work] = df_download.loc[mask, c_pers]
 

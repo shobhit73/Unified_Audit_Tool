@@ -385,12 +385,6 @@ def render_ui():
                               break
                       st.session_state[key] = default_val
 
-              # Collect all currently selected values
-              selected_values = set()
-              for a_ded in adp_deductions:
-                  val = st.session_state.get(f"map_adp_{a_ded}", "— Ignore / Skip —")
-                  if val != "— Ignore / Skip —":
-                      selected_values.add(val)
               
               for a_ded in sorted(adp_deductions):
                   col_a, col_b = st.columns([1, 1])
@@ -400,10 +394,7 @@ def render_ui():
                        key = f"map_adp_{a_ded}"
                        current_val = st.session_state.get(key, "— Ignore / Skip —")
                        
-                       available_options = ["— Ignore / Skip —"]
-                       for opt in sorted(uzio_deductions):
-                           if opt == current_val or opt not in selected_values:
-                               available_options.append(opt)
+                       available_options = ["— Ignore / Skip —"] + sorted(uzio_deductions)
                                
                        selected = st.selectbox(
                            f"Map for {a_ded}", 

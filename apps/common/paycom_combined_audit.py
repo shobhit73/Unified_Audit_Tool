@@ -398,8 +398,6 @@ def run_census_audit(df_uzio, df_paycom):
                             elif "terminated" in uz_stat: status = "Terminated in Uzio"
                             elif not u_b and "active" in pc_stat: status = "Active in Paycom"
                             else: status = STATUS_MISMATCH
-                        elif is_terminated_context:
-                            status = STATUS_MATCH
                         elif not u_b and p_b:
                             status = "Value missing in Uzio (Paycom has value)"
                         elif u_b and not p_b:

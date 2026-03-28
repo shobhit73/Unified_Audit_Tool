@@ -538,9 +538,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                                 status = "Data Mismatch"
                         else:
                             # Standard missing/mismatch logic
-                            if is_terminated_context:
-                                status = "Data Match"
-                            elif (uz_b == "" or uz_b is None) and (pc_b != "" and pc_b is not None):
+                            if (uz_b == "" or uz_b is None) and (pc_b != "" and pc_b is not None):
                                 status = "Value missing in Uzio (Paycom has value)"
                             elif (uz_b != "" and uz_b is not None) and (pc_b == "" or pc_b is None):
                                 status = "Value missing in Paycom (Uzio has value)"

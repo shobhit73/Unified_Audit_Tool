@@ -9,7 +9,7 @@ from utils.audit_utils import (
     read_uzio_raw_file, generate_uzio_template,
     HOURLY_ONLY_JOB_TITLES, is_hourly_only_job_title,
     norm_colname, norm_blank, try_parse_date, ensure_unique_columns, safe_val, normalize_space_and_case,
-    as_float_or_none, find_col, get_identity_match_map, norm_ssn_canonical, detect_duplicate_ssns
+    as_float_or_none, find_col, get_identity_match_map, norm_ssn_canonical, detect_duplicate_ssns, norm_id
 )
 
 # =========================================================
@@ -503,8 +503,12 @@ def run_comparison(uzio_file, adp_file) -> bytes:
     uzio = uzio.drop_duplicates(subset=[UZIO_KEY], keep="first").copy()
     # adp = adp.drop_duplicates(subset=[ADP_KEY], keep="first").copy() # Replaced by above
 
-    uzio_keys = set(uzio[UZIO_KEY].dropna().astype(str).str.strip()) - {""}
-    adp_keys = set(adp[ADP_KEY].dropna().astype(str).str.strip()) - {""}
+    # 0. Normalize IDs in the worksets
+    uzio[UZIO_KEY] = uzio[UZIO_KEY].apply(norm_id)
+    adp[ADP_KEY] = adp[ADP_KEY].apply(norm_id)
+
+    uzio_keys = set(uzio[UZIO_KEY].replace("", pd.NA).dropna())
+    adp_keys = set(adp[ADP_KEY].replace("", pd.NA).dropna())
     all_keys = sorted(uzio_keys.union(adp_keys))
 
     uzio_idx = uzio.set_index(UZIO_KEY, drop=False)

@@ -10,7 +10,7 @@ from utils.audit_utils import (
     read_uzio_raw_file,
     HOURLY_ONLY_JOB_TITLES, is_hourly_only_job_title,
     norm_colname, norm_blank, try_parse_date, ensure_unique_columns, safe_val, normalize_space_and_case,
-    norm_key_series, as_float_or_none, find_col, get_identity_match_map, norm_ssn_canonical, detect_duplicate_ssns
+    norm_key_series, as_float_or_none, find_col, get_identity_match_map, norm_ssn_canonical, detect_duplicate_ssns, norm_id
 )
 
 # =========================================================
@@ -357,17 +357,14 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
     if PAYCOM_KEY not in paycom.columns:
         raise ValueError(f"Required column '{PAYCOM_KEY}' not found in Paycom file.")
 
-    # --- DISPLAY ID: preserve original leading-zero IDs for output ---
-    # Before normalizing, save original keys to build a display map
+    # 0. Normalize IDs in the worksets
+    uzio[UZIO_KEY] = uzio[UZIO_KEY].apply(norm_id)
+    paycom[PAYCOM_KEY] = paycom[PAYCOM_KEY].apply(norm_id)
+
+    # normalize display IDs (keep source formatting for display if needed, but match using norm_id)
     uzio_orig_keys = uzio[UZIO_KEY].astype(str).str.strip()
     paycom_orig_keys = paycom[PAYCOM_KEY].astype(str).str.strip()
 
-    # normalize keys (strips leading zeros for matching)
-    uzio[UZIO_KEY] = norm_key_series(uzio[UZIO_KEY])
-    paycom[PAYCOM_KEY] = norm_key_series(paycom[PAYCOM_KEY])
-
-    # Build display_id_map: normalized_key -> longest original form
-    # Prefers Uzio originals (source of truth), then Paycom if longer
     display_id_map = {}
     for norm_val, orig_val in zip(uzio[UZIO_KEY], uzio_orig_keys):
         n = str(norm_val).strip()

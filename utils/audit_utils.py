@@ -277,15 +277,8 @@ def norm_colname(c: str) -> str:
     return c
 
 def norm_key_series(s: pd.Series) -> pd.Series:
-    """Normalize a pandas Series of keys (like Employee IDs), handling floats like '123.0' and NaN."""
-    s2 = s.astype(object).where(~s.isna(), "")
-    def _fix(v):
-        v = str(v).strip()
-        v = v.replace("\u00A0", " ")
-        if re.fullmatch(r"\d+\.0+", v):
-            v = v.split(".")[0]
-        return v
-    return s2.map(_fix)
+    """Normalize a pandas Series of keys (like Employee IDs) using the central norm_id logic."""
+    return s.apply(norm_id)
 
 def norm_blank(x):
     """Normalize blank/NaN values to an empty string."""
@@ -423,48 +416,58 @@ def norm_ssn_canonical(x):
         return ""
     return s.zfill(9)[-9:]
 
+def norm_id(x):
+    """Normalize Employee ID: strip, convert to string, and remove leading zeros."""
+    if pd.isna(x) or x is None:
+        return ""
+    s = str(x).strip()
+    if s.endswith(".0"): # Handle potential float conversions
+        s = s[:-2]
+    # Remove leading zeros unless it's just "0"
+    if s != "0":
+        s = s.lstrip("0")
+    return s
+
 def get_identity_match_map(df_uzio, df_vendor, uzio_id_col, vendor_id_col, uzio_ssn_col, vendor_ssn_col):
     """
-    Returns a dict mapping UZIO_ID -> VENDOR_ID for identity reconciliation.
-    Logical Steps:
-    1. Perfect ID Match (uzio_id == vendor_id).
-    2. Identity Match (uzio_id != vendor_id BUT SSN matches).
+    Returns mapping[uzio_id_norm] = vendor_id_norm for records that share the same SSN but have different IDs.
+    This ensures that when auditing, records with different IDs but matching SSNs can be linked.
     """
-    uz_ids = set(norm_key_series(df_uzio[uzio_id_col]).replace("", pd.NA).dropna())
-    v_ids = set(norm_key_series(df_vendor[vendor_id_col]).replace("", pd.NA).dropna())
+    match_map = {}
     
-    # 1. Start with exact matches
-    match_map = {eid: eid for eid in (uz_ids & v_ids)}
+    # Get all IDs present in each system, normalized
+    uzio_ids = set(norm_id(x) for x in df_uzio[uzio_id_col] if pd.notna(x) and x != "")
+    v_ids = set(norm_id(x) for x in df_vendor[vendor_id_col] if pd.notna(x) and x != "")
     
-    # 2. Identify "strays" (those without an exact ID match)
-    stray_uz = uz_ids - v_ids
-    stray_v = v_ids - uz_ids
+    # Identify IDs that don't have a direct match
+    stray_uz = uzio_ids - v_ids
+    stray_v = v_ids - uzio_ids
     
     if not stray_uz or not stray_v:
         return match_map
         
     # Build a lookup for stray vendor records by SSN
     v_ssn_lookup = {}
-    for idx, row in df_vendor.iterrows():
-        vid = norm_blank(row.get(vendor_id_col))
-        if not vid or str(vid) not in stray_v:
+    for _, row in df_vendor.iterrows():
+        vid = norm_id(row.get(vendor_id_col))
+        if not vid or vid not in stray_v:
             continue
         ssn_val = norm_ssn_canonical(row.get(vendor_ssn_col))
         if ssn_val:
             # If multiple people have the same SSN (unlikely but possible), 
             # we only take the first one to avoid ambiguous matching
             if ssn_val not in v_ssn_lookup:
-                v_ssn_lookup[ssn_val] = str(vid)
+                v_ssn_lookup[ssn_val] = vid
                 
     # Now check stray Uzio records against the SSN lookup
-    for idx, row in df_uzio.iterrows():
-        uzid = norm_blank(row.get(uzio_id_col))
-        if not uzid or str(uzid) not in stray_uz:
+    for _, row in df_uzio.iterrows():
+        uzid = norm_id(row.get(uzio_id_col))
+        if not uzid or uzid not in stray_uz:
             continue
         ssn_val = norm_ssn_canonical(row.get(uzio_ssn_col))
         if ssn_val and ssn_val in v_ssn_lookup:
             vid = v_ssn_lookup[ssn_val]
-            match_map[str(uzid)] = vid
+            match_map[uzid] = vid
             
     return match_map
 
@@ -476,7 +479,7 @@ def detect_duplicate_ssns(df, id_col, ssn_col):
     """
     id_ssn_map = {}
     for _, row in df.iterrows():
-        eid = str(row.get(id_col, "")).strip()
+        eid = norm_id(row.get(id_col, ""))
         ssn = norm_ssn_canonical(row.get(ssn_col, ""))
         if not ssn or not eid:
             continue

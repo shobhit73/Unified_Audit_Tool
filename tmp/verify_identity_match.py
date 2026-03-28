@@ -46,8 +46,8 @@ def test_identity_matching():
     # Santiago should be matched despite ID mismatch
     assert match_map.get('742-64-5030') == '792-64-5030', f"Failed to match Santiago! Got {match_map.get('742-64-5030')}"
     
-    # John Doe should be matched by ID (or SSN)
-    assert match_map.get('100') == '100', "Failed to match John Doe!"
+    # John Doe (100) is a direct match, so he won't be in the correction map
+    assert match_map.get('100') is None, "John Doe should not be in the map (direct ID match)"
     
     # Jane Smith (101) is not in vendor
     assert '101' not in match_map or match_map['101'] is None, "Jane Smith should not have a match!"

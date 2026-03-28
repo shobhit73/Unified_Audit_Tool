@@ -4,7 +4,10 @@ import numpy as np
 import io
 import re
 from datetime import datetime, date
-from utils.audit_utils import norm_col, norm_colname, norm_blank, try_parse_date, clean_money_val, get_identity_match_map, norm_ssn_canonical
+from utils.audit_utils import (
+    norm_col, norm_colname, norm_blank, try_parse_date, clean_money_val, 
+    get_identity_match_map, norm_ssn_canonical, detect_duplicate_ssns, norm_id
+)
 
 # =========================================================
 # Paycom Consolidated Audit Tool (Census, Payment, Emergency)
@@ -25,12 +28,6 @@ def norm_str(x):
         return ""
     return str(x).strip()
 
-def norm_id(x):
-    """Normalize Employee ID (remove .0, strip, lstrip zeros)."""
-    if pd.isna(x): return ""
-    s = str(x).strip()
-    if s.endswith(".0"): s = s[:-2]
-    return s.lstrip("0")
 
 def norm_phone(x):
     """Normalize phone to just digits."""
@@ -296,11 +293,26 @@ def _compare_field(field, u_val, p_val, u_acc, p_acc):
         return STATUS_MISMATCH
     return STATUS_MATCH if u_n == p_n else STATUS_MISMATCH
 
-def run_census_audit(df_uzio, df_paycom):
+def run_census_audit(df_uzio, df_paycom, uz_to_pc_id_map=None):
     rows = []
+    
+    if uz_to_pc_id_map is None:
+        u_id_col = "Job|Employee ID"
+        p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
+        uzio_ssn_col = 'Personal|SSN'
+        paycom_ssn_col = next((c for c in df_paycom.columns if "SS_Number" in c or "SSN" in c), "SS_Number")
+        
+        uz_to_pc_id_map = get_identity_match_map(
+            df_uzio, df_paycom, 
+            uzio_id_col=u_id_col, 
+            vendor_id_col=p_id_col,
+            uzio_ssn_col=uzio_ssn_col,
+            vendor_ssn_col=paycom_ssn_col
+        )
+
     u_id_col = "Job|Employee ID"
     p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
-    
+
     # Pre-calculate status and pay type maps for context
     uzio_status_map = {}
     if "Job|Status" in df_uzio.columns:
@@ -318,18 +330,6 @@ def run_census_audit(df_uzio, df_paycom):
         for _, r in df_uzio[[u_id_col, "Job|Pay Type"]].dropna().iterrows():
             pay_type_map[norm_id(r[u_id_col])] = canonical_pay_type(r["Job|Pay Type"])
 
-    uzio_ssn_col = 'Personal|SSN'
-    paycom_ssn_col = next((c for c in df_paycom.columns if "SS_Number" in c or "SSN" in c), "SS_Number")
-
-    # 1. Resolve Identity Match Map (UZIO_ID -> PAYCOM_ID)
-    uz_to_pc_id_map = get_identity_match_map(
-        df_uzio, df_paycom, 
-        uzio_id_col=u_id_col, 
-        vendor_id_col=p_id_col,
-        uzio_ssn_col=uzio_ssn_col,
-        vendor_ssn_col=paycom_ssn_col
-    )
-
     u_map = {id: idx for idx, id in enumerate(df_uzio[u_id_col].map(norm_id))}
     p_map = {id: idx for idx, id in enumerate(df_paycom[p_id_col].map(norm_id))}
     
@@ -340,10 +340,10 @@ def run_census_audit(df_uzio, df_paycom):
     # 2. Main Loop: Iterate through all Uzio employees
     for uz_id in uzio_keys:
         if not uz_id or uz_id == "nan": continue
-        pc_id = uz_to_pc_id_map.get(uz_id)
+        pc_id = uz_to_pc_id_map.get(uz_id, uz_id)
         
         u_idx = u_map.get(uz_id)
-        p_idx = p_map.get(pc_id) if pc_id else None
+        p_idx = p_map.get(pc_id) if pc_id in p_map else None
         
         if p_idx is not None:
             pc_keys_processed.add(pc_id)
@@ -590,8 +590,14 @@ def get_high_rate_anomalies(df_paycom):
             })
     return pd.DataFrame(anomalies)
 
-def run_payment_audit(df_uzio, df_paycom):
+def run_payment_audit(df_uzio, df_paycom, uz_to_pc_id_map=None):
     rows = []
+    
+    # Pre-process identity map for reverse lookup
+    pc_to_uz_id_map = {}
+    if uz_to_pc_id_map:
+        pc_to_uz_id_map = {pc: uz for uz, pc in uz_to_pc_id_map.items() if pc}
+
     u_id_col = "Job|Employee ID"
     p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
     
@@ -622,6 +628,9 @@ def run_payment_audit(df_uzio, df_paycom):
     for idx, row in df_paycom.iterrows():
         eid = norm_id(row.get(p_id_col))
         if not eid: continue
+        
+        # Translate Paycom ID to Uzio ID if mapping exists
+        mapped_eid = pc_to_uz_id_map.get(eid, eid)
         
         accs = []
         total_dist_pct = 0.0
@@ -668,7 +677,10 @@ def run_payment_audit(df_uzio, df_paycom):
                 "Type": str(n_type) if n_type is not None else "",
                 "Percent": max(0, n_pct), "Amount": 0.0, "IsNet": True
             })
-        if accs: p_map[eid] = accs
+        if accs: 
+            # Translate Paycom ID to Uzio ID if mapping exists
+            mapped_eid = pc_to_uz_id_map.get(eid, eid)
+            p_map[mapped_eid] = accs
 
     FIELDS = ["Routing Number", "Account Number", "Account Type", "Amount", "Percent"]
     all_ids = set(u_map.keys()) | set(p_map.keys()) | set(uzio_emp_names.keys())
@@ -757,8 +769,14 @@ def run_payment_audit(df_uzio, df_paycom):
 
     return pd.DataFrame(rows)
 
-def run_emergency_audit(df_uzio, df_paycom):
+def run_emergency_audit(df_uzio, df_paycom, uz_to_pc_id_map=None):
     rows = []
+    
+    # Pre-process identity map for reverse lookup
+    pc_to_uz_id_map = {}
+    if uz_to_pc_id_map:
+        pc_to_uz_id_map = {pc: uz for uz, pc in uz_to_pc_id_map.items() if pc}
+
     u_id_col = "Job|Employee ID"
     p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
     
@@ -795,6 +813,9 @@ def run_emergency_audit(df_uzio, df_paycom):
         eid = norm_id(row.get(p_id_col))
         if not eid: continue
         
+        # Translate Paycom ID to Uzio ID if mapping exists
+        mapped_eid = pc_to_uz_id_map.get(eid, eid)
+        
         if p_name_col:
             c_name = norm_str(row.get(p_name_col))
             if c_name:
@@ -805,8 +826,8 @@ def run_emergency_audit(df_uzio, df_paycom):
                     "RawPhone": norm_str(row.get(p_phone_col)) if p_phone_col else "",
                     "Language": norm_str(row.get(p_lang_col)) if p_lang_col else ""
                 }
-                if eid not in p_data: p_data[eid] = []
-                p_data[eid].append(contact)
+                if mapped_eid not in p_data: p_data[mapped_eid] = []
+                p_data[mapped_eid].append(contact)
 
     def compare_emergency(field, u_val, p_val):
         u_s = str(u_val).strip().lower()
@@ -936,12 +957,42 @@ def render_ui():
                 else:
                     df_paycom = pd.read_excel(p_file, dtype=str)
                 
-                # Run Audits
-                res_census = run_census_audit(df_uzio, df_paycom)
-                res_payment = run_payment_audit(df_uzio, df_paycom)
-                res_emergency = run_emergency_audit(df_uzio, df_paycom)
+                # --- 1. Prepare ID Maps & Identity Match ---
+                u_id_col = "Job|Employee ID"
+                p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
+                uzio_ssn_col = 'Personal|SSN'
+                paycom_ssn_col = next((c for c in df_paycom.columns if "SS_Number" in c or "SSN" in c), "SS_Number")
                 
-                # --- Run Anomaly Reports ---
+                # Normalize IDs in dataframes first
+                df_uzio[u_id_col] = df_uzio[u_id_col].apply(norm_id)
+                df_paycom[p_id_col] = df_paycom[p_id_col].apply(norm_id)
+                
+                # Get the identity map (Uzio_ID -> Paycom_ID)
+                uz_to_pc_id_map = get_identity_match_map(
+                    df_uzio, df_paycom, 
+                    uzio_id_col=u_id_col, 
+                    vendor_id_col=p_id_col,
+                    uzio_ssn_col=uzio_ssn_col,
+                    vendor_ssn_col=paycom_ssn_col
+                )
+
+                # --- 2. Run Data Quality Checks ---
+                df_uz_dupes = detect_duplicate_ssns(df_uzio, u_id_col, uzio_ssn_col)
+                df_pc_dupes = detect_duplicate_ssns(df_paycom, p_id_col, paycom_ssn_col)
+                
+                dupe_rows = []
+                for ssn, ids in df_uz_dupes.items():
+                    dupe_rows.append({"Source": "Uzio", "SSN": ssn, "IDs": ", ".join(ids), "Issue": "Duplicate SSN"})
+                for ssn, ids in df_pc_dupes.items():
+                    dupe_rows.append({"Source": "Paycom", "SSN": ssn, "IDs": ", ".join(ids), "Issue": "Duplicate SSN"})
+                df_dupe_ssn_check = pd.DataFrame(dupe_rows)
+
+                # --- 3. Run Audits ---
+                res_census = run_census_audit(df_uzio, df_paycom, uz_to_pc_id_map=uz_to_pc_id_map)
+                res_payment = run_payment_audit(df_uzio, df_paycom, uz_to_pc_id_map=uz_to_pc_id_map)
+                res_emergency = run_emergency_audit(df_uzio, df_paycom, uz_to_pc_id_map=uz_to_pc_id_map)
+                
+                # --- 4. Run Anomaly Reports ---
                 df_salaried_drivers = get_salaried_driver_exceptions(df_uzio, df_paycom)
                 df_flsa_issues = get_flsa_compliance_issues(df_uzio)
                 df_active_missing = get_active_missing_in_uzio(df_uzio, df_paycom)
@@ -972,6 +1023,7 @@ def render_ui():
                     {"Metric": "Terminated Employees Missing in Uzio", "Value": len(df_terminated_missing)},
                     {"Metric": "Data Quality Issues (00/00/0000)", "Value": len(df_dq_issues)},
                     {"Metric": "High Hourly Rate Anomalies (>$100)", "Value": len(df_high_rates)},
+                    {"Metric": "Duplicate SSN Warnings", "Value": len(df_dupe_ssn_check)},
                 ]
                 df_summary = pd.DataFrame(summary_data)
 
@@ -979,8 +1031,10 @@ def render_ui():
                 out = io.BytesIO()
                 with pd.ExcelWriter(out, engine='xlsxwriter') as writer:
                     df_summary.to_excel(writer, sheet_name="Summary", index=False)
+                    if not df_dupe_ssn_check.empty:
+                        df_dupe_ssn_check.to_excel(writer, sheet_name="Duplicate_SSN_Check", index=False)
                     
-                    # Consolidate Anomaly Reports into the Summary Sheet (as requested, below the summary table)
+                    # Consolidate Anomaly Reports into the Summary Sheet
                     start_row = len(df_summary) + 3
                     anomaly_groups = [
                         ("Salaried Driver Exceptions", df_salaried_drivers),

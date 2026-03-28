@@ -752,6 +752,7 @@ def render_ui():
                 res_emergency = run_emergency_audit(df_uzio, df_paycom)
                 
                 # --- Generate Summary Metrics ---
+                p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
                 uzio_ids = set(df_uzio["Job|Employee ID"].map(norm_id))
                 pay_ids = set(df_paycom[p_id_col].map(norm_id))
                 

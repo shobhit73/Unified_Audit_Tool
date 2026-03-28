@@ -501,7 +501,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
 
     # 2. Main Loop: Iterate through all Uzio employees
     for uz_id in uzio_keys:
-        pc_id = uz_to_pc_id_map.get(uz_id)
+        pc_id = uz_to_pc_id_map.get(uz_id, uz_id)
         
         u_i = uzio_idx.get(uz_id)
         p_i = paycom_idx.get(pc_id) if pc_id else None
@@ -510,7 +510,9 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
             pc_keys_processed.add(pc_id)
 
         emp_status_context = get_emp_status(uz_id)
-        paycom_emp_status_val = str(paycom_status_map.get(pc_id if pc_id else uz_id, "")) 
+        # Fix Paycom ID lookup
+        pc_id_for_lookup = pc_id if pc_id else uz_id
+        paycom_emp_status_val = str(paycom_status_map.get(pc_id_for_lookup, "")) 
         emp_pay_type = pay_type_map.get(uz_id, "")
 
         # --- Determine Employee Name ---
@@ -557,7 +559,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
             pc_val = safe_val(paycom, p_i, pc_col) if (p_i is not None and not pc_missing_col) else ""
 
             # Decide status
-            if p_i is None:
+            if p_i is None and (pc_id is None or pc_id not in paycom_idx):
                 status = "Employee ID Not Found in Paycom"
             elif pc_missing_col:
                 status = "Column Missing in Paycom Sheet"

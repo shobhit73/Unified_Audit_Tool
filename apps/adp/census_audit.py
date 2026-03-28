@@ -513,6 +513,9 @@ def run_comparison(uzio_file, adp_file) -> bytes:
 
     uzio_idx = uzio.set_index(UZIO_KEY, drop=False)
     adp_idx = adp.set_index(ADP_KEY, drop=False)
+    # Ensure indices are properly handled as normalized strings
+    uzio_idx.index = uzio_idx.index.map(str)
+    adp_idx.index = adp_idx.index.map(str)
 
     uz_to_adp = {k: norm_colname(v) for k, v in ADP_FIELD_MAP.items()}
     mapped_fields = [f for f in ADP_FIELD_MAP.keys() if f != UZIO_KEY] # Internal Standard Keys
@@ -699,10 +702,10 @@ def run_comparison(uzio_file, adp_file) -> bytes:
     # 3. Main Loop: Iterate through all Uzio employees
     for uz_id in sorted(uzio_keys):
         # find the associated adp_id (might be the same OR different via identity match)
-        adp_id = uz_to_adp_id_map.get(uz_id)
+        adp_id = uz_to_adp_id_map.get(uz_id, uz_id)
         
         uz_exists = True # because we are in uzio_keys
-        adp_exists = adp_id is not None
+        adp_exists = adp_id in adp_idx.index
         
         if adp_exists:
             adp_keys_processed.add(adp_id)

@@ -4,7 +4,7 @@ import numpy as np
 import io
 import re
 from datetime import datetime, date
-from utils.audit_utils import norm_col, norm_colname, norm_blank, try_parse_date, clean_money_val
+from utils.audit_utils import norm_col, norm_colname, norm_blank, try_parse_date, clean_money_val, get_identity_match_map, norm_ssn_canonical
 
 # =========================================================
 # Paycom Consolidated Audit Tool (Census, Payment, Emergency)
@@ -318,47 +318,63 @@ def run_census_audit(df_uzio, df_paycom):
         for _, r in df_uzio[[u_id_col, "Job|Pay Type"]].dropna().iterrows():
             pay_type_map[norm_id(r[u_id_col])] = canonical_pay_type(r["Job|Pay Type"])
 
+    uzio_ssn_col = 'Personal|SSN'
+    paycom_ssn_col = next((c for c in df_paycom.columns if "SS_Number" in c or "SSN" in c), "SS_Number")
+
+    # 1. Resolve Identity Match Map (UZIO_ID -> PAYCOM_ID)
+    uz_to_pc_id_map = get_identity_match_map(
+        df_uzio, df_paycom, 
+        uzio_id_col=u_id_col, 
+        vendor_id_col=p_id_col,
+        uzio_ssn_col=uzio_ssn_col,
+        vendor_ssn_col=paycom_ssn_col
+    )
+
     u_map = {id: idx for idx, id in enumerate(df_uzio[u_id_col].map(norm_id))}
     p_map = {id: idx for idx, id in enumerate(df_paycom[p_id_col].map(norm_id))}
     
-    all_ids = set(u_map.keys()) | set(p_map.keys())
-    
-    for eid in sorted(all_ids):
-        if not eid or eid == "nan": continue
-        u_idx = u_map.get(eid)
-        p_idx = p_map.get(eid)
+    pc_keys_processed = set()
+    uzio_keys = sorted(set(u_map.keys()))
+    paycom_keys = sorted(set(p_map.keys()))
+
+    # 2. Main Loop: Iterate through all Uzio employees
+    for uz_id in uzio_keys:
+        if not uz_id or uz_id == "nan": continue
+        pc_id = uz_to_pc_id_map.get(uz_id)
         
+        u_idx = u_map.get(uz_id)
+        p_idx = p_map.get(pc_id) if pc_id else None
+        
+        if p_idx is not None:
+            pc_keys_processed.add(pc_id)
+
         # Context
-        u_status = uzio_status_map.get(eid, "")
-        p_status = paycom_status_map.get(eid, "")
-        emp_pay_type = pay_type_map.get(eid, "")
+        u_status = uzio_status_map.get(uz_id, "")
+        p_status = paycom_status_map.get(pc_id if pc_id else uz_id, "")
+        emp_pay_type = pay_type_map.get(uz_id, "")
         is_terminated_context = "terminated" in canonical_employment_status(u_status)
 
-        fname = ""
-        lname = ""
-        if u_idx is not None:
-            fname = norm_blank(df_uzio.at[u_idx, 'Personal|First Name'])
-            lname = norm_blank(df_uzio.at[u_idx, 'Personal|Last Name'])
-        elif p_idx is not None:
-            fname = norm_blank(df_paycom.at[p_idx, 'Legal_Firstname'])
-            lname = norm_blank(df_paycom.at[p_idx, 'Legal_Lastname'])
+        fname = norm_blank(df_uzio.at[u_idx, 'Personal|First Name'])
+        lname = norm_blank(df_uzio.at[u_idx, 'Personal|Last Name'])
         name = f"{fname} {lname}".strip()
 
-        for u_col, p_col in PAYCOM_CENSUS_MAP.items():
-            u_val = ""
-            p_val = ""
-            
-            u_missing_row = (u_idx is None)
-            p_missing_row = (p_idx is None)
-            u_missing_col = (u_col not in df_uzio.columns)
-            p_missing_col = (p_col not in df_paycom.columns)
+        # Check for ID Mismatch case (Same identity, different IDs)
+        if pc_id and uz_id != pc_id:
+            rows.append({
+                "Employee ID": uz_id,
+                "Employee Name": name,
+                "Section": "Census",
+                "Field": "Employee ID Correlation",
+                "Uzio Value": uz_id,
+                "Paycom Value": pc_id,
+                "Status": "Data Mismatch (Identity Match via SSN)"
+            })
 
-            if not u_missing_row and not u_missing_col:
-                u_val = norm_str(df_uzio.at[u_idx, u_col])
-            if not p_missing_row and not p_missing_col:
+        for u_col, p_col in PAYCOM_CENSUS_MAP.items():
+            u_val = norm_str(df_uzio.at[u_idx, u_col]) if u_col in df_uzio.columns else ""
+            p_val = ""
+            if p_idx is not None and p_col in df_paycom.columns:
                 p_val = norm_str(df_paycom.at[p_idx, p_col])
-                
-                # Fallback for Job Title
                 if p_col == "Position" and p_val == "":
                     for alt in ["Business_Title", "Job_Title_Description"]:
                         if alt in df_paycom.columns:
@@ -368,15 +384,11 @@ def run_census_audit(df_uzio, df_paycom):
                                 break
 
             # Decide status
-            if p_missing_row and not u_missing_row:
-                status = "Employee ID Not Found in Paycom"
-            elif u_missing_row and not p_missing_row:
-                status = "Employee ID Not Found in Uzio"
-            elif p_missing_col:
-                if p_col == "Position":
-                    print(f"DEBUG: 'Position' column missing for employee {eid}. Available: {df_paycom.columns.tolist()[:5]}...")
+            if p_idx is None:
+                status = STATUS_MISSING_PAYCOM
+            elif p_col not in df_paycom.columns:
                 status = "Column Missing in Paycom Sheet"
-            elif u_missing_col:
+            elif u_col not in df_uzio.columns:
                 status = "Column Missing in Uzio Sheet"
             else:
                 if should_ignore_field_for_paytype(u_col, emp_pay_type):
@@ -387,32 +399,47 @@ def run_census_audit(df_uzio, df_paycom):
                     else:
                         u_b = norm_blank(u_val)
                         p_b = norm_blank(p_val)
-                        
                         f_case = norm_colname(u_col).casefold()
                         if "employment status" in f_case and p_b != "":
                             uz_stat = canonical_employment_status(u_b)
                             pc_stat = canonical_employment_status(p_b)
-                            if "terminated" in uz_stat and "terminated" in pc_stat:
-                                status = STATUS_MATCH
+                            if "terminated" in uz_stat and "terminated" in pc_stat: status = STATUS_MATCH
                             elif "active" in uz_stat: status = "Active in Uzio"
                             elif "terminated" in uz_stat: status = "Terminated in Uzio"
                             elif not u_b and "active" in pc_stat: status = "Active in Paycom"
                             else: status = STATUS_MISMATCH
-                        elif not u_b and p_b:
-                            status = "Value missing in Uzio (Paycom has value)"
-                        elif u_b and not p_b:
-                            status = "Value missing in Paycom (Uzio has value)"
-                        else:
-                            status = STATUS_MISMATCH
+                        elif not u_b and p_b: status = "Value missing in Uzio (Paycom has value)"
+                        elif u_b and not p_b: status = "Value missing in Paycom (Uzio has value)"
+                        else: status = STATUS_MISMATCH
 
             rows.append({
-                "Employee ID": eid,
+                "Employee ID": uz_id,
                 "Employee Name": name,
                 "Section": "Census",
                 "Field": u_col.split("|")[-1],
                 "Uzio Value": u_val,
                 "Paycom Value": p_val,
                 "Status": status
+            })
+
+    # 3. Final Loop: Remaining Paycom employees not in Uzio (even via identity)
+    remaining_pc_ids = set(paycom_keys) - pc_keys_processed
+    for pc_id in sorted(remaining_pc_ids):
+        if not pc_id or pc_id == "nan": continue
+        p_idx = p_map.get(pc_id)
+        name = f"{norm_blank(df_paycom.at[p_idx, 'Legal_Firstname'])} {norm_blank(df_paycom.at[p_idx, 'Legal_Lastname'])}".strip()
+        p_status = paycom_status_map.get(pc_id, "")
+
+        for u_col, p_col in PAYCOM_CENSUS_MAP.items():
+            p_val = norm_str(df_paycom.at[p_idx, p_col]) if p_col in df_paycom.columns else ""
+            rows.append({
+                "Employee ID": pc_id,
+                "Employee Name": name,
+                "Section": "Census",
+                "Field": u_col.split("|")[-1],
+                "Uzio Value": "",
+                "Paycom Value": p_val,
+                "Status": STATUS_MISSING_UZIO
             })
     return pd.DataFrame(rows)
 
@@ -470,10 +497,22 @@ def get_active_missing_in_uzio(df_uzio, df_paycom):
     p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
     p_stat_col = next((c for c in df_paycom.columns if "Employee_Status" in c), "Employee_Status")
     
-    u_ids = set(df_uzio[u_id_col].map(norm_id))
+    # Use identity map to find which Paycom IDs are actually represented in Uzio
+    uzio_ssn_col = 'Personal|SSN'
+    paycom_ssn_col = next((c for c in df_paycom.columns if "SS_Number" in c or "SSN" in c), "SS_Number")
+    
+    uz_to_pc_map = get_identity_match_map(
+        df_uzio, df_paycom, 
+        uzio_id_col=u_id_col, 
+        vendor_id_col=p_id_col,
+        uzio_ssn_col=uzio_ssn_col,
+        vendor_ssn_col=paycom_ssn_col
+    )
+    pc_ids_in_uzio = set(uz_to_pc_map.values())
+
     for idx, row in df_paycom.iterrows():
         eid = norm_id(row.get(p_id_col))
-        if eid and eid not in u_ids:
+        if eid and eid not in pc_ids_in_uzio:
             stat = canonical_employment_status(row.get(p_stat_col))
             if stat == "active":
                 missing.append({
@@ -490,10 +529,22 @@ def get_terminated_missing_in_uzio(df_uzio, df_paycom):
     p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
     p_stat_col = next((c for c in df_paycom.columns if "Employee_Status" in c), "Employee_Status")
     
-    u_ids = set(df_uzio[u_id_col].map(norm_id))
+    # Use identity map to find which Paycom IDs are actually represented in Uzio
+    uzio_ssn_col = 'Personal|SSN'
+    paycom_ssn_col = next((c for c in df_paycom.columns if "SS_Number" in c or "SSN" in c), "SS_Number")
+    
+    uz_to_pc_map = get_identity_match_map(
+        df_uzio, df_paycom, 
+        uzio_id_col=u_id_col, 
+        vendor_id_col=p_id_col,
+        uzio_ssn_col=uzio_ssn_col,
+        vendor_ssn_col=paycom_ssn_col
+    )
+    pc_ids_in_uzio = set(uz_to_pc_map.values())
+
     for idx, row in df_paycom.iterrows():
         eid = norm_id(row.get(p_id_col))
-        if eid and eid not in u_ids:
+        if eid and eid not in pc_ids_in_uzio:
             stat = canonical_employment_status(row.get(p_stat_col))
             if stat == "terminated":
                 missing.append({

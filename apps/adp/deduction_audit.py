@@ -3,6 +3,7 @@ import pandas as pd
 import io
 import re
 from datetime import datetime
+from utils.audit_utils import get_identity_match_map, norm_ssn_canonical
 
 # =========================================================
 # ADP to Uzio Deduction Audit Tool
@@ -115,9 +116,32 @@ def _run_deduction_audit(df_uzio, df_adp, UI_MAPPING):
     adp_amt_col = next((c for c in df_adp.columns if "amount" in c.lower() or "rate" in c.lower()), None)
     adp_desc_col = next((c for c in df_adp.columns if "deduction" in c.lower() and "description" in c.lower()), None)
     adp_pct_col = next((c for c in df_adp.columns if "deduction" in c.lower() and "%" in c.lower()), None)
+    adp_ssn_col = next((c for c in df_adp.columns if "ssn" in c.lower() or "tax id" in c.lower()), None)
+
+    # Process Uzio Columns
+    uz_id_col = next((c for c in df_uzio.columns if "employee" in c.lower() and "id" in c.lower()), None)
+    uz_ded_col = next((c for c in df_uzio.columns if "deduction" in c.lower() and "name" in c.lower()), None)
+    uz_amt_col = next((c for c in df_uzio.columns if "amount" in c.lower() or "percent" in c.lower()), None)
+    uz_ssn_col = next((c for c in df_uzio.columns if "ssn" in c.lower()), None)
 
     if not all([adp_id_col, adp_code_col, adp_amt_col]):
         return None, f"ADP Sheet missing required columns (Associate ID, Deduction Code, Deduction Amount). Found: {list(df_adp.columns)}", []
+
+    if not all([uz_id_col, uz_ded_col, uz_amt_col]):
+        return None, f"Uzio Sheet missing required columns (Employee ID, Deduction Name, Amount/Percentage). Found: {list(df_uzio.columns)}", []
+
+    # 1. Resolve Identity Match Map (UZIO_ID -> ADP_ID)
+    uz_to_adp_id_map = {}
+    if uz_ssn_col and adp_ssn_col:
+        uz_to_adp_id_map = get_identity_match_map(
+            df_uzio, df_adp, 
+            uzio_id_col=uz_id_col, 
+            vendor_id_col=adp_id_col,
+            uzio_ssn_col=uz_ssn_col,
+            vendor_ssn_col=adp_ssn_col
+        )
+    # Reverse map for ADP -> Uzio lookup
+    adp_to_uz_id_map = {v: k for k, v in uz_to_adp_id_map.items()}
 
     adp_records = []
     for _, row in df_adp.iterrows():
@@ -140,13 +164,16 @@ def _run_deduction_audit(df_uzio, df_adp, UI_MAPPING):
             if pct_val != 0.0:
                 amt = pct_val
         
+        # Normalize for matching
+        match_id = adp_to_uz_id_map.get(emp_id, emp_id)
+        
         adp_records.append({
             "Employee_ID": emp_id,
             "Deduction_Name": deduction_name,
             "ADP_Raw_Code": raw_code,
             "ADP_Description": raw_desc,
             "ADP_Amount": amt,
-            "Key": f"{emp_id}|{deduction_name}".lower()
+            "Key": f"{match_id}|{deduction_name}".lower()
         })
     
     df_adp_clean = pd.DataFrame(adp_records)
@@ -154,14 +181,6 @@ def _run_deduction_audit(df_uzio, df_adp, UI_MAPPING):
         df_adp_clean = df_adp_clean.groupby(["Employee_ID", "Deduction_Name", "ADP_Raw_Code", "ADP_Description", "Key"], as_index=False)["ADP_Amount"].sum()
     else:
         df_adp_clean = pd.DataFrame(columns=["Employee_ID", "Deduction_Name", "ADP_Raw_Code", "ADP_Description", "Key", "ADP_Amount"])
-
-    # Process Uzio
-    uz_id_col = next((c for c in df_uzio.columns if "employee" in c.lower() and "id" in c.lower()), None)
-    uz_ded_col = next((c for c in df_uzio.columns if "deduction" in c.lower() and "name" in c.lower()), None)
-    uz_amt_col = next((c for c in df_uzio.columns if "amount" in c.lower() or "percent" in c.lower()), None)
-
-    if not all([uz_id_col, uz_ded_col, uz_amt_col]):
-        return None, f"Uzio Sheet missing required columns (Employee ID, Deduction Name, Amount/Percentage). Found: {list(df_uzio.columns)}", []
 
     uzio_records = []
     for _, row in df_uzio.iterrows():
@@ -191,7 +210,11 @@ def _run_deduction_audit(df_uzio, df_adp, UI_MAPPING):
     
     results = []
     for _, row in merged.iterrows():
-        emp_id = row["Employee_ID"] if pd.notna(row["Employee_ID"]) else row["Uzio_Employee_ID"]
+        adp_id = row["Employee_ID"] if pd.notna(row["Employee_ID"]) else ""
+        uz_id = row["Uzio_Employee_ID"] if pd.notna(row["Uzio_Employee_ID"]) else ""
+        
+        # Display ID: Use Uzio ID if possible
+        display_id = uz_id if uz_id else adp_id
         
         adp_final_name = row["ADP_Description"] if pd.notna(row["ADP_Amount"]) and pd.notna(row["ADP_Description"]) else (row["ADP_Raw_Code"] if pd.notna(row["ADP_Amount"]) else "Not Available")
         uzio_final_name = row["Uzio_Deduction_Name"] if pd.notna(row["Uzio_Amount"]) else "Not Available"
@@ -210,18 +233,28 @@ def _run_deduction_audit(df_uzio, df_adp, UI_MAPPING):
             else:
                 status = "Data Mismatch"
         elif has_adp and not has_uzio:
-            if emp_id in uzio_emps:
-                status = "Value missing in Uzio (ADP has value)"
+            if adp_id in adp_to_uz_id_map and adp_to_uz_id_map[adp_id] in uzio_emps:
+                 status = "Value missing in Uzio (ADP has value)"
+            elif adp_id in uzio_emps:
+                 status = "Value missing in Uzio (ADP has value)"
             else:
                 status = "Employee ID Not Found in Uzio"
         elif has_uzio and not has_adp:
-            if emp_id in adp_emps:
-                status = "Value missing in ADP (Uzio has value)"
+            if uz_id in uz_to_adp_id_map and uz_to_adp_id_map[uz_id] in adp_emps:
+                 status = "Value missing in ADP (Uzio has value)"
+            elif uz_id in adp_emps:
+                 status = "Value missing in ADP (Uzio has value)"
             else:
                 status = "Employee ID Not Found in ADP"
         
+        # Flag ID mismatch specifically if relevant
+        if has_adp and has_uzio and adp_id != uz_id:
+            status += " (Identity matched via SSN)"
+
         results.append({
-            "Employee ID": emp_id,
+            "Employee ID": display_id,
+            "ADP ID": adp_id,
+            "Uzio ID": uz_id,
             "ADP Deduction Description": adp_final_name,
             "Uzio Deduction Name": uzio_final_name,
             "ADP Code": raw_code,

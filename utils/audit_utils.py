@@ -408,6 +408,86 @@ def is_hourly_only_job_title(jt_val: str) -> bool:
         return True
     return False
 
+def norm_ssn_canonical(x):
+    """Normalize SSN to 9 digits, no dashes, padded with zeros."""
+    x = norm_blank(x)
+    if x == "":
+        return ""
+    s = str(x).strip().replace("-", "").replace(" ", "")
+    # Remove decimal if exists
+    if s.endswith(".0"):
+        s = s[:-2]
+    # Keep only digits
+    s = re.sub(r"\D", "", s)
+    if not s:
+        return ""
+    return s.zfill(9)[-9:]
+
+def get_identity_match_map(df_uzio, df_vendor, uzio_id_col, vendor_id_col, uzio_ssn_col, vendor_ssn_col):
+    """
+    Returns a dict mapping UZIO_ID -> VENDOR_ID for identity reconciliation.
+    Logical Steps:
+    1. Perfect ID Match (uzio_id == vendor_id).
+    2. Identity Match (uzio_id != vendor_id BUT SSN matches).
+    """
+    uz_ids = set(norm_key_series(df_uzio[uzio_id_col]).replace("", pd.NA).dropna())
+    v_ids = set(norm_key_series(df_vendor[vendor_id_col]).replace("", pd.NA).dropna())
+    
+    # 1. Start with exact matches
+    match_map = {eid: eid for eid in (uz_ids & v_ids)}
+    
+    # 2. Identify "strays" (those without an exact ID match)
+    stray_uz = uz_ids - v_ids
+    stray_v = v_ids - uz_ids
+    
+    if not stray_uz or not stray_v:
+        return match_map
+        
+    # Build a lookup for stray vendor records by SSN
+    v_ssn_lookup = {}
+    for idx, row in df_vendor.iterrows():
+        vid = norm_blank(row.get(vendor_id_col))
+        if not vid or str(vid) not in stray_v:
+            continue
+        ssn_val = norm_ssn_canonical(row.get(vendor_ssn_col))
+        if ssn_val:
+            # If multiple people have the same SSN (unlikely but possible), 
+            # we only take the first one to avoid ambiguous matching
+            if ssn_val not in v_ssn_lookup:
+                v_ssn_lookup[ssn_val] = str(vid)
+                
+    # Now check stray Uzio records against the SSN lookup
+    for idx, row in df_uzio.iterrows():
+        uzid = norm_blank(row.get(uzio_id_col))
+        if not uzid or str(uzid) not in stray_uz:
+            continue
+        ssn_val = norm_ssn_canonical(row.get(uzio_ssn_col))
+        if ssn_val and ssn_val in v_ssn_lookup:
+            vid = v_ssn_lookup[ssn_val]
+            match_map[str(uzid)] = vid
+            
+    return match_map
+
+def detect_duplicate_ssns(df, id_col, ssn_col):
+    """
+    Returns a dictionary of SSNs mapping to a list of IDs sharing that SSN.
+    Only returns SSNs that are associated with more than one unique ID.
+    Excludes blank SSNs.
+    """
+    id_ssn_map = {}
+    for _, row in df.iterrows():
+        eid = str(row.get(id_col, "")).strip()
+        ssn = norm_ssn_canonical(row.get(ssn_col, ""))
+        if not ssn or not eid:
+            continue
+        if ssn not in id_ssn_map:
+            id_ssn_map[ssn] = set()
+        id_ssn_map[ssn].add(eid)
+    
+    # Filter for duplicates
+    duplicates = {ssn: sorted(list(ids)) for ssn, ids in id_ssn_map.items() if len(ids) > 1}
+    return duplicates
+
 def clean_money_val(x):
     """Parse money/percentage strings to float. Returns original string if not a number."""
     if pd.isna(x) or x == "":

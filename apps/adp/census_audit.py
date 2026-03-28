@@ -9,7 +9,7 @@ from utils.audit_utils import (
     read_uzio_raw_file, generate_uzio_template,
     HOURLY_ONLY_JOB_TITLES, is_hourly_only_job_title,
     norm_colname, norm_blank, try_parse_date, ensure_unique_columns, safe_val, normalize_space_and_case,
-    as_float_or_none, find_col
+    as_float_or_none, find_col, get_identity_match_map, norm_ssn_canonical
 )
 
 # =========================================================
@@ -653,16 +653,60 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                 adp_lname_col = c
                 break
 
+    uzio_ssn_col = 'SSN'
+    adp_ssn_col = next((c for c in adp.columns if "Tax ID (SSN)" in c or "SSN" in c), None)
+
+    # 1. Resolve Identity Match Map (UZIO_ID -> ADP_ID)
+    uz_to_adp_id_map = get_identity_match_map(
+        uzio, adp, 
+        uzio_id_col=UZIO_KEY, 
+        vendor_id_col=ADP_KEY,
+        uzio_ssn_col=uzio_ssn_col,
+        vendor_ssn_col=adp_ssn_col
+    )
+
+    # 1.1 Data Quality Check: Duplicate SSNs
+    uz_dupe_ssns = detect_duplicate_ssns(uzio, UZIO_KEY, uzio_ssn_col)
+    adp_dupe_ssns = detect_duplicate_ssns(adp, ADP_KEY, adp_ssn_col)
+    
+    dupe_ssn_rows = []
+    for ssn, ids in uz_dupe_ssns.items():
+        dupe_ssn_rows.append({
+            "Source": "Uzio",
+            "SSN": ssn,
+            "Employee IDs": ", ".join(ids),
+            "Issue": "Duplicate SSN found for multiple IDs in Uzio"
+        })
+    for ssn, ids in adp_dupe_ssns.items():
+        dupe_ssn_rows.append({
+            "Source": "ADP",
+            "SSN": ssn,
+            "Employee IDs": ", ".join(ids),
+            "Issue": "Duplicate SSN found for multiple IDs in ADP"
+        })
+    df_dupe_ssns = pd.DataFrame(dupe_ssn_rows)
+
+    # 2. Collect all Uzio primary keys and track ADP processed keys
+    adp_keys_processed = set()
     rows = []
     uzio_fname_col = 'First Name'
     uzio_lname_col = 'Last Name'
-    for emp_id in all_keys:
-        uz_exists = emp_id in uzio_idx.index
-        adp_exists = emp_id in adp_idx.index
 
-        uz_emp_status = get_uzio_employment_status(emp_id)
-        adp_emp_status_val = get_adp_employment_status(emp_id)
-        emp_paytype = get_employee_pay_type(emp_id, adp_exists=adp_exists, uz_exists=uz_exists)
+    # 3. Main Loop: Iterate through all Uzio employees
+    for uz_id in sorted(uzio_keys):
+        # find the associated adp_id (might be the same OR different via identity match)
+        adp_id = uz_to_adp_id_map.get(uz_id)
+        
+        uz_exists = True # because we are in uzio_keys
+        adp_exists = adp_id is not None
+        
+        if adp_exists:
+            adp_keys_processed.add(adp_id)
+
+        uz_emp_status = get_uzio_employment_status(uz_id)
+        adp_id_for_status = adp_id if adp_id else uz_id # fallback for missing case
+        adp_emp_status_val = get_adp_employment_status(adp_id_for_status) if adp_exists else ""
+        emp_paytype = get_employee_pay_type(uz_id if uz_exists else adp_id, adp_exists=adp_exists, uz_exists=uz_exists)
         emp_pay_bucket = paytype_bucket(normalize_paytype_text(emp_paytype))
 
         # --- Determine Employee Name ---
@@ -670,38 +714,51 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         lname = ""
         if uz_exists:
             if uzio_fname_col in uzio_idx.columns:
-                fname = str(norm_blank(uzio_idx.at[emp_id, uzio_fname_col]) or "")
+                fname = str(norm_blank(uzio_idx.at[uz_id, uzio_fname_col]) or "")
             if uzio_lname_col in uzio_idx.columns:
-                lname = str(norm_blank(uzio_idx.at[emp_id, uzio_lname_col]) or "")
+                lname = str(norm_blank(uzio_idx.at[uz_id, uzio_lname_col]) or "")
         
-        # Fallback to ADP if Uzio is blank or employee not in Uzio
         if (fname == "" and lname == "") and adp_exists:
             if adp_fname_col and adp_fname_col in adp_idx.columns:
-                fname = str(norm_blank(adp_idx.at[emp_id, adp_fname_col]) or "")
+                fname = str(norm_blank(adp_idx.at[adp_id, adp_fname_col]) or "")
             if adp_lname_col and adp_lname_col in adp_idx.columns:
-                lname = str(norm_blank(adp_idx.at[emp_id, adp_lname_col]) or "")
-        
+                lname = str(norm_blank(adp_idx.at[adp_id, adp_lname_col]) or "")
+
         emp_name = f"{fname} {lname}".strip()
+        
+        # Check for ID Mismatch case (Same identity, different IDs)
+        if adp_exists and uz_id != adp_id:
+            rows.append({
+                "Employee ID": uz_id,
+                "Employee Name": emp_name,
+                "Employment Status": uz_emp_status,
+                "Employment Status (ADP)": adp_emp_status_val,
+                "Pay Type": emp_paytype,
+                "Field": "Employee ID Correlation",
+                "UZIO_Value": uz_id,
+                "ADP_Value": adp_id,
+                "ADP_SourceOfTruth_Status": "Data Mismatch (Identity Match via SSN)"
+            })
 
         for field in mapped_fields:
             adp_col = uz_to_adp.get(field, "")
             
-            # Check if columns exist in the usage data
             uz_col_missing = (field not in uzio.columns)
             adp_col_missing = (adp_col not in adp.columns)
 
-            uz_val_raw = safe_val(uzio_idx, emp_id, field) if (uz_exists and not uz_col_missing) else ""
+            uz_val_raw = safe_val(uzio_idx, uz_id, field) if (uz_exists and not uz_col_missing) else ""
             uz_val = cleanse_uzio_value_for_field(field, uz_val_raw)
 
-            adp_val = safe_val(adp_idx, emp_id, adp_col) if (adp_exists and not adp_col_missing) else ""
+            adp_val = safe_val(adp_idx, adp_id, adp_col) if (adp_exists and not adp_col_missing) else ""
 
-            if not adp_exists and uz_exists:
+            # Check for ID Mismatch case (Same identity, different IDs)
+            is_id_mismatch = (adp_exists and uz_id != adp_id)
+
+            if not adp_exists:
                 status = "Employee ID Not Found in ADP"
-            elif adp_exists and not uz_exists:
-                status = "Employee ID Not Found in Uzio"
-            elif adp_exists and uz_exists and adp_col_missing:
+            elif adp_col_missing:
                 status = "Column Missing in ADP Sheet"
-            elif adp_exists and uz_exists and uz_col_missing:
+            elif uz_col_missing:
                 status = "Column Missing in Uzio Sheet"
             else:
                 if is_pay_type_field(field):
@@ -823,15 +880,42 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                                 status = "Data Match"
 
             rows.append({
-                "Employee ID": emp_id,
+                "Employee ID": uz_id,
                 "Employee Name": emp_name,
                 "Employment Status": uz_emp_status,
                 "Employment Status (ADP)": adp_emp_status_val,
                 "Pay Type": emp_paytype,
                 "Field": field,
-                "UZIO_Value": uz_val,
+                "UZIO_Value": uz_val_raw,
                 "ADP_Value": adp_val,
                 "ADP_SourceOfTruth_Status": status
+            })
+
+    # 4. Final Loop: Remaining ADP employees not in Uzio (even via identity)
+    remaining_adp_ids = set(adp_keys) - adp_keys_processed
+    for adp_id in sorted(remaining_adp_ids):
+        adp_emp_status_val = get_adp_employment_status(adp_id)
+        emp_paytype = get_employee_pay_type(adp_id, adp_exists=True, uz_exists=False)
+        emp_pay_bucket = paytype_bucket(normalize_paytype_text(emp_paytype))
+
+        fname = str(norm_blank(adp_idx.at[adp_id, adp_fname_col]) or "") if adp_fname_col else ""
+        lname = str(norm_blank(adp_idx.at[adp_id, adp_lname_col]) or "") if adp_lname_col else ""
+        emp_name = f"{fname} {lname}".strip()
+
+        for field in mapped_fields:
+            adp_col = uz_to_adp.get(field, "")
+            adp_val = safe_val(adp_idx, adp_id, adp_col) if adp_col in adp.columns else ""
+
+            rows.append({
+                "Employee ID": adp_id,
+                "Employee Name": emp_name,
+                "Employment Status": "",
+                "Employment Status (ADP)": adp_emp_status_val,
+                "Pay Type": emp_paytype,
+                "Field": field,
+                "UZIO_Value": "",
+                "ADP_Value": adp_val,
+                "ADP_SourceOfTruth_Status": "Employee ID Not Found in Uzio"
             })
 
     comparison_detail = pd.DataFrame(rows)[[
@@ -1115,6 +1199,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             "Active in ADP but Missing in Uzio",
             "Terminated in ADP but Missing in Uzio",
             "Data Quality Issues (00/00/0000)",
+            "Duplicate SSN Warnings",
             "Salaried Hourly-Only Exceptions",
             "High Hourly Rate Anomalies (>$100/hr)"
         ],
@@ -1132,6 +1217,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             len(active_missing_rows),
             len(terminated_missing_rows),
             len(dq_rows),
+            len(dupe_ssn_rows),
             len(df_salaried_drivers),
             len(df_high_rate)
         ]
@@ -1147,6 +1233,8 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         dq_issues.to_excel(writer, sheet_name="Data_Quality_Issues", index=False)
         active_missing_in_uzio.to_excel(writer, sheet_name="Active_Missing_In_Uzio", index=False)
         terminated_missing_in_uzio.to_excel(writer, sheet_name="Terminated_Missing_In_Uzio", index=False)
+        if not df_dupe_ssns.empty:
+            df_dupe_ssns.to_excel(writer, sheet_name="Duplicate_SSN_Check", index=False)
         if not df_salaried_drivers.empty:
             df_salaried_drivers.to_excel(writer, sheet_name="Salaried_Driver_Exceptions", index=False)
         if not df_high_rate.empty:
@@ -1159,8 +1247,10 @@ def render_ui():
     st.title(APP_TITLE)
     st.markdown("""
     **Instructions**:
-    1. Upload **Uzio Census Export** (.xlsm).
-    2. Upload **ADP Census Export** (.xlsx).
+    1. Upload **Standard Uzio Census Template** (.xlsm).
+    2. Upload **ADP Census Template** (.xlsx).
+    3. Make sure the ADP Census template does not have licence details and emergency details for that we have seperate tool.
+    
     
     **Output Reports**:
     - **Comparison**: Discrepancies between Uzio and ADP.

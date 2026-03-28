@@ -10,7 +10,7 @@ from utils.audit_utils import (
     read_uzio_raw_file,
     HOURLY_ONLY_JOB_TITLES, is_hourly_only_job_title,
     norm_colname, norm_blank, try_parse_date, ensure_unique_columns, safe_val, normalize_space_and_case,
-    norm_key_series, as_float_or_none, find_col
+    norm_key_series, as_float_or_none, find_col, get_identity_match_map, norm_ssn_canonical
 )
 
 # =========================================================
@@ -464,48 +464,109 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
     uzio_fname_col = 'First Name'
     uzio_lname_col = 'Last Name'
 
-    all_emps = sorted(set(uzio_idx.keys()).union(set(paycom_idx.keys())))
+    uzio_ssn_col = 'SSN'
+    paycom_ssn_col = next((c for c in paycom.columns if "Tax ID (SSN)" in c or "SSN" in c), None)
 
+    # 1. Resolve Identity Match Map (UZIO_ID -> PAYCOM_ID)
+    uz_to_pc_id_map = get_identity_match_map(
+        uzio, paycom, 
+        uzio_id_col=UZIO_KEY, 
+        vendor_id_col=PAYCOM_KEY,
+        uzio_ssn_col=uzio_ssn_col,
+        vendor_ssn_col=paycom_ssn_col
+    )
+
+    # 1.1 Data Quality Check: Duplicate SSNs
+    uz_dupe_ssns = detect_duplicate_ssns(uzio, UZIO_KEY, uzio_ssn_col)
+    pc_dupe_ssns = detect_duplicate_ssns(paycom, PAYCOM_KEY, paycom_ssn_col)
+    
+    dupe_ssn_rows = []
+    for ssn, ids in uz_dupe_ssns.items():
+        dupe_ssn_rows.append({
+            "Source": "Uzio",
+            "SSN": ssn,
+            "Employee IDs": ", ".join(ids),
+            "Issue": "Duplicate SSN found for multiple IDs in Uzio"
+        })
+    for ssn, ids in pc_dupe_ssns.items():
+        dupe_ssn_rows.append({
+            "Source": "Paycom",
+            "SSN": ssn,
+            "Employee IDs": ", ".join(ids),
+            "Issue": "Duplicate SSN found for multiple IDs in Paycom"
+        })
+    df_dupe_ssns = pd.DataFrame(dupe_ssn_rows)
+
+    pc_keys_processed = set()
     rows = []
-    for eid in all_emps:
-        u_i = uzio_idx.get(eid)
-        p_i = paycom_idx.get(eid)
+    uzio_keys = sorted(set(uzio_idx.keys()))
+    paycom_keys = sorted(set(paycom_idx.keys()))
 
-        emp_status_context = get_emp_status(eid)
-        paycom_emp_status_val = str(paycom_status_map.get(eid, ""))  # Paycom status, blank if not present
-        emp_pay_type = pay_type_map.get(eid, "")
+    # 2. Main Loop: Iterate through all Uzio employees
+    for uz_id in uzio_keys:
+        pc_id = uz_to_pc_id_map.get(uz_id)
+        
+        u_i = uzio_idx.get(uz_id)
+        p_i = paycom_idx.get(pc_id) if pc_id else None
+        
+        if p_i is not None:
+            pc_keys_processed.add(pc_id)
+
+        emp_status_context = get_emp_status(uz_id)
+        paycom_emp_status_val = str(paycom_status_map.get(pc_id if pc_id else uz_id, "")) 
+        emp_pay_type = pay_type_map.get(uz_id, "")
+
+        # --- Determine Employee Name ---
+        fname = ""
+        lname = ""
+        if u_i is not None:
+            if uzio_fname_col in uzio.columns:
+                fname = str(norm_blank(uzio.at[u_i, uzio_fname_col]) or "")
+            if uzio_lname_col in uzio.columns:
+                lname = str(norm_blank(uzio.at[u_i, uzio_lname_col]) or "")
+        
+        if (fname == "" and lname == "") and p_i is not None:
+             # Fallback to Paycom name cols
+             pc_fname_col = next((c for c in paycom.columns if "First Name" in c), None)
+             pc_lname_col = next((c for c in paycom.columns if "Last Name" in c), None)
+             if pc_fname_col: fname = str(norm_blank(paycom.at[p_i, pc_fname_col]) or "")
+             if pc_lname_col: lname = str(norm_blank(paycom.at[p_i, pc_lname_col]) or "")
+        
+        emp_name = f"{fname} {lname}".strip()
+
+        # Check for ID Mismatch case (Same identity, different IDs)
+        if pc_id and uz_id != pc_id:
+            rows.append({
+                "Employee ID": uz_id,
+                "Employee Name": emp_name,
+                "Field": "Employee ID Correlation",
+                "Employment Status": emp_status_context,
+                "Employment Status (Paycom)": paycom_emp_status_val,
+                "UZIO_Value": uz_id,
+                "PAYCOM_Value": pc_id,
+                "PAYCOM_SourceOfTruth_Status": "Data Mismatch (Identity Match via SSN)"
+            })
 
         for field in mapped_fields:
-            uz_field = field # Internal Standard Name
+            uz_field = field 
             pc_col_raw = PAYCOM_FIELD_MAP.get(field)
-            if not pc_col_raw:
-                continue
+            if not pc_col_raw: continue
             pc_col = norm_colname(pc_col_raw)
-
-            uz_missing_row = (u_i is None)
-            pc_missing_row = (p_i is None)
 
             uz_missing_col = (uz_field not in uzio.columns)
             pc_missing_col = (pc_col not in paycom.columns)
 
-            uz_val = ""
-            pc_val = ""
-            if (not uz_missing_row) and (not uz_missing_col):
-                uz_val = safe_val(uzio, u_i, uz_field)
-            if (not pc_missing_row) and (not pc_missing_col):
-                pc_val = safe_val(paycom, p_i, pc_col)
+            uz_val = safe_val(uzio, u_i, uz_field) if not uz_missing_col else ""
+            pc_val = safe_val(paycom, p_i, pc_col) if (p_i is not None and not pc_missing_col) else ""
 
             # Decide status
-            if pc_missing_row and (not uz_missing_row):
+            if p_i is None:
                 status = "Employee ID Not Found in Paycom"
-            elif uz_missing_row and (not pc_missing_row):
-                status = "Employee ID Not Found in Uzio"
             elif pc_missing_col:
                 status = "Column Missing in Paycom Sheet"
             elif uz_missing_col:
                 status = "Column Missing in Uzio Sheet"
             else:
-                # ✅ Pay-type based ignore rules (your latest requirement)
                 if should_ignore_field_for_paytype(uz_field, emp_pay_type):
                     status = "Data Match"
                 else:
@@ -516,28 +577,17 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                         uz_b = norm_blank(uz_val)
                         pc_b = norm_blank(pc_val)
                         
-                        is_terminated_context = "term" in emp_status_context.lower()
-                        
-                        # Apply special Employment Status missing logic matching ADP tool
                         f_case = norm_colname(uz_field).casefold()
                         if "employment status" in f_case and pc_b != "":
                             uz_stat = canonical_employment_status(uz_b)
                             pc_stat = canonical_employment_status(pc_b)
-                            
-                            if "term" in uz_stat and "inactive" in pc_b.lower():
-                                status = "Data Match"
-                            elif "active" in uz_stat:
-                                status = "Active in Uzio"
-                            elif "term" in uz_stat:
-                                status = "Terminated in Uzio"
-                            elif uz_b == "" and "active" in pc_stat:
-                                status = "Active in Paycom"
-                            elif uz_b == "" and ("term" in pc_stat or "retire" in pc_stat):
-                                status = "Terminated in Paycom"
-                            else:
-                                status = "Data Mismatch"
+                            if "term" in uz_stat and "inactive" in pc_b.lower(): status = "Data Match"
+                            elif "active" in uz_stat: status = "Active in Uzio"
+                            elif "term" in uz_stat: status = "Terminated in Uzio"
+                            elif uz_b == "" and "active" in pc_stat: status = "Active in Paycom"
+                            elif uz_b == "" and ("term" in pc_stat or "retire" in pc_stat): status = "Terminated in Paycom"
+                            else: status = "Data Mismatch"
                         else:
-                            # Standard missing/mismatch logic
                             if (uz_b == "" or uz_b is None) and (pc_b != "" and pc_b is not None):
                                 status = "Value missing in Uzio (Paycom has value)"
                             elif (uz_b != "" and uz_b is not None) and (pc_b == "" or pc_b is None):
@@ -545,30 +595,56 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                             else:
                                 status = "Data Mismatch"
 
-            rows.append(
-                {
-                    "Employee": display_id_map.get(eid, eid),  # Use original leading-zero form
-                    "Field": uz_field,
-                    "Employment Status": emp_status_context,  # extra context column
-                    "Employment Status (Paycom)": paycom_emp_status_val,  # Paycom status always shown
-                    "UZIO_Value": uz_val,
-                    "PAYCOM_Value": pc_val,
-                    "PAYCOM_SourceOfTruth_Status": status,
-                }
-            )
+            rows.append({
+                "Employee ID": uz_id,
+                "Employee Name": emp_name,
+                "Field": uz_field,
+                "Employment Status": emp_status_context,
+                "Employment Status (Paycom)": paycom_emp_status_val,
+                "UZIO_Value": uz_val,
+                "PAYCOM_Value": pc_val,
+                "PAYCOM_SourceOfTruth_Status": status,
+            })
 
-    comparison_detail = pd.DataFrame(
-        rows,
-        columns=[
-            "Employee",
-            "Field",
-            "Employment Status",
-            "Employment Status (Paycom)",
-            "UZIO_Value",
-            "PAYCOM_Value",
-            "PAYCOM_SourceOfTruth_Status",
-        ],
-    )
+    # 3. Final Loop: Remaining Paycom employees not in Uzio (even via identity)
+    remaining_pc_ids = set(paycom_keys) - pc_keys_processed
+    for pc_id in sorted(remaining_pc_ids):
+        p_i = paycom_idx.get(pc_id)
+        emp_status_context = get_emp_status(pc_id)
+        paycom_emp_status_val = str(paycom_status_map.get(pc_id, ""))
+        emp_pay_type = pay_type_map.get(pc_id, "")
+
+        # Determine Name for Paycom-only records
+        fname = ""
+        lname = ""
+        pc_fname_col = next((c for c in paycom.columns if "First Name" in c), None)
+        pc_lname_col = next((c for c in paycom.columns if "Last Name" in c), None)
+        if pc_fname_col: fname = str(norm_blank(paycom.at[p_i, pc_fname_col]) or "")
+        if pc_lname_col: lname = str(norm_blank(paycom.at[p_i, pc_lname_col]) or "")
+        emp_name = f"{fname} {lname}".strip()
+
+        for field in mapped_fields:
+            uz_field = field
+            pc_col_raw = PAYCOM_FIELD_MAP.get(field)
+            if not pc_col_raw: continue
+            pc_col = norm_colname(pc_col_raw)
+            pc_val = safe_val(paycom, p_i, pc_col) if pc_col in paycom.columns else ""
+
+            rows.append({
+                "Employee ID": pc_id,
+                "Employee Name": emp_name,
+                "Field": uz_field,
+                "Employment Status": emp_status_context,
+                "Employment Status (Paycom)": paycom_emp_status_val,
+                "UZIO_Value": "",
+                "PAYCOM_Value": pc_val,
+                "PAYCOM_SourceOfTruth_Status": "Employee ID Not Found in Uzio"
+            })
+
+    comparison_detail = pd.DataFrame(rows, columns=[
+        "Employee ID", "Employee Name", "Field", "Employment Status", "Employment Status (Paycom)",
+        "UZIO_Value", "PAYCOM_Value", "PAYCOM_SourceOfTruth_Status",
+    ])
 
     # ---------------- Salaried Driver Exceptions ----------------
     salaried_drivers_pc = []
@@ -853,7 +929,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
             comparison_detail.pivot_table(
                 index="Field",
                 columns="PAYCOM_SourceOfTruth_Status",
-                values="Employee",
+                values="Employee ID",
                 aggfunc="count",
                 fill_value=0,
             )
@@ -922,6 +998,8 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 "FLSA Compliance Issues",
                 "Active in Paycom but Missing in Uzio",
                 "Terminated in Paycom but Missing in Uzio",
+                "Data Quality Issues (00/00/0000)",
+                "Duplicate SSN Warnings",
                 "Salaried Hourly-Only Exceptions",
                 "High Hourly Rate Anomalies (>$100/hr)",
             ],
@@ -938,6 +1016,8 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 len(flsa_rows),
                 len(active_missing_rows),
                 len(terminated_missing_rows),
+                len(dq_rows),
+                len(dupe_ssn_rows),
                 len(df_salaried_drivers_pc),
                 len(df_high_rate_pc),
             ],
@@ -953,6 +1033,8 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         dq_issues.to_excel(writer, sheet_name="Data_Quality_Issues", index=False)
         active_missing_in_uzio.to_excel(writer, sheet_name="Active_Missing_In_Uzio", index=False)
         terminated_missing_in_uzio.to_excel(writer, sheet_name="Terminated_Missing_In_Uzio", index=False)
+        if not df_dupe_ssns.empty:
+            df_dupe_ssns.to_excel(writer, sheet_name="Duplicate_SSN_Check", index=False)
         if not df_salaried_drivers_pc.empty:
             df_salaried_drivers_pc.to_excel(writer, sheet_name="Salaried_Driver_Exceptions", index=False)
         if not df_high_rate_pc.empty:

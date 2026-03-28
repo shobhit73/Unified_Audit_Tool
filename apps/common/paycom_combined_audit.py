@@ -114,7 +114,16 @@ PAYCOM_CENSUS_MAP = {
     'Job|Work Location': 'Work_Location',
     'Job|Reporting Manager': 'Supervisor_Primary_Code',
     'Job|Race/Ethnicity': 'EEO1_Ethnicity',
-    'Job|EEO Job Category': 'SOC_Code' # Surrogate mapping for SOC Code
+    'Job|EEO Job Category': 'SOC_Code',
+    'Job|Termination Date': 'Termination_Date',
+    'Job|Termination Reason': 'Termination_Reason',
+    'Personal|Tobacco Usage': 'Tobacco_User',
+    'Job|FLSA Classification': 'Exempt_Status',
+    'Mailing Address|Address Line 1': 'Mailing_Address_Line_1',
+    'Mailing Address|Address Line 2': 'Mailing_Address_Line_2',
+    'Mailing Address|City': 'Mailing_City/Municipality',
+    'Mailing Address|Zip': 'Mailing_Zip/Postal_Code',
+    'Mailing Address|State': 'Mailing_State/Province'
 }
 
 # --- Normalization Helpers (Ported from census_audit.py) ---
@@ -130,6 +139,16 @@ def normalize_employment_type(x):
     if s in {"seasonal", "temporary", "temp"}:
         return "seasonal"
     return s
+
+# --- Anomaly Detection Constants ---
+HOURLY_ONLY_JOB_TITLES = {
+    "driver", "delivery driver", "truck driver", "warehouse", 
+    "warehouse worker", "material handler", "forklift operator"
+}
+
+def is_hourly_only_job_title(title):
+    t = str(title or "").lower().strip()
+    return any(keyword in t for keyword in HOURLY_ONLY_JOB_TITLES)
 
 def normalize_suffix(x):
     s = norm_colname(x).casefold()
@@ -398,6 +417,109 @@ def run_census_audit(df_uzio, df_paycom):
                 "Status": status
             })
     return pd.DataFrame(rows)
+
+# --- Anomaly Extraction Functions ---
+
+def get_salaried_driver_exceptions(df_uzio, df_paycom):
+    exceptions = []
+    p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
+    p_jt_col = next((c for c in df_paycom.columns if "Position" in c), "Position")
+    p_pt_col = next((c for c in df_paycom.columns if "Pay_Type" in c), "Pay_Type")
+    
+    for idx, row in df_paycom.iterrows():
+        jt = str(row.get(p_jt_col, "")).strip()
+        pt = str(row.get(p_pt_col, "")).strip().lower()
+        if "salary" in pt and is_hourly_only_job_title(jt):
+            eid = norm_id(row.get(p_id_col))
+            exceptions.append({
+                "Employee ID": eid,
+                "Employee Name": f"{row.get('Legal_Firstname', '')} {row.get('Legal_Lastname', '')}".strip(),
+                "Job Title (Paycom)": jt,
+                "Pay Type (Paycom)": pt.capitalize(),
+                "Issue": "Salaried employee in hourly-only role"
+            })
+    return pd.DataFrame(exceptions)
+
+def get_flsa_compliance_issues(df_uzio):
+    issues = []
+    u_id_col = "Job|Employee ID"
+    u_pt_col = "Job|Pay Type"
+    u_flsa_col = "Job|FLSA Classification"
+    
+    if all(c in df_uzio.columns for c in [u_id_col, u_pt_col, u_flsa_col]):
+        for idx, row in df_uzio.iterrows():
+            pt = canonical_pay_type(row.get(u_pt_col))
+            flsa = str(row.get(u_flsa_col, "")).lower()
+            issue = ""
+            if pt == "hourly" and "exempt" in flsa and "non" not in flsa:
+                issue = "Hourly employee classified as Exempt"
+            elif pt == "salaried" and "non-exempt" in flsa:
+                issue = "Salaried employee classified as Non-Exempt"
+            
+            if issue:
+                issues.append({
+                    "Employee ID": norm_id(row.get(u_id_col)),
+                    "Employee Name": f"{row.get('Personal|First Name', '')} {row.get('Personal|Last Name', '')}".strip(),
+                    "Pay Type": pt.capitalize(),
+                    "FLSA Classification": row.get(u_flsa_col),
+                    "Issue": issue
+                })
+    return pd.DataFrame(issues)
+
+def get_active_missing_in_uzio(df_uzio, df_paycom):
+    missing = []
+    u_id_col = "Job|Employee ID"
+    p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
+    p_stat_col = next((c for c in df_paycom.columns if "Employee_Status" in c), "Employee_Status")
+    
+    u_ids = set(df_uzio[u_id_col].map(norm_id))
+    for idx, row in df_paycom.iterrows():
+        eid = norm_id(row.get(p_id_col))
+        if eid and eid not in u_ids:
+            stat = canonical_employment_status(row.get(p_stat_col))
+            if stat == "active":
+                missing.append({
+                    "Employee ID": eid,
+                    "Employee Name": f"{row.get('Legal_Firstname', '')} {row.get('Legal_Lastname', '')}".strip(),
+                    "Status (Paycom)": row.get(p_stat_col),
+                    "Hire Date": row.get('Most_Recent_Hire_Date', '')
+                })
+    return pd.DataFrame(missing)
+
+def get_data_quality_issues(df_paycom):
+    issues = []
+    p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
+    for idx, row in df_paycom.iterrows():
+        eid = norm_id(row.get(p_id_col))
+        for col in df_paycom.columns:
+            val = str(row[col])
+            if "00/00/0000" in val:
+                issues.append({
+                    "Employee ID": eid,
+                    "Employee Name": f"{row.get('Legal_Firstname', '')} {row.get('Legal_Lastname', '')}".strip(),
+                    "Column": col,
+                    "Issue": "Invalid Date Placeholder (00/00/0000)"
+                })
+    return pd.DataFrame(issues)
+
+def get_high_rate_anomalies(df_paycom):
+    anomalies = []
+    p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
+    p_rate_col = next((c for c in df_paycom.columns if "Rate_1" in c), "Rate_1")
+    p_jt_col = next((c for c in df_paycom.columns if "Position" in c), "Position")
+    
+    for idx, row in df_paycom.iterrows():
+        rate = norm_money(row.get(p_rate_col))
+        jt = str(row.get(p_jt_col, "")).strip()
+        if rate > 100.0 and is_hourly_only_job_title(jt):
+            anomalies.append({
+                "Employee ID": norm_id(row.get(p_id_col)),
+                "Employee Name": f"{row.get('Legal_Firstname', '')} {row.get('Legal_Lastname', '')}".strip(),
+                "Job Title": jt,
+                "Rate": f"${rate:.2f}/hr",
+                "Issue": "Hourly rate > $100/hr"
+            })
+    return pd.DataFrame(anomalies)
 
 def run_payment_audit(df_uzio, df_paycom):
     rows = []
@@ -750,6 +872,13 @@ def render_ui():
                 res_payment = run_payment_audit(df_uzio, df_paycom)
                 res_emergency = run_emergency_audit(df_uzio, df_paycom)
                 
+                # --- Run Anomaly Reports ---
+                df_salaried_drivers = get_salaried_driver_exceptions(df_uzio, df_paycom)
+                df_flsa_issues = get_flsa_compliance_issues(df_uzio)
+                df_active_missing = get_active_missing_in_uzio(df_uzio, df_paycom)
+                df_dq_issues = get_data_quality_issues(df_paycom)
+                df_high_rates = get_high_rate_anomalies(df_paycom)
+                
                 # --- Generate Summary Metrics ---
                 p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
                 uzio_ids = set(df_uzio["Job|Employee ID"].map(norm_id))
@@ -766,6 +895,12 @@ def render_ui():
                     {"Metric": "Payment Mismatches", "Value": len(res_payment[res_payment["Status"] == STATUS_MISMATCH])},
                     {"Metric": "Emergency Matches", "Value": len(res_emergency[res_emergency["Status"] == STATUS_MATCH])},
                     {"Metric": "Emergency Mismatches", "Value": len(res_emergency[res_emergency["Status"] == STATUS_MISMATCH])},
+                    {"Metric": "---", "Value": ""},
+                    {"Metric": "Salaried Driver Exceptions", "Value": len(df_salaried_drivers)},
+                    {"Metric": "FLSA Compliance Issues", "Value": len(df_flsa_issues)},
+                    {"Metric": "Active Employees Missing in Uzio", "Value": len(df_active_missing)},
+                    {"Metric": "Data Quality Issues (00/00/0000)", "Value": len(df_dq_issues)},
+                    {"Metric": "High Hourly Rate Anomalies (>$100)", "Value": len(df_high_rates)},
                 ]
                 df_summary = pd.DataFrame(summary_data)
 
@@ -773,6 +908,32 @@ def render_ui():
                 out = io.BytesIO()
                 with pd.ExcelWriter(out, engine='xlsxwriter') as writer:
                     df_summary.to_excel(writer, sheet_name="Summary", index=False)
+                    
+                    # Consolidate Anomaly Reports into the Summary Sheet (as requested, below the summary table)
+                    start_row = len(df_summary) + 3
+                    anomaly_groups = [
+                        ("Salaried Driver Exceptions", df_salaried_drivers),
+                        ("FLSA Compliance Issues", df_flsa_issues),
+                        ("Active Employees Missing in Uzio", df_active_missing),
+                        ("Data Quality Issues", df_dq_issues),
+                        ("High Hourly Rate Anomalies", df_high_rates)
+                    ]
+                    
+                    curr_row = start_row
+                    workbook = writer.book
+                    worksheet = writer.sheets['Summary']
+                    header_fmt = workbook.add_format({'bold': True, 'bg_color': '#D7E4BC', 'border': 1})
+                    
+                    for title, df_ano in anomaly_groups:
+                        worksheet.write(curr_row, 0, title, header_fmt)
+                        curr_row += 1
+                        if not df_ano.empty:
+                            df_ano.to_excel(writer, sheet_name="Summary", startrow=curr_row, index=False)
+                            curr_row += len(df_ano) + 2
+                        else:
+                            worksheet.write(curr_row, 0, "No issues found.")
+                            curr_row += 2
+
                     res_census.to_excel(writer, sheet_name="Census_Audit", index=False)
                     res_payment.to_excel(writer, sheet_name="Payment_Audit", index=False)
                     res_emergency.to_excel(writer, sheet_name="Emergency_Audit", index=False)

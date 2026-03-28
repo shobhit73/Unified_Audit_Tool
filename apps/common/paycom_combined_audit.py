@@ -101,9 +101,9 @@ PAYCOM_CENSUS_MAP = {
     'Job|Working Hours per Week': 'Scheduled_Pay_Period_Hours',
     'Job|Job Title': 'Position',
     'Job|Department': 'Department_Desc',
-    'Job|Work Email': 'Work_Email',
-    'Job|Personal Email': 'Personal_Email',
-    'Personal|Phone': 'Primary_Phone',
+    'Personal|Work Email': 'Work_Email',
+    'Home Address|Personal Email': 'Personal_Email',
+    'Home Address|Phone': 'Primary_Phone',
     'Home Address|Address Line 1': 'Primary_Address_Line_1',
     'Home Address|Address Line 2': 'Primary_Address_Line_2',
     'Home Address|City': 'Primary_City/Municipality',
@@ -112,10 +112,9 @@ PAYCOM_CENSUS_MAP = {
     'Additional Information|License Number': 'DriversLicense',
     'Additional Information|License Expiration Date': 'DLExpirationDate',
     'Job|Work Location': 'Work_Location',
-    'Job|Reports To ID': 'Supervisor_Primary_Code',
-    'Personal|Ethnicity': 'EEO1_Ethnicity',
-    'Job|SOC Code': 'SOC_Code',
-    'Job|EEO Job Category': 'EEO1_Category'
+    'Job|Reporting Manager': 'Supervisor_Primary_Code',
+    'Job|Race/Ethnicity': 'EEO1_Ethnicity',
+    'Job|EEO Job Category': 'SOC_Code' # Surrogate mapping for SOC Code
 }
 
 # --- Normalization Helpers (Ported from census_audit.py) ---

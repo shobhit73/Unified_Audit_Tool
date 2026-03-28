@@ -486,6 +486,26 @@ def get_active_missing_in_uzio(df_uzio, df_paycom):
                 })
     return pd.DataFrame(missing)
 
+def get_terminated_missing_in_uzio(df_uzio, df_paycom):
+    missing = []
+    u_id_col = "Job|Employee ID"
+    p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
+    p_stat_col = next((c for c in df_paycom.columns if "Employee_Status" in c), "Employee_Status")
+    
+    u_ids = set(df_uzio[u_id_col].map(norm_id))
+    for idx, row in df_paycom.iterrows():
+        eid = norm_id(row.get(p_id_col))
+        if eid and eid not in u_ids:
+            stat = canonical_employment_status(row.get(p_stat_col))
+            if stat == "terminated":
+                missing.append({
+                    "Employee ID": eid,
+                    "Employee Name": f"{row.get('Legal_Firstname', '')} {row.get('Legal_Lastname', '')}".strip(),
+                    "Status (Paycom)": row.get(p_stat_col),
+                    "Hire Date": row.get('Most_Recent_Hire_Date', '')
+                })
+    return pd.DataFrame(missing)
+
 def get_data_quality_issues(df_paycom):
     issues = []
     p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
@@ -876,6 +896,7 @@ def render_ui():
                 df_salaried_drivers = get_salaried_driver_exceptions(df_uzio, df_paycom)
                 df_flsa_issues = get_flsa_compliance_issues(df_uzio)
                 df_active_missing = get_active_missing_in_uzio(df_uzio, df_paycom)
+                df_terminated_missing = get_terminated_missing_in_uzio(df_uzio, df_paycom)
                 df_dq_issues = get_data_quality_issues(df_paycom)
                 df_high_rates = get_high_rate_anomalies(df_paycom)
                 
@@ -899,6 +920,7 @@ def render_ui():
                     {"Metric": "Salaried Driver Exceptions", "Value": len(df_salaried_drivers)},
                     {"Metric": "FLSA Compliance Issues", "Value": len(df_flsa_issues)},
                     {"Metric": "Active Employees Missing in Uzio", "Value": len(df_active_missing)},
+                    {"Metric": "Terminated Employees Missing in Uzio", "Value": len(df_terminated_missing)},
                     {"Metric": "Data Quality Issues (00/00/0000)", "Value": len(df_dq_issues)},
                     {"Metric": "High Hourly Rate Anomalies (>$100)", "Value": len(df_high_rates)},
                 ]
@@ -915,6 +937,7 @@ def render_ui():
                         ("Salaried Driver Exceptions", df_salaried_drivers),
                         ("FLSA Compliance Issues", df_flsa_issues),
                         ("Active Employees Missing in Uzio", df_active_missing),
+                        ("Terminated Employees Missing in Uzio", df_terminated_missing),
                         ("Data Quality Issues", df_dq_issues),
                         ("High Hourly Rate Anomalies", df_high_rates)
                     ]

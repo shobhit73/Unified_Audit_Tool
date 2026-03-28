@@ -977,6 +977,51 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         "Employment Status (ADP)", "Date of Hire (ADP)"
     ])
 
+    terminated_missing_rows = []
+    for emp_id in sorted(adp_only_keys):
+        if emp_id not in adp_idx.index:
+            continue
+        # Check employment status in ADP
+        status_val = ""
+        if adp_status_col and adp_status_col in adp_idx.columns:
+            status_val = str(norm_blank(adp_idx.at[emp_id, adp_status_col]) or "")
+        status_lower = status_val.strip().lower()
+
+        # Only include Terminated / Inactive / Quit / Resign / Retired employees
+        is_term = False
+        term_keywords = ["terminated", "retired", "inactive", "quit", "resign", "term"]
+        for kw in term_keywords:
+            if kw in status_lower:
+                is_term = True
+                break
+        
+        if not is_term:
+            continue
+
+        fname = ""
+        lname = ""
+        if adp_fname_col and adp_fname_col in adp_idx.columns:
+            fname = str(norm_blank(adp_idx.at[emp_id, adp_fname_col]) or "")
+        if adp_lname_col and adp_lname_col in adp_idx.columns:
+            lname = str(norm_blank(adp_idx.at[emp_id, adp_lname_col]) or "")
+        emp_name = f"{fname} {lname}".strip()
+
+        hire_date = ""
+        if adp_hire_col and adp_hire_col in adp_idx.columns:
+            hire_date = str(norm_blank(adp_idx.at[emp_id, adp_hire_col]) or "")
+
+        terminated_missing_rows.append({
+            "Employee ID": emp_id,
+            "Employee Name": emp_name,
+            "Employment Status (ADP)": status_val,
+            "Date of Hire (ADP)": hire_date,
+        })
+
+    terminated_missing_in_uzio = pd.DataFrame(terminated_missing_rows, columns=[
+        "Employee ID", "Employee Name",
+        "Employment Status (ADP)", "Date of Hire (ADP)"
+    ])
+
     # ---------- Field Summary By Status ----------
     cols_needed = [
         "Data Match",
@@ -1068,6 +1113,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             "Total NOT OK rows",
             "FLSA Compliance Issues",
             "Active in ADP but Missing in Uzio",
+            "Terminated in ADP but Missing in Uzio",
             "Data Quality Issues (00/00/0000)",
             "Salaried Hourly-Only Exceptions",
             "High Hourly Rate Anomalies (>$100/hr)"
@@ -1084,6 +1130,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             mismatches_only.shape[0],
             len(flsa_rows),
             len(active_missing_rows),
+            len(terminated_missing_rows),
             len(dq_rows),
             len(df_salaried_drivers),
             len(df_high_rate)
@@ -1099,6 +1146,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         flsa_issues.to_excel(writer, sheet_name="FLSA_Compliance_Issues", index=False)
         dq_issues.to_excel(writer, sheet_name="Data_Quality_Issues", index=False)
         active_missing_in_uzio.to_excel(writer, sheet_name="Active_Missing_In_Uzio", index=False)
+        terminated_missing_in_uzio.to_excel(writer, sheet_name="Terminated_Missing_In_Uzio", index=False)
         if not df_salaried_drivers.empty:
             df_salaried_drivers.to_excel(writer, sheet_name="Salaried_Driver_Exceptions", index=False)
         if not df_high_rate.empty:

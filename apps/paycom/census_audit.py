@@ -794,6 +794,50 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         "Employment Status (Paycom)", "Date of Hire (Paycom)"
     ])
 
+    terminated_missing_rows = []
+    for eid in sorted(paycom_only_emps):
+        p_i = paycom_idx[eid]
+        # Check employment status
+        status_val = ""
+        if paycom_emp_status_col and paycom_emp_status_col in paycom.columns:
+            status_val = str(norm_blank(safe_val(paycom, p_i, paycom_emp_status_col)) or "")
+        status_lower = status_val.strip().lower()
+
+        # Only include Terminated / Inactive employees
+        is_term = False
+        term_keywords = ["term", "inactive", "quit", "resign", "retired"]
+        for kw in term_keywords:
+            if kw in status_lower:
+                is_term = True
+                break
+        
+        if not is_term:
+            continue
+
+        fname = ""
+        lname = ""
+        if pc_fname_col and pc_fname_col in paycom.columns:
+            fname = str(norm_blank(paycom.loc[p_i, pc_fname_col]) or "")
+        if pc_lname_col and pc_lname_col in paycom.columns:
+            lname = str(norm_blank(paycom.loc[p_i, pc_lname_col]) or "")
+        emp_name = f"{fname} {lname}".strip()
+
+        hire_date = ""
+        if pc_hire_col and pc_hire_col in paycom.columns:
+            hire_date = str(norm_blank(paycom.loc[p_i, pc_hire_col]) or "")
+
+        terminated_missing_rows.append({
+            "Employee ID": display_id_map.get(eid, eid),
+            "Employee Name": emp_name,
+            "Employment Status (Paycom)": status_val,
+            "Date of Hire (Paycom)": hire_date,
+        })
+
+    terminated_missing_in_uzio = pd.DataFrame(terminated_missing_rows, columns=[
+        "Employee ID", "Employee Name",
+        "Employment Status (Paycom)", "Date of Hire (Paycom)"
+    ])
+
     # Field summary
     statuses = [
         "Data Match",
@@ -879,6 +923,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 "Total Comparisons (field-level rows)",
                 "FLSA Compliance Issues",
                 "Active in Paycom but Missing in Uzio",
+                "Terminated in Paycom but Missing in Uzio",
                 "Salaried Hourly-Only Exceptions",
                 "High Hourly Rate Anomalies (>$100/hr)",
             ],
@@ -894,6 +939,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 int(comparison_detail.shape[0]),
                 len(flsa_rows),
                 len(active_missing_rows),
+                len(terminated_missing_rows),
                 len(df_salaried_drivers_pc),
                 len(df_high_rate_pc),
             ],
@@ -908,6 +954,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         flsa_issues.to_excel(writer, sheet_name="FLSA_Compliance_Issues", index=False)
         dq_issues.to_excel(writer, sheet_name="Data_Quality_Issues", index=False)
         active_missing_in_uzio.to_excel(writer, sheet_name="Active_Missing_In_Uzio", index=False)
+        terminated_missing_in_uzio.to_excel(writer, sheet_name="Terminated_Missing_In_Uzio", index=False)
         if not df_salaried_drivers_pc.empty:
             df_salaried_drivers_pc.to_excel(writer, sheet_name="Salaried_Driver_Exceptions", index=False)
         if not df_high_rate_pc.empty:

@@ -81,85 +81,314 @@ def read_uzio_master(file):
     return df
 
 # --- Field Mappings ---
+# --- Field Mappings ---
 PAYCOM_CENSUS_MAP = {
-    "Personal|First Name": "Legal_Firstname",
-    "Personal|Last Name": "Legal_Lastname",
-    "Personal|SSN": "SSN",
-    "Personal|Date Of Birth": "Birth_Date",
-    "Personal|Gender": "Gender",
-    "Job|Employee ID": "Employee_Code",
-    "Job|Date of Hire": "Hire_Date",
-    "Job|Employment Type": "Employment_Type_Desc",
-    "Job|Pay Type": "Pay_Type",
-    "Job|Annual Salary": "Annual_Salary",
-    "Job|Hourly Rate": "Hourly_Rate",
-    "Job|Job Title": "Job_Title_Desc",
-    "Job|Department": "Department_Desc",
-    "Home Address|Address Line 1": "Address_Line_1",
-    "Home Address|Address Line 2": "Address_Line_2",
-    "Home Address|City": "City",
-    "Home Address|Zip": "Zip_Code",
-    "Home Address|State": "State",
-    "Additional Information|License Number": "DriversLicense",
-    "Additional Information|License Expiration Date": "DLExpirationDate"
+    'Personal|First Name': 'Legal_Firstname',
+    'Personal|Last Name': 'Legal_Lastname',
+    'Personal|Middle Name': 'Legal_Middle_Name',
+    'Personal|Suffix': 'Legal_Employee_Suffix',
+    'Personal|SSN': 'SS_Number',
+    'Personal|Date Of Birth': 'Birth_Date_(MM/DD/YYYY)',
+    'Personal|Gender': 'Gender',
+    'Job|Employee ID': 'Employee_Code',
+    'Job|Date of Hire': 'Most_Recent_Hire_Date',
+    'Job|Original DOH': 'Hire_Date',
+    'Job|Status': 'Employee_Status',
+    'Job|Employment Type': 'DOL_Status',
+    'Job|Pay Type': 'Pay_Type',
+    'Job|Annual Salary': 'Annual_Salary',
+    'Job|Hourly Rate': 'Rate_1',
+    'Job|Working Hours per Week': 'Scheduled_Pay_Period_Hours',
+    'Job|Job Title': 'Position',
+    'Job|Department': 'Department_Desc',
+    'Job|Work Email': 'Work_Email',
+    'Job|Personal Email': 'Personal_Email',
+    'Personal|Phone': 'Primary_Phone',
+    'Home Address|Address Line 1': 'Primary_Address_Line_1',
+    'Home Address|Address Line 2': 'Primary_Address_Line_2',
+    'Home Address|City': 'Primary_City/Municipality',
+    'Home Address|Zip': 'Primary_Zip/Postal_Code',
+    'Home Address|State': 'Primary_State/Province',
+    'Additional Information|License Number': 'DriversLicense',
+    'Additional Information|License Expiration Date': 'DLExpirationDate',
+    'Job|Work Location': 'Work_Location',
+    'Job|Reports To ID': 'Supervisor_Primary_Code',
+    'Personal|Ethnicity': 'EEO1_Ethnicity',
+    'Job|SOC Code': 'SOC_Code',
+    'Job|EEO Job Category': 'EEO1_Category'
 }
 
-# --- Core Audit Logic (Ported from individual tools) ---
+# --- Normalization Helpers (Ported from census_audit.py) ---
+
+def normalize_employment_type(x):
+    s = norm_colname(x).casefold()
+    s = s.replace("-", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+    if s in {"full time", "fulltime", "ft"}:
+        return "full time"
+    if s in {"part time", "parttime", "pt"}:
+        return "part time"
+    if s in {"seasonal", "temporary", "temp"}:
+        return "seasonal"
+    return s
+
+def normalize_suffix(x):
+    s = norm_colname(x).casefold()
+    s = re.sub(r"[^a-z0-9]", "", s)
+    return s
+
+def first_alpha_char(x):
+    s = norm_blank(x)
+    if not s: return ""
+    txt = str(s).strip()
+    m = re.search(r"[A-Za-z]", txt)
+    return m.group(0).casefold() if m else ""
+
+def normalize_middle_initial(uzio_val, paycom_val):
+    u = first_alpha_char(uzio_val)
+    p = first_alpha_char(paycom_val)
+    return u != "" and p != "" and u == p
+
+def canonical_pay_type(x):
+    s = norm_colname(x).casefold()
+    if not s: return ""
+    if "hour" in s: return "hourly"
+    if "salar" in s: return "salaried"
+    return s
+
+def canonical_employment_status(x):
+    s = norm_colname(x).casefold()
+    if not s: return ""
+    if "on leave" in s: return "active"
+    if s in {"active", "activated"}: return "active"
+    if "term" in s or "inactive" in s or "quit" in s or "resign" in s: return "terminated"
+    return s
+
+def termination_reason_equal(uzio_val, paycom_val):
+    uz = norm_colname(uzio_val).casefold()
+    pc = norm_colname(paycom_val).casefold()
+    if not uz and not pc: return True
+    if uz == "other": return True
+    if ("involuntary" in uz) or ("involuntary" in pc):
+        return ("involuntary" in uz) and ("involuntary" in pc)
+    if ("voluntary" in uz) or ("voluntary" in pc):
+        return ("voluntary" in uz) and ("voluntary" in pc)
+    return uz == pc
+
+def should_ignore_field_for_paytype(field_name, pay_type_canon):
+    f = norm_colname(field_name).casefold()
+    pt = (pay_type_canon or "").casefold()
+    if pt == "hourly":
+        if "annual salary" in f: return True
+    if pt == "salaried":
+        if ("hourly" in f and "rate" in f) or ("hours per week" in f) or ("working hours" in f):
+            return True
+    return False
+
+def normalized_compare(field_name, uzio_val, paycom_val):
+    f = norm_colname(field_name).casefold()
+    if "termination reason" in f:
+        return termination_reason_equal(uzio_val, paycom_val)
+    if "employment status" in f:
+        u_stat = canonical_employment_status(uzio_val)
+        p_stat = canonical_employment_status(paycom_val)
+        return u_stat == p_stat
+    if "pay type" in f:
+        return canonical_pay_type(uzio_val) == canonical_pay_type(paycom_val)
+    if "employment type" in f:
+        return normalize_employment_type(uzio_val) == normalize_employment_type(paycom_val)
+    if "middle" in f and "initial" in f:
+        return normalize_middle_initial(uzio_val, paycom_val)
+    if "suffix" in f:
+        return normalize_suffix(uzio_val) == normalize_suffix(paycom_val)
+    if "ssn" in f:
+        u = re.sub(r"\D", "", str(uzio_val)).lstrip("0")
+        p = re.sub(r"\D", "", str(paycom_val)).lstrip("0")
+        return u == p
+    if "phone" in f:
+        u = norm_phone(uzio_val).lstrip("0")
+        p = norm_phone(paycom_val).lstrip("0")
+        return u == p
+    if "zip" in f:
+        u = re.sub(r"\D", "", str(uzio_val)).lstrip("0")
+        p = re.sub(r"\D", "", str(paycom_val)).lstrip("0")
+        return u == p
+    if any(k in f for k in ["date", "dob", "birth", "effective", "doh", "hire", "termination"]):
+        return try_parse_date(uzio_val) == try_parse_date(paycom_val)
+    if any(k in f for k in ["salary", "rate", "hours", "amount", "percent"]):
+        try:
+            fa = float(str(uzio_val).replace(",","").replace("$","") or 0)
+            fb = float(str(paycom_val).replace(",","").replace("$","") or 0)
+            return abs(fa - fb) <= 1e-6
+        except:
+            return norm_colname(uzio_val).casefold() == norm_colname(paycom_val).casefold()
+    if "license" in f:
+        u = str(uzio_val).strip().lstrip("0")
+        p = str(paycom_val).strip().lstrip("0")
+        return u == p
+    return norm_colname(uzio_val).casefold() == norm_colname(paycom_val).casefold()
+
+# --- Payment Helpers (Ported from payment_audit.py) ---
+
+_TYPE_CODE_MAP = {
+    "22": "checking",
+    "32": "savings",
+    "1": "checking",
+    "2": "checking",
+}
+
+def norm_digits(x):
+    if pd.isna(x): return ""
+    if isinstance(x, (float, int)):
+        return str(int(x))
+    return re.sub(r"\D", "", str(x))
+
+def strip_type(t):
+    if not t: return ""
+    s = str(t).strip()
+    if s.endswith(".0"): s = s[:-2]
+    if s in _TYPE_CODE_MAP: return _TYPE_CODE_MAP[s]
+    return s.lower().replace("account", "").replace("code: ", "").strip()
+
+def _get_field_val(acc, field):
+    mapping = {
+        "Routing Number": "Routing",
+        "Account Number": "Account",
+        "Account Type": "Type",
+        "Amount": "Amount",
+        "Percent": "Percent"
+    }
+    val = acc.get(mapping.get(field, ""), "")
+    return str(val) if val != "" else ""
+
+def _compare_field(field, u_val, p_val, u_acc, p_acc):
+    u_n = str(u_val).strip()
+    p_n = str(p_val).strip()
+    if not u_n and not p_n: return STATUS_MATCH
+    if not u_n and p_n: return "Value missing in Uzio (Paycom has value)"
+    if u_n and not p_n: return "Value missing in Paycom (Uzio has value)"
+    if field == "Account Type":
+        if strip_type(u_n) == strip_type(p_n): return STATUS_MATCH
+        return STATUS_MISMATCH
+    if field in ("Amount", "Percent"):
+        try:
+            diff = abs(float(u_n) - float(p_n))
+            if diff < 0.01: return STATUS_MATCH
+        except: pass
+        return STATUS_MISMATCH
+    return STATUS_MATCH if u_n == p_n else STATUS_MISMATCH
 
 def run_census_audit(df_uzio, df_paycom):
     rows = []
-    # Identify key columns
     u_id_col = "Job|Employee ID"
     p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
     
+    # Pre-calculate status and pay type maps for context
+    uzio_status_map = {}
+    if "Job|Status" in df_uzio.columns:
+        for _, r in df_uzio[[u_id_col, "Job|Status"]].dropna().iterrows():
+            uzio_status_map[norm_id(r[u_id_col])] = str(r["Job|Status"])
+
+    paycom_status_map = {}
+    p_stat_col = next((c for c in df_paycom.columns if "Employee_Status" in c), "Employee_Status")
+    if p_stat_col in df_paycom.columns:
+        for _, r in df_paycom[[p_id_col, p_stat_col]].dropna().iterrows():
+            paycom_status_map[norm_id(r[p_id_col])] = str(r[p_stat_col])
+
+    pay_type_map = {}
+    if "Job|Pay Type" in df_uzio.columns:
+        for _, r in df_uzio[[u_id_col, "Job|Pay Type"]].dropna().iterrows():
+            pay_type_map[norm_id(r[u_id_col])] = canonical_pay_type(r["Job|Pay Type"])
+
     u_map = {id: idx for idx, id in enumerate(df_uzio[u_id_col].map(norm_id))}
     p_map = {id: idx for idx, id in enumerate(df_paycom[p_id_col].map(norm_id))}
     
     all_ids = set(u_map.keys()) | set(p_map.keys())
     
     for eid in sorted(all_ids):
+        if not eid or eid == "nan": continue
         u_idx = u_map.get(eid)
         p_idx = p_map.get(eid)
         
-        if eid == "" or eid == "nan": continue
-        
-        name = ""
+        # Context
+        u_status = uzio_status_map.get(eid, "")
+        p_status = paycom_status_map.get(eid, "")
+        emp_pay_type = pay_type_map.get(eid, "")
+        is_terminated_context = "terminated" in canonical_employment_status(u_status)
+
+        fname = ""
+        lname = ""
         if u_idx is not None:
-            name = f"{df_uzio.at[u_idx, 'Personal|First Name']} {df_uzio.at[u_idx, 'Personal|Last Name']}"
+            fname = norm_blank(df_uzio.at[u_idx, 'Personal|First Name'])
+            lname = norm_blank(df_uzio.at[u_idx, 'Personal|Last Name'])
         elif p_idx is not None:
-            name = f"{df_paycom.at[p_idx, 'Legal_Firstname']} {df_paycom.at[p_idx, 'Legal_Lastname']}"
+            fname = norm_blank(df_paycom.at[p_idx, 'Legal_Firstname'])
+            lname = norm_blank(df_paycom.at[p_idx, 'Legal_Lastname'])
+        name = f"{fname} {lname}".strip()
 
         for u_col, p_col in PAYCOM_CENSUS_MAP.items():
             u_val = ""
             p_val = ""
-            status = STATUS_MATCH
             
-            if u_idx is not None and u_col in df_uzio.columns:
+            u_missing_row = (u_idx is None)
+            p_missing_row = (p_idx is None)
+            u_missing_col = (u_col not in df_uzio.columns)
+            p_missing_col = (p_col not in df_paycom.columns)
+
+            if not u_missing_row and not u_missing_col:
                 u_val = norm_str(df_uzio.at[u_idx, u_col])
-            if p_idx is not None and p_col in df_paycom.columns:
+            if not p_missing_row and not p_missing_col:
                 p_val = norm_str(df_paycom.at[p_idx, p_col])
                 
-            # Normalization/Comparison
-            if "Date" in u_col or "Birth" in u_col:
-                u_val = try_parse_date(u_val)
-                p_val = try_parse_date(p_val)
-            elif "SSN" in u_col or "Phone" in u_col or "Zip" in u_col:
-                u_val = re.sub(r"\D", "", u_val)
-                p_val = re.sub(r"\D", "", p_val)
-                
-            if u_idx is None: status = STATUS_MISSING_UZIO
-            elif p_idx is None: status = STATUS_MISSING_PAYCOM
-            elif u_val.lower() != p_val.lower():
-                # Allow minor money diff
-                if "Salary" in u_col or "Rate" in u_col:
-                    try:
-                        if abs(float(u_val or 0) - float(p_val or 0)) < 0.1:
-                            status = STATUS_MATCH
-                        else: status = STATUS_MISMATCH
-                    except: status = STATUS_MISMATCH
+                # Fallback for Job Title
+                if p_col == "Position" and p_val == "":
+                    for alt in ["Business_Title", "Job_Title_Description"]:
+                        if alt in df_paycom.columns:
+                            alt_val = norm_str(df_paycom.at[p_idx, alt])
+                            if alt_val:
+                                p_val = alt_val
+                                break
+
+            # Decide status
+            if p_missing_row and not u_missing_row:
+                status = "Employee ID Not Found in Paycom"
+            elif u_missing_row and not p_missing_row:
+                status = "Employee ID Not Found in Uzio"
+            elif p_missing_col:
+                if p_col == "Position":
+                    print(f"DEBUG: 'Position' column missing for employee {eid}. Available: {df_paycom.columns.tolist()[:5]}...")
+                status = "Column Missing in Paycom Sheet"
+            elif u_missing_col:
+                status = "Column Missing in Uzio Sheet"
+            else:
+                if should_ignore_field_for_paytype(u_col, emp_pay_type):
+                    status = STATUS_MATCH
                 else:
-                    status = STATUS_MISMATCH
-            
+                    if normalized_compare(u_col, u_val, p_val):
+                        status = STATUS_MATCH
+                    else:
+                        u_b = norm_blank(u_val)
+                        p_b = norm_blank(p_val)
+                        
+                        f_case = norm_colname(u_col).casefold()
+                        if "employment status" in f_case and p_b != "":
+                            uz_stat = canonical_employment_status(u_b)
+                            pc_stat = canonical_employment_status(p_b)
+                            if "terminated" in uz_stat and "terminated" in pc_stat:
+                                status = STATUS_MATCH
+                            elif "active" in uz_stat: status = "Active in Uzio"
+                            elif "terminated" in uz_stat: status = "Terminated in Uzio"
+                            elif not u_b and "active" in pc_stat: status = "Active in Paycom"
+                            else: status = STATUS_MISMATCH
+                        elif is_terminated_context:
+                            status = STATUS_MATCH
+                        elif not u_b and p_b:
+                            status = "Value missing in Uzio (Paycom has value)"
+                        elif u_b and not p_b:
+                            status = "Value missing in Paycom (Uzio has value)"
+                        else:
+                            status = STATUS_MISMATCH
+
             rows.append({
                 "Employee ID": eid,
                 "Employee Name": name,
@@ -172,108 +401,168 @@ def run_census_audit(df_uzio, df_paycom):
     return pd.DataFrame(rows)
 
 def run_payment_audit(df_uzio, df_paycom):
-    # Uzio Master usually has one distribution per row? 
-    # Or multiple rows per employee? 
-    # Based on standard reports, Master Custom is often one row per record.
-    # We will group by Employee ID.
     rows = []
     u_id_col = "Job|Employee ID"
-    p_id_col = "Employee_Code"
+    p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
     
     # Process Uzio Accounts
-    u_accounts = {}
+    u_map = {}
+    uzio_emp_names = {}
     for idx, row in df_uzio.iterrows():
         eid = norm_id(row.get(u_id_col))
         if not eid: continue
         
+        name = f"{norm_blank(row.get('Personal|First Name'))} {norm_blank(row.get('Personal|Last Name'))}".strip()
+        uzio_emp_names[eid] = name
+        
         acc = {
-            "Routing": norm_phone(row.get("Payment Method|Routing Number")),
-            "Account": norm_phone(row.get("Payment Method|Account Number")),
-            "Type": norm_str(row.get("Payment Method|Account Type")).lower(),
+            "Routing": norm_digits(row.get("Payment Method|Routing Number")).lstrip("0"),
+            "Account": norm_digits(row.get("Payment Method|Account Number")).lstrip("0"),
+            "Type": norm_str(row.get("Payment Method|Account Type")),
             "Percent": norm_money(row.get("Payment Method|Paycheck Percentage")),
             "Amount": norm_money(row.get("Payment Method|Paycheck Amount")),
-            "Name": f"{row.get('Personal|First Name')} {row.get('Personal|Last Name')}"
+            "Name": name
         }
         if acc["Routing"] or acc["Account"]:
-            if eid not in u_accounts: u_accounts[eid] = []
-            u_accounts[eid].append(acc)
+            if eid not in u_map: u_map[eid] = []
+            if acc not in u_map[eid]: u_map[eid].append(acc)
 
-    # Process Paycom Accounts (Unpivot 1-8 + Net)
-    p_accounts = {}
+    # Process Paycom Accounts (Unpivot)
+    p_map = {}
     for idx, row in df_paycom.iterrows():
         eid = norm_id(row.get(p_id_col))
         if not eid: continue
         
         accs = []
+        total_dist_pct = 0.0
         # Distributions 1-8
         for i in range(1, 9):
             prefix = f"Dist_{i}_"
-            if f"{prefix}Acct_Code" in df_paycom.columns:
-                d_acc = norm_phone(row.get(f"{prefix}Acct_Code"))
-                d_rout = norm_phone(row.get(f"{prefix}Rout_Code"))
-                if d_acc or d_rout:
-                    accs.append({
-                        "Routing": d_rout,
-                        "Account": d_acc,
-                        "Type": norm_str(row.get(f"{prefix}Type_Code")).lower(),
-                        "Percent": norm_money(row.get(f"{prefix}Percent")),
-                        "Amount": norm_money(row.get(f"{prefix}Amount")),
-                        "IsNet": False
-                    })
-        # Net Account
-        n_acc = norm_phone(row.get("Net_Acct_Code"))
-        n_rout = norm_phone(row.get("Net_Rout_Code"))
-        if n_acc or n_rout:
-            accs.append({
-                "Routing": n_rout,
-                "Account": n_acc,
-                "Type": norm_str(row.get("Net_Type_Code")).lower(),
-                "Percent": 0.0, # Net handles remainder
-                "Amount": 0.0,
-                "IsNet": True
-            })
-        if accs:
-            p_accounts[eid] = accs
-
-    all_ids = set(u_accounts.keys()) | set(p_accounts.keys())
-    for eid in sorted(all_ids):
-        uas = u_accounts.get(eid, [])
-        pas = p_accounts.get(eid, [])
-        name = uas[0]["Name"] if uas else ""
-        
-        # Simple matching for payment accounts (Ported logic)
-        matched_p = set()
-        for u in uas:
-            match = None
-            for i, p in enumerate(pas):
-                if i in matched_p: continue
-                if u["Routing"] == p["Routing"] and u["Account"] == p["Account"]:
-                    match = p
-                    matched_p.add(i)
-                    break
+            d_acc = norm_digits(row.get(f"{prefix}Acct_Code")).lstrip("0")
+            d_rout = norm_digits(row.get(f"{prefix}Rout_Code")).lstrip("0")
             
-            if match:
-                # Compare fields
-                for f in ["Routing", "Account", "Type"]:
-                    rows.append({
-                        "Employee ID": eid, "Employee Name": name, "Section": "Payment",
-                        "Field": f, "Uzio Value": u[f], "Paycom Value": match[f],
-                        "Status": STATUS_MATCH if str(u[f]).strip().lower() == str(match[f]).strip().lower() else STATUS_MISMATCH
-                    })
-            else:
-                rows.append({
-                    "Employee ID": eid, "Employee Name": name, "Section": "Payment",
-                    "Field": "Account", "Uzio Value": u["Account"], "Paycom Value": "Not Found",
-                    "Status": STATUS_VAL_MISSING_PAYCOM
+            raw_amt_val = row.get(f"{prefix}Amount")
+            d_amt = norm_money(raw_amt_val)
+            d_pct = 0.0
+            
+            if f"{prefix}Percent" in df_paycom.columns:
+                d_pct = norm_money(row.get(f"{prefix}Percent"))
+            
+            if d_pct == 0.0:
+                raw_str = str(raw_amt_val).strip()
+                if "%" in raw_str:
+                    try: d_pct = float(raw_str.replace("%", "").replace(",", "").strip())
+                    except: pass
+                    d_amt = 0.0
+                elif d_amt != 0.0 and 0.01 < abs(d_amt) <= 1.0:
+                    d_pct = round(d_amt * 100, 4)
+                    d_amt = 0.0
+            
+            total_dist_pct += d_pct
+            if d_acc or d_rout:
+                acc_type = row.get(f"{prefix}Type_Code")
+                accs.append({
+                    "Routing": d_rout, "Account": d_acc, 
+                    "Type": str(acc_type) if acc_type is not None else "",
+                    "Percent": d_pct, "Amount": d_amt, "IsNet": False
                 })
         
-        # Paycom unmatched
-        for i, p in enumerate(pas):
-            if i not in matched_p:
+        # Net Account
+        n_acc = norm_digits(row.get("Net_Acct_Code")).lstrip("0")
+        n_rout = norm_digits(row.get("Net_Rout_Code")).lstrip("0")
+        if n_acc or n_rout:
+            n_type = row.get("Net_Type_Code")
+            n_pct = 100.0 - total_dist_pct if total_dist_pct > 0 else (100.0 if not accs else 0.0)
+            accs.append({
+                "Routing": n_rout, "Account": n_acc,
+                "Type": str(n_type) if n_type is not None else "",
+                "Percent": max(0, n_pct), "Amount": 0.0, "IsNet": True
+            })
+        if accs: p_map[eid] = accs
+
+    FIELDS = ["Routing Number", "Account Number", "Account Type", "Amount", "Percent"]
+    all_ids = set(u_map.keys()) | set(p_map.keys()) | set(uzio_emp_names.keys())
+    
+    for eid in sorted(all_ids):
+        uas = u_map.get(eid, [])
+        pas = p_map.get(eid, [])
+        name = uzio_emp_names.get(eid, "")
+        
+        if not uas and pas:
+            is_in_uzio = eid in uzio_emp_names
+            for p in pas:
+                for f in FIELDS:
+                    rows.append({
+                        "Employee ID": eid, "Employee Name": name, "Section": "Payment",
+                        "Field": f, "Uzio Value": "", "Paycom Value": _get_field_val(p, f),
+                        "Status": "Value missing in Uzio" if is_in_uzio else STATUS_MISSING_UZIO
+                    })
+            continue
+
+        if uas and not pas:
+            for u in uas:
+                for f in FIELDS:
+                    rows.append({
+                        "Employee ID": eid, "Employee Name": name, "Section": "Payment",
+                        "Field": f, "Uzio Value": _get_field_val(u, f), "Paycom Value": "",
+                        "Status": STATUS_MISSING_PAYCOM
+                    })
+            continue
+
+        # 3-Pass Matching
+        p_pending = list(pas)
+        u_pending = list(uas)
+        matched = [] # (u, p)
+
+        # Pass 1: Exact Routing + Account
+        for u in list(u_pending):
+            match = next((p for p in p_pending if u["Routing"] == p["Routing"] and u["Account"] == p["Account"]), None)
+            if match:
+                matched.append((u, match))
+                u_pending.remove(u)
+                p_pending.remove(match)
+
+        # Pass 2: Routing + Type
+        for u in list(u_pending):
+            u_t = strip_type(u["Type"])
+            match = next((p for p in p_pending if u["Routing"] == p["Routing"] and u_t == strip_type(p["Type"])), None)
+            if match:
+                matched.append((u, match))
+                u_pending.remove(u)
+                p_pending.remove(match)
+
+        # Pass 3: Routing Only
+        for u in list(u_pending):
+            match = next((p for p in p_pending if u["Routing"] == p["Routing"]), None)
+            if match:
+                matched.append((u, match))
+                u_pending.remove(u)
+                p_pending.remove(match)
+
+        # Record results
+        for u, p in matched:
+            for f in FIELDS:
+                u_v = _get_field_val(u, f)
+                p_v = _get_field_val(p, f)
                 rows.append({
                     "Employee ID": eid, "Employee Name": name, "Section": "Payment",
-                    "Field": "Account", "Uzio Value": "Not Found", "Paycom Value": p["Account"],
-                    "Status": STATUS_VAL_MISSING_UZIO
+                    "Field": f, "Uzio Value": u_v, "Paycom Value": p_v,
+                    "Status": _compare_field(f, u_v, p_v, u, p)
+                })
+        
+        for u in u_pending:
+            for f in FIELDS:
+                rows.append({
+                    "Employee ID": eid, "Employee Name": name, "Section": "Payment",
+                    "Field": f, "Uzio Value": _get_field_val(u, f), "Paycom Value": "Not Found",
+                    "Status": "Value missing in Paycom"
+                })
+        for p in p_pending:
+            for f in FIELDS:
+                rows.append({
+                    "Employee ID": eid, "Employee Name": name, "Section": "Payment",
+                    "Field": f, "Uzio Value": "Not Found", "Paycom Value": _get_field_val(p, f),
+                    "Status": "Value missing in Uzio"
                 })
 
     return pd.DataFrame(rows)
@@ -281,77 +570,148 @@ def run_payment_audit(df_uzio, df_paycom):
 def run_emergency_audit(df_uzio, df_paycom):
     rows = []
     u_id_col = "Job|Employee ID"
-    p_id_col = "Employee_Code"
+    p_id_col = next((c for c in df_paycom.columns if "Employee_Code" in c), "Employee_Code")
     
-    u_contacts = {}
+    # 1. Map Columns
+    p_name_col = next((c for c in df_paycom.columns if "Emergency_1_Contact" in c), None)
+    p_rel_col = next((c for c in df_paycom.columns if "Emergency_1_Relationship" in c), None)
+    p_phone_col = next((c for c in df_paycom.columns if "Emergency_1_Phone" in c), None)
+    p_lang_col = next((c for c in df_paycom.columns if "Emergency_1_Language" in c), None)
+
+    # 2. Process Uzio
+    u_data = {}
+    uzio_emp_names = {}
     for idx, row in df_uzio.iterrows():
         eid = norm_id(row.get(u_id_col))
         if not eid: continue
+        
+        name_emp = f"{norm_blank(row.get('Personal|First Name'))} {norm_blank(row.get('Personal|Last Name'))}".strip()
+        uzio_emp_names[eid] = name_emp
+        
         contact = {
             "Name": norm_str(row.get("Emergency Contact|Name")),
             "Relation": norm_relation(row.get("Emergency Contact|Relationship")),
             "Phone": norm_phone(row.get("Emergency Contact|Phone")),
-            "EmpName": f"{row.get('Personal|First Name')} {row.get('Personal|Last Name')}"
+            "RawPhone": norm_str(row.get("Emergency Contact|Phone")),
+            "Language": ""
         }
-        if contact["Name"]:
-            if eid not in u_contacts: u_contacts[eid] = []
-            u_contacts[eid].append(contact)
+        if contact["Name"] or contact["Phone"]:
+            if eid not in u_data: u_data[eid] = []
+            u_data[eid].append(contact)
 
-    p_contacts = {}
+    # 3. Process Paycom
+    p_data = {}
     for idx, row in df_paycom.iterrows():
         eid = norm_id(row.get(p_id_col))
         if not eid: continue
-        # Paycom usually has Emergency_1_* columns, but relationship might be missing in some exports
-        name = norm_str(row.get("Emergency_1_Contact"))
-        if name:
-            contact = {
-                "Name": name,
-                "Relation": norm_relation(row.get("Emergency_1_Relationship", "")),
-                "Phone": norm_phone(row.get("Emergency_1_Phone", ""))
-            }
-            p_contacts[eid] = [contact]
+        
+        if p_name_col:
+            c_name = norm_str(row.get(p_name_col))
+            if c_name:
+                contact = {
+                    "Name": c_name,
+                    "Relation": norm_relation(row.get(p_rel_col)) if p_rel_col else "",
+                    "Phone": norm_phone(row.get(p_phone_col)) if p_phone_col else "",
+                    "RawPhone": norm_str(row.get(p_phone_col)) if p_phone_col else "",
+                    "Language": norm_str(row.get(p_lang_col)) if p_lang_col else ""
+                }
+                if eid not in p_data: p_data[eid] = []
+                p_data[eid].append(contact)
 
-    all_ids = set(u_contacts.keys()) | set(p_contacts.keys())
+    def compare_emergency(field, u_val, p_val):
+        u_s = str(u_val).strip().lower()
+        p_s = str(p_val).strip().lower()
+        if u_s == p_s: return True
+        if field == "Phone":
+            u_p, p_p = norm_phone(u_val), norm_phone(p_val)
+            if u_p == p_p: return True
+            if u_p and p_p and (u_p in p_p or p_p in u_p): return True
+        if field == "Relation":
+            synonyms = [{"spouse", "husband", "wife"}, {"mother", "father", "parent"}]
+            for group in synonyms:
+                if u_s in group and p_s in group: return True
+            if "child" in u_s and "child" in p_s: return True
+        return False
+
+    FIELDS = ["Name", "Relation", "Phone"]
+    all_ids = set(u_data.keys()) | set(p_data.keys()) | set(uzio_emp_names.keys())
+    
     for eid in sorted(all_ids):
-        ucs = u_contacts.get(eid, [])
-        pcs = p_contacts.get(eid, [])
-        emp_name = ucs[0]["EmpName"] if ucs else ""
+        ucs = u_data.get(eid, [])
+        pcs = p_data.get(eid, [])
+        emp_name = uzio_emp_names.get(eid, "")
 
-        # Ported logic: match on Name
-        matched_p = set()
-        for u in ucs:
-            match = None
-            for i, p in enumerate(pcs):
-                if i in matched_p: continue
-                if u["Name"].lower() == p["Name"].lower():
-                    match = p
-                    matched_p.add(i)
-                    break
-            
+        if not ucs and pcs:
+            for p in pcs:
+                for f in FIELDS:
+                    rows.append({
+                        "Employee ID": eid, "Employee Name": emp_name, "Section": "Emergency",
+                        "Field": f, "Uzio Value": "", "Paycom Value": p[f],
+                        "Status": "Value missing in Uzio"
+                    })
+            continue
+        if ucs and not pcs:
+            for u in ucs:
+                for f in FIELDS:
+                    rows.append({
+                        "Employee ID": eid, "Employee Name": emp_name, "Section": "Emergency",
+                        "Field": f, "Uzio Value": u[f], "Paycom Value": "",
+                        "Status": "Value missing in Paycom"
+                    })
+            continue
+
+        # 2-Pass Match
+        u_pending = list(ucs)
+        p_pending = list(pcs)
+        matched = []
+
+        # Pass 1: Name Match
+        for u in list(u_pending):
+            match = next((p for p in p_pending if u["Name"].lower() == p["Name"].lower()), None)
             if match:
-                for f in ["Name", "Relation", "Phone"]:
-                    u_v = u[f]
-                    p_v = match[f]
-                    rows.append({
-                        "Employee ID": eid, "Employee Name": emp_name, "Section": "Emergency",
-                        "Field": f, "Uzio Value": u_v, "Paycom Value": p_v,
-                        "Status": STATUS_MATCH if u_v.lower() == p_v.lower() else STATUS_MISMATCH
-                    })
-            else:
-                    rows.append({
-                        "Employee ID": eid, "Employee Name": emp_name, "Section": "Emergency",
-                        "Field": "Contact Name", "Uzio Value": u["Name"], "Paycom Value": "Not Found",
-                        "Status": STATUS_VAL_MISSING_PAYCOM
-                    })
+                matched.append((u, match))
+                u_pending.remove(u)
+                p_pending.remove(match)
 
-        # Paycom unmatched (Missing in Uzio)
-        for i, p in enumerate(pcs):
-            if i not in matched_p:
+        # Pass 2: Phone Match
+        for u in list(u_pending):
+            if not u["Phone"]: continue
+            match = next((p for p in p_pending if u["Phone"] == p["Phone"]), None)
+            if match:
+                matched.append((u, match))
+                u_pending.remove(u)
+                p_pending.remove(match)
+
+        # Record
+        for u, p in matched:
+            for f in FIELDS:
+                u_v, p_v = u[f], p[f]
                 rows.append({
                     "Employee ID": eid, "Employee Name": emp_name, "Section": "Emergency",
-                    "Field": "Contact Name", "Uzio Value": "Not Found", "Paycom Value": p["Name"],
-                    "Status": STATUS_VAL_MISSING_UZIO
+                    "Field": f, "Uzio Value": u["RawPhone"] if f=="Phone" else u_v,
+                    "Paycom Value": p["RawPhone"] if f=="Phone" else p_v,
+                    "Status": STATUS_MATCH if compare_emergency(f, u_v, p_v) else STATUS_MISMATCH
                 })
+            if p["Language"]:
+                rows.append({
+                    "Employee ID": eid, "Employee Name": emp_name, "Section": "Emergency",
+                    "Field": "Language", "Uzio Value": "N/A", "Paycom Value": p["Language"],
+                    "Status": "Info Only"
+                })
+
+        for u in u_pending:
+            for f in FIELDS:
+                rows.append({
+                    "Employee ID": eid, "Employee Name": emp_name, "Section": "Emergency",
+                    "Field": f, "Uzio Value": u[f], "Paycom Value": "", "Status": "Value missing in Paycom"
+                })
+        for p in p_pending:
+            for f in FIELDS:
+                rows.append({
+                    "Employee ID": eid, "Employee Name": emp_name, "Section": "Emergency",
+                    "Field": f, "Uzio Value": "", "Paycom Value": p[f], "Status": "Value missing in Uzio"
+                })
+
     return pd.DataFrame(rows)
 
 # --- UI Functions ---
@@ -391,19 +751,28 @@ def render_ui():
                 res_payment = run_payment_audit(df_uzio, df_paycom)
                 res_emergency = run_emergency_audit(df_uzio, df_paycom)
                 
-                # Combine
-                all_results = pd.concat([res_census, res_payment, res_emergency], ignore_index=True)
+                # --- Generate Summary Metrics ---
+                uzio_ids = set(df_uzio["Job|Employee ID"].map(norm_id))
+                pay_ids = set(df_paycom[p_id_col].map(norm_id))
                 
-                st.success("Audit complete!")
-                
+                summary_data = [
+                    {"Metric": "Employees in Uzio Master", "Value": len(uzio_ids)},
+                    {"Metric": "Employees in Paycom Export", "Value": len(pay_ids)},
+                    {"Metric": "Employees in Both", "Value": len(uzio_ids & pay_ids)},
+                    {"Metric": "---", "Value": ""},
+                    {"Metric": "Census Matches", "Value": len(res_census[res_census["Status"] == STATUS_MATCH])},
+                    {"Metric": "Census Mismatches", "Value": len(res_census[res_census["Status"] == STATUS_MISMATCH])},
+                    {"Metric": "Payment Matches", "Value": len(res_payment[res_payment["Status"] == STATUS_MATCH])},
+                    {"Metric": "Payment Mismatches", "Value": len(res_payment[res_payment["Status"] == STATUS_MISMATCH])},
+                    {"Metric": "Emergency Matches", "Value": len(res_emergency[res_emergency["Status"] == STATUS_MATCH])},
+                    {"Metric": "Emergency Mismatches", "Value": len(res_emergency[res_emergency["Status"] == STATUS_MISMATCH])},
+                ]
+                df_summary = pd.DataFrame(summary_data)
+
                 # Download
                 out = io.BytesIO()
                 with pd.ExcelWriter(out, engine='xlsxwriter') as writer:
-                    # Overall Summary
-                    summary = all_results.groupby(["Section", "Status"]).size().reset_index(name="Count")
-                    summary.to_excel(writer, sheet_name="Summary", index=False)
-                    
-                    # Detailed Sheets
+                    df_summary.to_excel(writer, sheet_name="Summary", index=False)
                     res_census.to_excel(writer, sheet_name="Census_Audit", index=False)
                     res_payment.to_excel(writer, sheet_name="Payment_Audit", index=False)
                     res_emergency.to_excel(writer, sheet_name="Emergency_Audit", index=False)

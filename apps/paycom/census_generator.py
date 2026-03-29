@@ -261,15 +261,13 @@ def render_census_sanity_check():
         # Resolve Position and Department Desc columns (normalized)
         col_dol = next((c for c in df_download.columns if str(c).lower().strip().replace('_',' ') == 'dol status'), None)
         col_emp_status = next((c for c in df_download.columns if str(c).lower().strip() in ['employee_status', 'employee status', 'employment status', 'status', 'ee status']), None)
-        col_dep = next((c for c in df_download.columns if str(c).lower().strip().replace(' ','_') == 'department_desc' or str(c).lower().strip() == 'department_description'), None)
-
         # Apply Fixes
-        if fix_options.get('fix_position') and col_dep:
-            for c in ['position', 'job title']:
-                c_norm = next((col for col in df_download.columns if str(col).lower().strip() == c), None)
-                if c_norm:
-                    mask = df_download[c_norm].isna() | (df_download[c_norm].astype(str).str.strip().lower() == "nan") | (df_download[c_norm].astype(str).str.strip() == "")
-                    df_download.loc[mask, c_norm] = df_download.loc[mask, col_dep]
+        if fix_options.get('fix_position'):
+            c_job = resolved_field_map.get('Job Title')
+            c_dep = resolved_field_map.get('Department')
+            if c_job and c_dep:
+                mask = df_download[c_job].isna() | (df_download[c_job].astype(str).str.strip().lower() == "nan") | (df_download[c_job].astype(str).str.strip() == "")
+                df_download.loc[mask, c_job] = df_download.loc[mask, c_dep]
 
 
         if fix_options.get('fix_emails'):
@@ -288,19 +286,16 @@ def render_census_sanity_check():
             c_mzip = resolved_field_map.get('Mailing Zip')
             for cz in [c_zip, c_mzip]:
                 if cz and cz in df_download.columns:
-                    def _fix_zip(z):
+                    from utils.audit_utils import normalize_zip
+                    def _fix_zip_local(z):
                         if pd.isna(z) or str(z).strip() == "": return ""
                         import re
-                        # Trim after hyphen or decimal
                         s = str(z).split('.')[0].split('-')[0]
-                        # Keep only digits
                         s = re.sub(r'[^0-9]', '', s)
                         if not s: return ""
-                        # Pad 4-digit to 5-digit
                         if len(s) == 4: s = '0' + s
-                        # Truncate to 5
                         return s[:5]
-                    df_download[cz] = df_download[cz].apply(_fix_zip).astype(str)
+                    df_download[cz] = df_download[cz].apply(_fix_zip_local).astype(str)
 
         # Apply Mappings to download file
         if src_loc_col and src_loc_col in df_download.columns:

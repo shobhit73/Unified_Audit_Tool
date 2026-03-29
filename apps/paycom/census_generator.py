@@ -130,6 +130,7 @@ def render_auto_fix_options(key_prefix):
         fix_type = st.checkbox("Auto-Map Worker Category (e.g. Intern -> Part Time)", value=False, key=f"{key_prefix}_fix_type")
         fix_position = st.checkbox("Auto-Fill blank Position with Department Description", value=False, key=f"{key_prefix}_fix_position")
         fix_dol_status = st.checkbox("Auto-Fill blank DOL_Status to 'Full-Time' for Active Employees", value=True, key=f"{key_prefix}_fix_dol_status")
+        fix_zip = st.checkbox("Auto-Fix Zip Code (Pad 4-digits & trim to 5-digits)", value=False, key=f"{key_prefix}_fix_zip")
 
     return {
         'fix_flsa': fix_flsa,
@@ -139,7 +140,8 @@ def render_auto_fix_options(key_prefix):
         'fix_inactive': fix_status,
         'fix_type': fix_type,
         'fix_position': fix_position,
-        'fix_dol_status': fix_dol_status
+        'fix_dol_status': fix_dol_status,
+        'fix_zip': fix_zip
     }
 
 def get_manager_info(df_paycom, resolved_field_map):
@@ -280,6 +282,25 @@ def render_census_sanity_check():
         if fix_options.get('fix_dol_status') and col_dol:
             mask_blank_dol = df_download[col_dol].isna() | (df_download[col_dol].astype(str).str.strip() == "")
             df_download.loc[mask_blank_dol, col_dol] = "Full-Time"
+
+        if fix_options.get('fix_zip'):
+            c_zip = resolved_field_map.get('Zip')
+            c_mzip = resolved_field_map.get('Mailing Zip')
+            for cz in [c_zip, c_mzip]:
+                if cz and cz in df_download.columns:
+                    def _fix_zip(z):
+                        if pd.isna(z) or str(z).strip() == "": return ""
+                        import re
+                        # Trim after hyphen or decimal
+                        s = str(z).split('.')[0].split('-')[0]
+                        # Keep only digits
+                        s = re.sub(r'[^0-9]', '', s)
+                        if not s: return ""
+                        # Pad 4-digit to 5-digit
+                        if len(s) == 4: s = '0' + s
+                        # Truncate to 5
+                        return s[:5]
+                    df_download[cz] = df_download[cz].apply(_fix_zip).astype(str)
 
         # Apply Mappings to download file
         if src_loc_col and src_loc_col in df_download.columns:

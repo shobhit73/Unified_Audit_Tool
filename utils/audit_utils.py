@@ -949,15 +949,22 @@ def generate_uzio_template(df_source, vendor_field_map, fix_options=None):
             elif std_name in ['Zip', 'Mailing Zip']:
                 def format_zip(z):
                     if pd.isna(z) or str(z).strip() == "": return ""
-                    # Keep digits only
-                    import re
-                    z_clean = re.sub(r'\D', '', str(z).strip())
-                    if not z_clean: return ""
-                    # Pad to 5 or truncate to 5
-                    if len(z_clean) < 5:
-                        return z_clean.zfill(5)
+                    
+                    if fix_options and fix_options.get('fix_zip', False):
+                        # Keep digits only
+                        import re
+                        # Trim after hyphen or decimal (user request)
+                        s = str(z).split('.')[0].split('-')[0]
+                        z_clean = re.sub(r'\D', '', s.strip())
+                        if not z_clean: return ""
+                        # Pad to 5 or truncate to 5
+                        if len(z_clean) == 4:
+                            return '0' + z_clean
+                        else:
+                            return z_clean[:5]
                     else:
-                        return z_clean[:5]
+                        # Return as-is if no fix requested
+                        return str(z).strip()
                 series = series.apply(format_zip)
             elif std_name == 'Employment Type':
                 def format_emp_type(et):

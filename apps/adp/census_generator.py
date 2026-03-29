@@ -127,6 +127,13 @@ def render_auto_fix_options(key_prefix):
         fix_status = st.checkbox("Auto-Map Employment Status (e.g. Inactive -> Terminated)", value=False, key=f"{key_prefix}_fix_status")
         fix_type = st.checkbox("Auto-Map Worker Category (e.g. Intern -> Part Time)", value=False, key=f"{key_prefix}_fix_type")
         fix_dol_status = st.checkbox("Auto-Fill blank DOL_Status to 'Full-Time' for Active Employees", value=True, key=f"{key_prefix}_fix_dol_status")
+        
+        # Standard Hours fixes (ADP Only usually)
+        if "adp" in key_prefix:
+            fix_std_hours = st.checkbox("Auto-Fill blank Standard Hours to '0'", value=False, key=f"{key_prefix}_fix_std_hours")
+            rename_std_hours = st.checkbox("Rename 'Standard Hours' column to 'Working hours per Week'", value=False, key=f"{key_prefix}_rename_std_hours")
+        else:
+            fix_std_hours, rename_std_hours = False, False
 
     return {
         'fix_flsa': fix_flsa,
@@ -136,7 +143,9 @@ def render_auto_fix_options(key_prefix):
         'fix_status': fix_status,
         'fix_inactive': fix_status,
         'fix_type': fix_type,
-        'fix_dol_status': fix_dol_status
+        'fix_dol_status': fix_dol_status,
+        'fix_std_hours': fix_std_hours,
+        'rename_std_hours': rename_std_hours
     }
 
 def get_manager_info(df_adp, resolved_field_map):
@@ -257,6 +266,17 @@ def render_census_sanity_check():
             if c_jt and c_dept and c_jt in df_download.columns and c_dept in df_download.columns:
                 mask_jt = df_download[c_jt].isna() | (df_download[c_jt].astype(str).str.strip().lower() == "nan") | (df_download[c_jt].astype(str).str.strip() == "")
                 df_download.loc[mask_jt, c_jt] = df_download.loc[mask_jt, c_dept]
+
+        if fix_options.get('fix_std_hours'):
+            c_sh = resolved_field_map.get('Working Hours')
+            if c_sh and c_sh in df_download.columns:
+                mask_sh = df_download[c_sh].isna() | (df_download[c_sh].astype(str).str.strip().lower() == "nan") | (df_download[c_sh].astype(str).str.strip() == "")
+                df_download.loc[mask_sh, c_sh] = "0"
+
+        if fix_options.get('rename_std_hours'):
+            c_sh = resolved_field_map.get('Working Hours')
+            if c_sh and c_sh in norm_to_orig:
+                norm_to_orig[c_sh] = "Working hours per Week"
 
         # Apply Mappings to download file
         if src_loc_col and src_loc_col in df_download.columns:

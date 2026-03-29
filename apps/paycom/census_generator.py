@@ -266,7 +266,7 @@ def render_census_sanity_check():
             c_job = resolved_field_map.get('Job Title')
             c_dep = resolved_field_map.get('Department')
             if c_job and c_dep:
-                mask = df_download[c_job].isna() | (df_download[c_job].astype(str).str.strip().lower() == "nan") | (df_download[c_job].astype(str).str.strip() == "")
+                mask = df_download[c_job].isna() | (df_download[c_job].astype(str).str.strip().str.lower() == "nan") | (df_download[c_job].astype(str).str.strip() == "")
                 df_download.loc[mask, c_job] = df_download.loc[mask, c_dep]
 
 

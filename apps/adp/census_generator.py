@@ -259,20 +259,20 @@ def render_census_sanity_check():
         if fix_options.get('fix_dol_status'):
             c_dol = resolved_field_map.get('Employment Type')
             if c_dol and c_dol in df_download.columns:
-                mask_blank = df_download[c_dol].isna() | (df_download[c_dol].astype(str).str.strip().lower() == "nan") | (df_download[c_dol].astype(str).str.strip() == "")
+                mask_blank = df_download[c_dol].isna() | (df_download[c_dol].astype(str).str.strip().str.lower() == "nan") | (df_download[c_dol].astype(str).str.strip() == "")
                 df_download.loc[mask_blank, c_dol] = "Full Time"
 
         if fix_options.get('fix_job_title'):
             c_jt = resolved_field_map.get('Job Title')
             c_dept = resolved_field_map.get('Department')
             if c_jt and c_dept and c_jt in df_download.columns and c_dept in df_download.columns:
-                mask_jt = df_download[c_jt].isna() | (df_download[c_jt].astype(str).str.strip().lower() == "nan") | (df_download[c_jt].astype(str).str.strip() == "")
+                mask_jt = df_download[c_jt].isna() | (df_download[c_jt].astype(str).str.strip().str.lower() == "nan") | (df_download[c_jt].astype(str).str.strip() == "")
                 df_download.loc[mask_jt, c_jt] = df_download.loc[mask_jt, c_dept]
 
         if fix_options.get('fix_std_hours'):
             c_sh = resolved_field_map.get('Working Hours')
             if c_sh and c_sh in df_download.columns:
-                mask_sh = df_download[c_sh].isna() | (df_download[c_sh].astype(str).str.strip().lower() == "nan") | (df_download[c_sh].astype(str).str.strip() == "")
+                mask_sh = df_download[c_sh].isna() | (df_download[c_sh].astype(str).str.strip().str.lower() == "nan") | (df_download[c_sh].astype(str).str.strip() == "")
                 df_download.loc[mask_sh, c_sh] = "0"
 
         if fix_options.get('rename_std_hours'):

@@ -611,12 +611,13 @@ def validate_source_data(df_source, resolved_field_map):
         
         # 4. Blank Job Title
         job_val_raw = row.get(job_title_col) if job_title_col and job_title_col in df_source.columns else ""
-        job_val = str(job_val_raw).strip().lower() if pd.notna(job_val_raw) else ""
+        job_val = str(job_val_raw).strip().lower() if pd.notna(job_val_raw) and str(job_val_raw).strip().lower() != "nan" else ""
         is_driver = "driver" in job_val
         
         if job_title_col and job_title_col in df_source.columns:
             if not job_val:
                 missing.append("Job Title (blank)")
+
                 position_blanks.append({
                     'Employee ID': emp_ref,
                     'Original Job Title': '(Blank)',
@@ -1367,7 +1368,8 @@ def selective_update_uzio(df_source, df_template, selected_uzio_cols, vendor_fie
                 val = source_row_data.get(vendor_col)
                 # Apply same formatting used in generate_uzio_template
                 formatted_val = ""
-                if pd.notna(val) and str(val).strip() != "":
+                val_str = str(val).strip().lower() if pd.notna(val) else ""
+                if val_str and val_str != "nan":
                     # Reuse specific formatters
                     if std_name == 'Middle Initial':
                         formatted_val = str(val).strip()[0]
@@ -1436,6 +1438,25 @@ def selective_update_uzio(df_source, df_template, selected_uzio_cols, vendor_fie
                             formatted_val = "Other"
                     else:
                         formatted_val = str(val).strip()
+                else:
+                    # Value is blank or 'nan'
+                    if std_name == 'Job Title':
+                        # Check for Job Title fallback
+                        if fix_options and (fix_options.get('fix_job_title', False) or fix_options.get('fix_position', False)):
+                            dept_col = resolved_field_map.get('Department')
+                            if dept_col and dept_col in df_source.columns:
+                                dept_val = row.get(dept_col)
+                                dept_val_str = str(dept_val).strip().lower() if pd.notna(dept_val) else ""
+                                if dept_val_str and dept_val_str != "nan":
+                                    formatted_val = str(dept_val).strip()
+                                else:
+                                    formatted_val = ""
+                            else:
+                                formatted_val = ""
+                        else:
+                            formatted_val = ""
+                    else:
+                        formatted_val = ""
                 
                 # Check for delete/update
                 old_val = row.get(uzio_col, "")

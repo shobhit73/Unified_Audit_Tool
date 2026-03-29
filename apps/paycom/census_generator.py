@@ -266,8 +266,9 @@ def render_census_sanity_check():
             for c in ['position', 'job title']:
                 c_norm = next((col for col in df_download.columns if str(col).lower().strip() == c), None)
                 if c_norm:
-                    mask = df_download[c_norm].isna() | (df_download[c_norm].astype(str).str.strip() == "")
+                    mask = df_download[c_norm].isna() | (df_download[c_norm].astype(str).str.strip().lower() == "nan") | (df_download[c_norm].astype(str).str.strip() == "")
                     df_download.loc[mask, c_norm] = df_download.loc[mask, col_dep]
+
 
         if fix_options.get('fix_emails'):
             c_work = next((col for col in df_download.columns if 'work_email' in str(col).lower()), None)

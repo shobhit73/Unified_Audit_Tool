@@ -121,6 +121,7 @@ def render_auto_fix_options(key_prefix):
     with col_fix1:
         fix_flsa = st.checkbox("Enforce FLSA/Pay Type alignment (e.g. Salaried = Exempt)", value=False, key=f"{key_prefix}_fix_flsa")
         fix_emails = st.checkbox("Use Personal Email as fallback for missing Work Email", value=False, key=f"{key_prefix}_fix_emails")
+        fix_job_title = st.checkbox("Auto-Fill blank Job Titles using Department Description", value=False, key=f"{key_prefix}_fix_jt")
         fix_license = st.checkbox("Strict License Validation (Clear dates if number missing)", value=False, key=f"{key_prefix}_fix_license")
     with col_fix2:
         fix_status = st.checkbox("Auto-Map Employment Status (e.g. Inactive -> Terminated)", value=False, key=f"{key_prefix}_fix_status")
@@ -130,6 +131,7 @@ def render_auto_fix_options(key_prefix):
     return {
         'fix_flsa': fix_flsa,
         'fix_emails': fix_emails,
+        'fix_job_title': fix_job_title,
         'fix_license': fix_license,
         'fix_status': fix_status,
         'fix_inactive': fix_status,
@@ -248,6 +250,13 @@ def render_census_sanity_check():
             if col_dol:
                 mask_blank = df_download[col_dol].isna() | (df_download[col_dol].astype(str).str.strip() == "")
                 df_download.loc[mask_blank, col_dol] = "Full Time"
+
+        if fix_options.get('fix_job_title'):
+            c_jt = resolved_field_map.get('Job Title')
+            c_dept = resolved_field_map.get('Department')
+            if c_jt and c_dept and c_jt in df_download.columns and c_dept in df_download.columns:
+                mask_jt = df_download[c_jt].isna() | (df_download[c_jt].astype(str).str.strip().lower() == "nan") | (df_download[c_jt].astype(str).str.strip() == "")
+                df_download.loc[mask_jt, c_jt] = df_download.loc[mask_jt, c_dept]
 
         # Apply Mappings to download file
         if src_loc_col and src_loc_col in df_download.columns:

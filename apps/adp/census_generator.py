@@ -257,10 +257,10 @@ def render_census_sanity_check():
                 df_download.loc[mask, c_work] = df_download.loc[mask, c_pers]
 
         if fix_options.get('fix_dol_status'):
-            col_dol = next((c for c in df_download.columns if str(c).lower().strip().replace('_',' ') == 'dol status' or 'worker category description' in str(c).lower()), None)
-            if col_dol:
-                mask_blank = df_download[col_dol].isna() | (df_download[col_dol].astype(str).str.strip() == "")
-                df_download.loc[mask_blank, col_dol] = "Full Time"
+            c_dol = resolved_field_map.get('Employment Type')
+            if c_dol and c_dol in df_download.columns:
+                mask_blank = df_download[c_dol].isna() | (df_download[c_dol].astype(str).str.strip().lower() == "nan") | (df_download[c_dol].astype(str).str.strip() == "")
+                df_download.loc[mask_blank, c_dol] = "Full Time"
 
         if fix_options.get('fix_job_title'):
             c_jt = resolved_field_map.get('Job Title')
@@ -285,19 +285,15 @@ def render_census_sanity_check():
             c_mzip = resolved_field_map.get('Mailing Zip')
             for cz in [c_zip, c_mzip]:
                 if cz and cz in df_download.columns:
-                    def _fix_zip(z):
+                    def _fix_zip_local(z):
                         if pd.isna(z) or str(z).strip() == "": return ""
                         import re
-                        # Trim after hyphen or decimal
                         s = str(z).split('.')[0].split('-')[0]
-                        # Keep only digits
                         s = re.sub(r'[^0-9]', '', s)
                         if not s: return ""
-                        # Pad 4-digit to 5-digit
                         if len(s) == 4: s = '0' + s
-                        # Truncate to 5
                         return s[:5]
-                    df_download[cz] = df_download[cz].apply(_fix_zip).astype(str)
+                    df_download[cz] = df_download[cz].apply(_fix_zip_local).astype(str)
 
         # Apply Mappings to download file
         if src_loc_col and src_loc_col in df_download.columns:

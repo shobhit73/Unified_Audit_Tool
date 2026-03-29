@@ -286,7 +286,6 @@ def render_census_sanity_check():
             c_mzip = resolved_field_map.get('Mailing Zip')
             for cz in [c_zip, c_mzip]:
                 if cz and cz in df_download.columns:
-                    from utils.audit_utils import normalize_zip
                     def _fix_zip_local(z):
                         if pd.isna(z) or str(z).strip() == "": return ""
                         import re

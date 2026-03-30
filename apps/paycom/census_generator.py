@@ -418,19 +418,46 @@ def render_census_sanity_check():
                 df_download = df_download.sort_values(by=['__mgr_count', '__group_count'], ascending=[False, False])
                 df_download = df_download.drop(columns=['__mgr_count', '__group_count'])
 
-        # Add CRITICAL_WARNINGS column if errors exist
-        if not hard_errors.empty:
-            emp_id_col = resolved_field_map.get('Employee ID')
-            if emp_id_col and emp_id_col in df_download.columns:
-                error_map = dict(zip(hard_errors['Employee ID'].astype(str), hard_errors['Issue']))
-                df_download.insert(0, 'CRITICAL_WARNINGS', df_download[emp_id_col].astype(str).map(error_map).fillna(""))
-
-        # Restore original column headers
-        restored_cols = [norm_to_orig.get(c, c) for c in df_download.columns if c in norm_to_orig]
+        # --- New: Apply Strict Column Sequencing ---
+        priority_cols = [
+            ('Employee ID', 'Employee_Code'),
+            ('First Name', 'Legal_Firstname'),
+            ('Last Name', 'Legal_Lastname'),
+            ('Reports To ID', 'Supervisor_Primary_Code'),
+            ('Employment Type', 'DOL_Status'),
+            ('Pay Type', 'Pay_Type'),
+            ('Work Location', 'Work_Location'),
+            ('Workers Comp Code', 'Workers_Comp_Code'),
+            ('FLSA Classification', 'Exempt_Status'),
+            ('Employment Status', 'Employee_Status'),
+            ('Job Title', 'Position'),
+            ('Department', 'Department_Desc')
+        ]
+        
+        final_col_order = []
+        renaming_dict = {}
+        used_orig_cols = set()
+        
+        # 0. Handle CRITICAL_WARNINGS
         if 'CRITICAL_WARNINGS' in df_download.columns:
-            df_download.columns = ['CRITICAL_WARNINGS'] + restored_cols
-        else:
-            df_download.columns = restored_cols
+            final_col_order.append('CRITICAL_WARNINGS')
+            
+        # 1. Add Priority Columns in exact order
+        for norm_key, target_name in priority_cols:
+            orig_col = resolved_field_map.get(norm_key)
+            if orig_col and orig_col in df_download.columns:
+                final_col_order.append(orig_col)
+                renaming_dict[orig_col] = target_name
+                used_orig_cols.add(orig_col)
+        
+        # 2. Append all other original columns that weren't in the priority list
+        for col in df_download.columns:
+            if col not in used_orig_cols and col != 'CRITICAL_WARNINGS':
+                final_col_order.append(col)
+
+        # Reorder and Rename
+        df_download = df_download[final_col_order]
+        df_download = df_download.rename(columns=renaming_dict)
 
         from utils.audit_utils import generate_excel_with_audit
         excel_data = generate_excel_with_audit(df_download, pd.DataFrame(audit_trail))

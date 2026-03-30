@@ -119,10 +119,10 @@ def render_auto_fix_options(key_prefix):
     
     col_fix1, col_fix2 = st.columns(2)
     with col_fix1:
-        fix_flsa = st.checkbox("Enforce FLSA/Pay Type alignment (e.g. Salaried = Exempt)", value=False, key=f"{key_prefix}_fix_flsa")
+        fix_flsa = st.checkbox("Enforce FLSA/Pay Type alignment (e.g. Salaried = Exempt)", value=False, key=f"{key_prefix}_fix_flsa", help="Automatically fills BLANK FLSA fields based on Pay Type (Hourly -> Non-Exempt, Salaried -> Exempt). It will NOT replace existing FLSA values.")
         fix_emails = st.checkbox("Use Personal Email as fallback for missing Work Email", value=False, key=f"{key_prefix}_fix_emails")
         fix_job_title = st.checkbox("Auto-Fill blank Job Titles using Department Description", value=False, key=f"{key_prefix}_fix_jt")
-        fix_driver_smart = st.checkbox("Enable Smart Driver Correction (Dept/Job -> FLSA)", value=False, key=f"{key_prefix}_fix_driver_smart", help="If FLSA is blank and Position (or Department) is 'Driver', this automatically sets FLSA to Non-Exempt.")
+        fix_driver_smart = st.checkbox("Enable Smart Driver Correction (Dept/Job -> FLSA)", value=False, key=f"{key_prefix}_fix_driver_smart", help="First fills blank Job Titles from 'Driver' departments, then automatically sets BLANK FLSA to Non-Exempt for all Drivers. It will NOT replace existing FLSA values.")
         fix_license = st.checkbox("Strict License Validation (Clear dates if number missing)", value=False, key=f"{key_prefix}_fix_license")
     with col_fix2:
         fix_status = st.checkbox("Auto-Map Employment Status (e.g. Inactive -> Terminated)", value=False, key=f"{key_prefix}_fix_status")

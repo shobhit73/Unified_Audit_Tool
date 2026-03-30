@@ -122,7 +122,7 @@ def render_auto_fix_options(key_prefix):
         fix_flsa = st.checkbox("Enforce FLSA/Pay Type alignment (e.g. Salaried = Exempt)", value=False, key=f"{key_prefix}_fix_flsa", help="Automatically fills BLANK FLSA fields based on Pay Type (Hourly -> Non-Exempt, Salaried -> Exempt). It will NOT replace existing FLSA values.")
         fix_emails = st.checkbox("Use Personal Email as fallback for missing Work Email", value=False, key=f"{key_prefix}_fix_emails")
         fix_job_title = st.checkbox("Auto-Fill blank Job Titles using Department Description", value=False, key=f"{key_prefix}_fix_jt")
-        fix_driver_smart = st.checkbox("Enable Smart Driver Correction (Dept/Job -> FLSA)", value=False, key=f"{key_prefix}_fix_driver_smart", help="First fills blank Job Titles from 'Driver' departments, then automatically sets BLANK FLSA to Non-Exempt for all Drivers. It will NOT replace existing FLSA values.")
+        fix_driver_smart = st.checkbox("Enable Smart Driver Correction (Dept/Job -> FLSA/Pay Type)", value=False, key=f"{key_prefix}_fix_driver_smart", help="Full driver automation: 1. Fills blank Job Titles from 'Driver' departments. 2. Sets BLANK FLSA to Non-Exempt. 3. Sets BLANK Pay Type to 'Hourly'. It will NOT replace existing data.")
         fix_license = st.checkbox("Strict License Validation (Clear dates if number missing)", value=False, key=f"{key_prefix}_fix_license")
     with col_fix2:
         fix_status = st.checkbox("Auto-Map Employment Status (e.g. Inactive -> Terminated)", value=False, key=f"{key_prefix}_fix_status")
@@ -323,6 +323,15 @@ def render_census_sanity_check():
                     old_f = df_download.at[idx, c_flsa]
                     df_download.at[idx, c_flsa] = "Non-Exempt"
                     log_change(idx, "FLSA Classification (Smart Driver)", old_f, "Non-Exempt")
+                
+                # 3. New: Check if Job is Driver and Pay Type is blank
+                c_pt = resolved_field_map.get('Pay Type')
+                if c_pt and c_pt in df_download.columns:
+                    mask_pt_blank = df_download[c_pt].isna() | (df_download[c_pt].astype(str).str.strip().str.lower() == "nan") | (df_download[c_pt].astype(str).str.strip() == "")
+                    for idx in df_download[mask_job_driver & mask_pt_blank].index:
+                        old_p = df_download.at[idx, c_pt]
+                        df_download.at[idx, c_pt] = "Hourly"
+                        log_change(idx, "Pay Type (Smart Driver)", old_p, "Hourly")
 
         if fix_options.get('fix_std_hours'):
             c_sh = resolved_field_map.get('Working Hours')

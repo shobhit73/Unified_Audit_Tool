@@ -256,6 +256,23 @@ def render_census_sanity_check():
 
     if st.button("Download Corrected Source"):
         df_download = df_adp.copy()
+        audit_trail = []
+        emp_id_col = resolved_field_map.get('Employee ID')
+        emp_name_col = next((c for c in df_download.columns if 'name' in str(c).lower()), None)
+        
+        def get_row_name(row_idx):
+            if emp_name_col: return str(df_download.at[row_idx, emp_name_col]).strip()
+            return "N/A"
+        
+        def log_change(row_idx, field, old_val, new_val):
+            eid = str(df_download.at[row_idx, emp_id_col]) if emp_id_col else "N/A"
+            audit_trail.append({
+                'Employee ID': eid,
+                'Employee Name': get_row_name(row_idx),
+                'Field Changed': field,
+                'Old Value': str(old_val) if pd.notna(old_val) else "(blank)",
+                'Assumed Value': str(new_val)
+            })
         
         # Apply Fixes
         if fix_options.get('fix_emails'):
@@ -271,7 +288,17 @@ def render_census_sanity_check():
                 mask_blank = df_download[c_dol].isna() | (df_download[c_dol].astype(str).str.strip().str.lower() == "nan") | (df_download[c_dol].astype(str).str.strip() == "")
                 df_download.loc[mask_blank, c_dol] = "Full Time"
 
-                df_download.loc[mask_jt, c_jt] = df_download.loc[mask_jt, c_dept]
+        if fix_options.get('fix_position'):
+            c_job = resolved_field_map.get('Job Title')
+            c_dep = resolved_field_map.get('Department')
+            if c_job and c_dep and c_job in df_download.columns and c_dep in df_download.columns:
+                mask = df_download[c_job].isna() | (df_download[c_job].astype(str).str.strip().str.lower() == "nan") | (df_download[c_job].astype(str).str.strip() == "")
+                for idx in df_download[mask].index:
+                    old_val = df_download.at[idx, c_job]
+                    new_val = df_download.at[idx, c_dep]
+                    if pd.notna(new_val) and str(new_val).strip():
+                        df_download.at[idx, c_job] = new_val
+                        log_change(idx, "Job Title", old_val, new_val)
 
         if fix_options.get('fix_driver_smart'):
             c_jt = resolved_field_map.get('Job Title')
@@ -282,14 +309,20 @@ def render_census_sanity_check():
                 mask_jt_blank = df_download[c_jt].isna() | (df_download[c_jt].astype(str).str.strip().str.lower() == "nan") | (df_download[c_jt].astype(str).str.strip() == "")
                 mask_dept_driver = df_download[c_dept].astype(str).str.lower().str.contains("driver", na=False)
                 
-                # Auto-fill Job to Dept if it's a driver dept and job is blank
-                df_download.loc[mask_jt_blank & mask_dept_driver, c_jt] = df_download.loc[mask_jt_blank & mask_dept_driver, c_dept]
+                for idx in df_download[mask_jt_blank & mask_dept_driver].index:
+                    old_j = df_download.at[idx, c_jt]
+                    new_j = df_download.at[idx, c_dept]
+                    df_download.at[idx, c_jt] = new_j
+                    log_change(idx, "Job Title (Smart Driver)", old_j, new_j)
                 
                 # 2. Now check if Job is Driver and FLSA is blank
                 mask_job_driver = df_download[c_jt].astype(str).str.lower().str.contains("driver", na=False)
                 mask_flsa_blank = df_download[c_flsa].isna() | (df_download[c_flsa].astype(str).str.strip().str.lower() == "nan") | (df_download[c_flsa].astype(str).str.strip() == "")
                 
-                df_download.loc[mask_job_driver & mask_flsa_blank, c_flsa] = "Non-Exempt"
+                for idx in df_download[mask_job_driver & mask_flsa_blank].index:
+                    old_f = df_download.at[idx, c_flsa]
+                    df_download.at[idx, c_flsa] = "Non-Exempt"
+                    log_change(idx, "FLSA Classification (Smart Driver)", old_f, "Non-Exempt")
 
         if fix_options.get('fix_std_hours'):
             c_sh = resolved_field_map.get('Working Hours')
@@ -361,10 +394,9 @@ def render_census_sanity_check():
         if 'CRITICAL_WARNINGS' in df_download.columns: df_download.columns = ['CRITICAL_WARNINGS'] + restored_cols
         else: df_download.columns = restored_cols
 
-        corrected_xlsx = io.BytesIO()
-        df_download.to_excel(corrected_xlsx, index=False)
-        corrected_xlsx.seek(0)
-        st.download_button("📥 Download Corrected Source (XLSX)", corrected_xlsx.getvalue(), f"ADP_Cleaned_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx")
+        from utils.audit_utils import generate_excel_with_audit
+        excel_data = generate_excel_with_audit(df_download, pd.DataFrame(audit_trail))
+        st.download_button("📥 Download Corrected Source (XLSX)", excel_data, f"ADP_Cleaned_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx")
 
 def render_census_generator():
     st.title("ADP - Full Census Generation")

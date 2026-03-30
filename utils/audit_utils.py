@@ -1533,3 +1533,27 @@ def selective_update_uzio(df_source, df_template, selected_uzio_cols, vendor_fie
 
     summary = f"Updated {updated_count} employees. Total {len(change_details)} cell changes."
     return df_updated, summary, pd.DataFrame(change_details)
+
+def generate_excel_with_audit(df_main, df_audit, sheet_name_main="Corrected Census", sheet_name_audit="Change Log"):
+    """
+    Generates an Excel file in memory with two sheets.
+    """
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df_main.to_excel(writer, index=False, sheet_name=sheet_name_main)
+        if not df_audit.empty:
+            df_audit.to_excel(writer, index=False, sheet_name=sheet_name_audit)
+            
+            # Formatting the audit sheet
+            workbook = writer.book
+            worksheet = writer.sheets[sheet_name_audit]
+            header_format = workbook.add_format({'bold': True, 'bg_color': '#D7E4BC', 'border': 1})
+            for col_num, value in enumerate(df_audit.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+                worksheet.set_column(col_num, col_num, 20) # Set column width
+        else:
+            # If empty, just create an empty sheet with headers
+            cols = ["Employee ID", "Employee Name", "Field Changed", "Old Value", "Assumed Value"]
+            pd.DataFrame(columns=cols).to_excel(writer, index=False, sheet_name=sheet_name_audit)
+    
+    return output.getvalue()

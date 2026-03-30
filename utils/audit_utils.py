@@ -1550,10 +1550,13 @@ def generate_excel_with_audit(df_main, df_audit, sheet_name_main="Corrected Cens
             header_format = workbook.add_format({'bold': True, 'bg_color': '#D7E4BC', 'border': 1})
             for col_num, value in enumerate(df_audit.columns.values):
                 worksheet.write(0, col_num, value, header_format)
-                worksheet.set_column(col_num, col_num, 20) # Set column width
+                if value == "Comments":
+                    worksheet.set_column(col_num, col_num, 40) # Wider column for comments
+                else:
+                    worksheet.set_column(col_num, col_num, 20) # Set column width
         else:
             # If empty, just create an empty sheet with headers
-            cols = ["Employee ID", "Employee Name", "Field Changed", "Old Value", "Assumed Value"]
+            cols = ["Employee ID", "Employee Name", "Field Changed", "Old Value", "Assumed Value", "Comments"]
             pd.DataFrame(columns=cols).to_excel(writer, index=False, sheet_name=sheet_name_audit)
     
     return output.getvalue()

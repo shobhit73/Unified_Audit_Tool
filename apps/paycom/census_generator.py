@@ -276,14 +276,15 @@ def render_census_sanity_check():
             if emp_name_col: return str(df_download.at[row_idx, emp_name_col]).strip()
             return "N/A"
         
-        def log_change(row_idx, field, old_val, new_val):
+        def log_change(row_idx, field, old_val, new_val, comment):
             eid = str(df_download.at[row_idx, emp_id_col]) if emp_id_col else "N/A"
             audit_trail.append({
                 'Employee ID': eid,
                 'Employee Name': get_row_name(row_idx),
                 'Field Changed': field,
                 'Old Value': str(old_val) if pd.notna(old_val) else "(blank)",
-                'Assumed Value': str(new_val)
+                'Assumed Value': str(new_val),
+                'Comments': comment
             })
         
         # Resolve Position and Department Desc columns (normalized)
@@ -300,7 +301,7 @@ def render_census_sanity_check():
                     new_v = df_download.at[idx, c_dep]
                     if pd.notna(new_v) and str(new_v).strip():
                         df_download.at[idx, c_job] = new_v
-                        log_change(idx, "Position", old_v, new_v)
+                        log_change(idx, "Position", old_v, new_v, "Position was blank; filled using Department Description.")
 
         if fix_options.get('fix_driver_smart'):
             c_jt = resolved_field_map.get('Job Title')
@@ -315,7 +316,7 @@ def render_census_sanity_check():
                     old_j = df_download.at[idx, c_jt]
                     new_j = df_download.at[idx, c_dept]
                     df_download.at[idx, c_jt] = new_j
-                    log_change(idx, "Position (Smart Driver)", old_j, new_j)
+                    log_change(idx, "Position (Smart Driver)", old_j, new_j, "Automatically assigned 'Driver' title from Department.")
                 
                 # 2. Now check if Job is Driver and FLSA is blank
                 mask_job_driver = df_download[c_jt].astype(str).str.lower().str.contains("driver", na=False)
@@ -324,7 +325,7 @@ def render_census_sanity_check():
                 for idx in df_download[mask_job_driver & mask_flsa_blank].index:
                     old_f = df_download.at[idx, c_flsa]
                     df_download.at[idx, c_flsa] = "Non-Exempt"
-                    log_change(idx, "FLSA Classification (Smart Driver)", old_f, "Non-Exempt")
+                    log_change(idx, "FLSA Classification (Smart Driver)", old_f, "Non-Exempt", "Automatic Non-Exempt status for Driver roles.")
                 
                 # 3. New: Check if Job is Driver and Pay Type is blank
                 c_pt = resolved_field_map.get('Pay Type')
@@ -333,7 +334,7 @@ def render_census_sanity_check():
                     for idx in df_download[mask_job_driver & mask_pt_blank].index:
                         old_p = df_download.at[idx, c_pt]
                         df_download.at[idx, c_pt] = "Hourly"
-                        log_change(idx, "Pay Type (Smart Driver)", old_p, "Hourly")
+                        log_change(idx, "Pay Type (Smart Driver)", old_p, "Hourly", "Automatic Hourly pay type for Driver roles.")
 
 
         if fix_options.get('fix_emails'):
@@ -341,11 +342,19 @@ def render_census_sanity_check():
             c_pers = next((col for col in df_download.columns if 'personal_email' in str(col).lower()), None)
             if c_work and c_pers:
                 mask = df_download[c_work].isna() | (df_download[c_work].astype(str).str.strip() == "")
-                df_download.loc[mask, c_work] = df_download.loc[mask, c_pers]
+                for idx in df_download[mask].index:
+                    old_e = df_download.at[idx, c_work]
+                    new_e = df_download.at[idx, c_pers]
+                    if pd.notna(new_e) and str(new_e).strip():
+                        df_download.at[idx, c_work] = new_e
+                        log_change(idx, "Work Email", old_e, new_e, "Personal email used as fallback for missing work email.")
 
         if fix_options.get('fix_dol_status') and col_dol:
             mask_blank_dol = df_download[col_dol].isna() | (df_download[col_dol].astype(str).str.strip() == "")
-            df_download.loc[mask_blank_dol, col_dol] = "Full-Time"
+            for idx in df_download[mask_blank_dol].index:
+                old_d = df_download.at[idx, col_dol]
+                df_download.at[idx, col_dol] = "Full-Time"
+                log_change(idx, "DOL Status", old_d, "Full-Time", "Defaulted blank value to 'Full-Time' for active employee.")
 
         if fix_options.get('fix_zip'):
             c_zip = resolved_field_map.get('Zip')
@@ -360,7 +369,14 @@ def render_census_sanity_check():
                         if not s: return ""
                         if len(s) == 4: s = '0' + s
                         return s[:5]
+                    
+                    orig_zips = df_download[cz].copy()
                     df_download[cz] = df_download[cz].apply(_fix_zip_local).astype(str)
+                    
+                    # Log ZIP changes
+                    for idx in df_download.index:
+                        if str(df_download.at[idx, cz]) != str(orig_zips.at[idx]):
+                            log_change(idx, cz, orig_zips.at[idx], df_download.at[idx, cz], "Standardized zip code format.")
 
         # Apply Mappings to download file
         if src_loc_col and src_loc_col in df_download.columns:

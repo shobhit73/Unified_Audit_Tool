@@ -264,14 +264,15 @@ def render_census_sanity_check():
             if emp_name_col: return str(df_download.at[row_idx, emp_name_col]).strip()
             return "N/A"
         
-        def log_change(row_idx, field, old_val, new_val):
+        def log_change(row_idx, field, old_val, new_val, comment):
             eid = str(df_download.at[row_idx, emp_id_col]) if emp_id_col else "N/A"
             audit_trail.append({
                 'Employee ID': eid,
                 'Employee Name': get_row_name(row_idx),
                 'Field Changed': field,
                 'Old Value': str(old_val) if pd.notna(old_val) else "(blank)",
-                'Assumed Value': str(new_val)
+                'Assumed Value': str(new_val),
+                'Comments': comment
             })
         
         # Apply Fixes
@@ -280,13 +281,21 @@ def render_census_sanity_check():
             c_pers = resolved_field_map.get('Personal Email')
             if c_work and c_pers and c_work in df_download.columns and c_pers in df_download.columns:
                 mask = df_download[c_work].isna() | (df_download[c_work].astype(str).str.strip() == "")
-                df_download.loc[mask, c_work] = df_download.loc[mask, c_pers]
+                for idx in df_download[mask].index:
+                    old_e = df_download.at[idx, c_work]
+                    new_e = df_download.at[idx, c_pers]
+                    if pd.notna(new_e) and str(new_e).strip():
+                        df_download.at[idx, c_work] = new_e
+                        log_change(idx, "Work Email", old_e, new_e, "Personal email used as fallback for missing work email.")
 
         if fix_options.get('fix_dol_status'):
             c_dol = resolved_field_map.get('Employment Type')
             if c_dol and c_dol in df_download.columns:
                 mask_blank = df_download[c_dol].isna() | (df_download[c_dol].astype(str).str.strip().str.lower() == "nan") | (df_download[c_dol].astype(str).str.strip() == "")
-                df_download.loc[mask_blank, c_dol] = "Full Time"
+                for idx in df_download[mask_blank].index:
+                    old_d = df_download.at[idx, c_dol]
+                    df_download.at[idx, c_dol] = "Full Time"
+                    log_change(idx, "Employment Type", old_d, "Full Time", "Defaulted blank value to 'Full Time' for active employee.")
 
         if fix_options.get('fix_position'):
             c_job = resolved_field_map.get('Job Title')
@@ -298,7 +307,22 @@ def render_census_sanity_check():
                     new_val = df_download.at[idx, c_dep]
                     if pd.notna(new_val) and str(new_val).strip():
                         df_download.at[idx, c_job] = new_val
-                        log_change(idx, "Job Title", old_val, new_val)
+                        log_change(idx, "Job Title", old_val, new_val, "Position was blank; filled using Department Description.")
+
+        if fix_options.get('fix_flsa'):
+            c_flsa = resolved_field_map.get('FLSA Classification')
+            c_pt = resolved_field_map.get('Pay Type')
+            if c_flsa and c_pt and c_flsa in df_download.columns and c_pt in df_download.columns:
+                mask_blank = df_download[c_flsa].isna() | (df_download[c_flsa].astype(str).str.strip().str.lower() == "nan") | (df_download[c_flsa].astype(str).str.strip() == "")
+                for idx in df_download[mask_blank].index:
+                    pt_val = str(df_download.at[idx, c_pt]).lower().strip()
+                    old_f = df_download.at[idx, c_flsa]
+                    if 'hourly' in pt_val:
+                        df_download.at[idx, c_flsa] = "Non-Exempt"
+                        log_change(idx, "FLSA Status", old_f, "Non-Exempt", "Applied based on Hourly pay type.")
+                    elif 'salaried' in pt_val:
+                        df_download.at[idx, c_flsa] = "Exempt"
+                        log_change(idx, "FLSA Status", old_f, "Exempt", "Applied based on Salaried pay type.")
 
         if fix_options.get('fix_driver_smart'):
             c_jt = resolved_field_map.get('Job Title')
@@ -313,7 +337,7 @@ def render_census_sanity_check():
                     old_j = df_download.at[idx, c_jt]
                     new_j = df_download.at[idx, c_dept]
                     df_download.at[idx, c_jt] = new_j
-                    log_change(idx, "Job Title (Smart Driver)", old_j, new_j)
+                    log_change(idx, "Job Title (Smart Driver)", old_j, new_j, "Automatically assigned 'Driver' title from Department.")
                 
                 # 2. Now check if Job is Driver and FLSA is blank
                 mask_job_driver = df_download[c_jt].astype(str).str.lower().str.contains("driver", na=False)
@@ -322,7 +346,7 @@ def render_census_sanity_check():
                 for idx in df_download[mask_job_driver & mask_flsa_blank].index:
                     old_f = df_download.at[idx, c_flsa]
                     df_download.at[idx, c_flsa] = "Non-Exempt"
-                    log_change(idx, "FLSA Classification (Smart Driver)", old_f, "Non-Exempt")
+                    log_change(idx, "FLSA Classification (Smart Driver)", old_f, "Non-Exempt", "Automatic Non-Exempt status for Driver roles.")
                 
                 # 3. New: Check if Job is Driver and Pay Type is blank
                 c_pt = resolved_field_map.get('Pay Type')
@@ -331,7 +355,7 @@ def render_census_sanity_check():
                     for idx in df_download[mask_job_driver & mask_pt_blank].index:
                         old_p = df_download.at[idx, c_pt]
                         df_download.at[idx, c_pt] = "Hourly"
-                        log_change(idx, "Pay Type (Smart Driver)", old_p, "Hourly")
+                        log_change(idx, "Pay Type (Smart Driver)", old_p, "Hourly", "Automatic Hourly pay type for Driver roles.")
 
         if fix_options.get('fix_std_hours'):
             c_sh = resolved_field_map.get('Working Hours')
@@ -357,7 +381,14 @@ def render_census_sanity_check():
                         if not s: return ""
                         if len(s) == 4: s = '0' + s
                         return s[:5]
+                    
+                    orig_zips = df_download[cz].copy()
                     df_download[cz] = df_download[cz].apply(_fix_zip_local).astype(str)
+                    
+                    # Log ZIP changes
+                    for idx in df_download.index:
+                        if str(df_download.at[idx, cz]) != str(orig_zips.at[idx]):
+                            log_change(idx, cz, orig_zips.at[idx], df_download.at[idx, cz], "Standardized zip code format.")
 
         # Apply Mappings to download file
         if src_loc_col and src_loc_col in df_download.columns:

@@ -119,10 +119,10 @@ def render_auto_fix_options(key_prefix):
     
     col_fix1, col_fix2 = st.columns(2)
     with col_fix1:
-        fix_flsa = st.checkbox("Enforce FLSA/Pay Type alignment (e.g. Salaried = Exempt)", value=False, key=f"{key_prefix}_fix_flsa", help="Automatically fills BLANK FLSA fields based on Pay Type (Hourly -> Non-Exempt, Salaried -> Exempt). It will NOT replace existing FLSA values.")
+        fix_flsa = st.checkbox("Enforce FLSA/Pay Type alignment (e.g. Salaried = Exempt)", value=False, key=f"{key_prefix}_fix_flsa", help="If the 'FLSA' is blank, this will fill it automatically based on whether they are Hourly (sets to Non-Exempt) or Salaried (sets to Exempt). It will NEVER change an existing FLSA status.")
         fix_emails = st.checkbox("Use Personal Email as fallback for missing Work Email", value=False, key=f"{key_prefix}_fix_emails")
         fix_job_title = st.checkbox("Auto-Fill blank Job Titles using Department Description", value=False, key=f"{key_prefix}_fix_jt")
-        fix_driver_smart = st.checkbox("Enable Smart Driver Correction (Dept/Job -> FLSA/Pay Type)", value=False, key=f"{key_prefix}_fix_driver_smart", help="Full driver automation: 1. Fills blank Job Titles from 'Driver' departments. 2. Sets BLANK FLSA to Non-Exempt. 3. Sets BLANK Pay Type to 'Hourly'. It will NOT replace existing data.")
+        fix_driver_smart = st.checkbox("Enable Smart Driver Correction (Dept/Job -> FLSA/Pay Type)", value=False, key=f"{key_prefix}_fix_driver_smart", help="Designed specifically for Drivers. If the Job, FLSA, or Pay Type is blank for a driver, it will fill them as: Job='Driver', FLSA='Non-Exempt', and Pay Type='Hourly'. It only fills missing info and won't overwrite your existing data.")
         fix_license = st.checkbox("Strict License Validation (Clear dates if number missing)", value=False, key=f"{key_prefix}_fix_license")
     with col_fix2:
         fix_status = st.checkbox("Auto-Map Employment Status (e.g. Inactive -> Terminated)", value=False, key=f"{key_prefix}_fix_status")

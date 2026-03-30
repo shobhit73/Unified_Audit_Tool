@@ -523,6 +523,7 @@ def validate_source_data(df_source, resolved_field_map):
     inactive_statuses = []
     position_blanks = []
     dol_status_blanks = []
+    smart_driver_fixes = []
 
     # Get column names 
     # Hourly Exempt / Salaried Non-Exempt flags
@@ -533,6 +534,7 @@ def validate_source_data(df_source, resolved_field_map):
     type_col = resolved_field_map.get('Employment Type')
     pay_type_col = resolved_field_map.get('Pay Type')
     job_title_col = resolved_field_map.get('Job Title')
+    dept_col = resolved_field_map.get('Department')
     location_col = resolved_field_map.get('Work Location')
     zip_col = resolved_field_map.get('Zip')
     salary_col = resolved_field_map.get('Annual Salary')
@@ -632,12 +634,25 @@ def validate_source_data(df_source, resolved_field_map):
                 is_flsa_blank = True
                 
         if is_flsa_blank:
-            if is_driver and is_pay_type_blank:
-                # User specifically asked for this case
-                flsa_blanks.append({
+            # Smart Driver Check: If Job is Driver OR Dept is Driver
+            dept_val_raw = row.get(dept_col) if dept_col and dept_col in df_source.columns else ""
+            dept_val = str(dept_val_raw).strip().lower() if pd.notna(dept_val_raw) else ""
+            
+            if is_driver:
+                smart_driver_fixes.append({
                     'Employee ID': emp_ref,
-                    'Issue': 'Blank FLSA & Pay Type (Driver Position)',
-                    'Suggestion': 'Auto-fix to Non-Exempt / Hourly'
+                    'Position': job_val or '(Blank)',
+                    'Dept': dept_val or '(Blank)',
+                    'Issue': 'Blank FLSA (Driver Position)',
+                    'Suggestion': 'Auto-fix to Non-Exempt'
+                })
+            elif "driver" in dept_val:
+                smart_driver_fixes.append({
+                    'Employee ID': emp_ref,
+                    'Position': '(Blank)',
+                    'Dept': dept_val,
+                    'Issue': 'Blank Position & FLSA (Driver Dept)',
+                    'Suggestion': 'Auto-fill Position & set Non-Exempt'
                 })
             else:
                 flsa_blanks.append({
@@ -861,7 +876,8 @@ def validate_source_data(df_source, resolved_field_map):
         'anomalies': pd.DataFrame(anomalies),
         'inactive_statuses': pd.DataFrame(inactive_statuses),
         'position_blanks': pd.DataFrame(position_blanks),
-        'dol_status_blanks': pd.DataFrame(dol_status_blanks)
+        'dol_status_blanks': pd.DataFrame(dol_status_blanks),
+        'smart_driver_fixes': pd.DataFrame(smart_driver_fixes)
     }
 
 def generate_uzio_template(df_source, vendor_field_map, fix_options=None):

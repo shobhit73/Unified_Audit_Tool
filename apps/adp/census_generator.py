@@ -122,6 +122,7 @@ def render_auto_fix_options(key_prefix):
         fix_flsa = st.checkbox("Enforce FLSA/Pay Type alignment (e.g. Salaried = Exempt)", value=False, key=f"{key_prefix}_fix_flsa")
         fix_emails = st.checkbox("Use Personal Email as fallback for missing Work Email", value=False, key=f"{key_prefix}_fix_emails")
         fix_job_title = st.checkbox("Auto-Fill blank Job Titles using Department Description", value=False, key=f"{key_prefix}_fix_jt")
+        fix_driver_smart = st.checkbox("Enable Smart Driver Correction (Dept/Job -> FLSA)", value=False, key=f"{key_prefix}_fix_driver_smart", help="If FLSA is blank and Position (or Department) is 'Driver', this automatically sets FLSA to Non-Exempt.")
         fix_license = st.checkbox("Strict License Validation (Clear dates if number missing)", value=False, key=f"{key_prefix}_fix_license")
     with col_fix2:
         fix_status = st.checkbox("Auto-Map Employment Status (e.g. Inactive -> Terminated)", value=False, key=f"{key_prefix}_fix_status")
@@ -147,7 +148,8 @@ def render_auto_fix_options(key_prefix):
         'fix_dol_status': fix_dol_status,
         'fix_std_hours': fix_std_hours,
         'rename_std_hours': rename_std_hours,
-        'fix_zip': fix_zip
+        'fix_zip': fix_zip,
+        'fix_driver_smart': fix_driver_smart
     }
 
 def get_manager_info(df_adp, resolved_field_map):
@@ -233,6 +235,7 @@ def render_census_sanity_check():
     intern_corrections = validation['intern_corrections']
     email_fallbacks = validation['email_fallbacks']
     anomalies = validation.get('anomalies', pd.DataFrame())
+    smart_driver_fixes = validation.get('smart_driver_fixes', pd.DataFrame())
 
     has_soft_warnings = not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty or not anomalies.empty
     if has_soft_warnings:
@@ -241,6 +244,7 @@ def render_census_sanity_check():
             if not flsa_corrections.empty: st.markdown(f"- ℹ️ **FLSA Mismatches:** {len(flsa_corrections)} employee(s).")
             if not flsa_blanks.empty: st.markdown(f"- ⚠️ **Blank FLSA:** {len(flsa_blanks)} employee(s).")
             if not anomalies.empty: st.markdown(f"- ⚠️ **FLSA Anomalies:** {len(anomalies)} employee(s).")
+            if not smart_driver_fixes.empty: st.markdown(f"- 🚛 **Smart Driver Fixes:** {len(smart_driver_fixes)} employee(s) can be auto-corrected.")
             if not intern_corrections.empty: st.markdown(f"- ⚠️ **Intern Codes:** {len(intern_corrections)} employee(s).")
 
     if not hard_errors.empty:
@@ -267,12 +271,25 @@ def render_census_sanity_check():
                 mask_blank = df_download[c_dol].isna() | (df_download[c_dol].astype(str).str.strip().str.lower() == "nan") | (df_download[c_dol].astype(str).str.strip() == "")
                 df_download.loc[mask_blank, c_dol] = "Full Time"
 
-        if fix_options.get('fix_job_title'):
+                df_download.loc[mask_jt, c_jt] = df_download.loc[mask_jt, c_dept]
+
+        if fix_options.get('fix_driver_smart'):
             c_jt = resolved_field_map.get('Job Title')
             c_dept = resolved_field_map.get('Department')
-            if c_jt and c_dept and c_jt in df_download.columns and c_dept in df_download.columns:
-                mask_jt = df_download[c_jt].isna() | (df_download[c_jt].astype(str).str.strip().str.lower() == "nan") | (df_download[c_jt].astype(str).str.strip() == "")
-                df_download.loc[mask_jt, c_jt] = df_download.loc[mask_jt, c_dept]
+            c_flsa = resolved_field_map.get('FLSA Classification')
+            if c_jt and c_dept and c_flsa and c_jt in df_download.columns and c_dept in df_download.columns and c_flsa in df_download.columns:
+                # 1. If Job is blank, check Dept for 'driver'
+                mask_jt_blank = df_download[c_jt].isna() | (df_download[c_jt].astype(str).str.strip().str.lower() == "nan") | (df_download[c_jt].astype(str).str.strip() == "")
+                mask_dept_driver = df_download[c_dept].astype(str).str.lower().str.contains("driver", na=False)
+                
+                # Auto-fill Job to Dept if it's a driver dept and job is blank
+                df_download.loc[mask_jt_blank & mask_dept_driver, c_jt] = df_download.loc[mask_jt_blank & mask_dept_driver, c_dept]
+                
+                # 2. Now check if Job is Driver and FLSA is blank
+                mask_job_driver = df_download[c_jt].astype(str).str.lower().str.contains("driver", na=False)
+                mask_flsa_blank = df_download[c_flsa].isna() | (df_download[c_flsa].astype(str).str.strip().str.lower() == "nan") | (df_download[c_flsa].astype(str).str.strip() == "")
+                
+                df_download.loc[mask_job_driver & mask_flsa_blank, c_flsa] = "Non-Exempt"
 
         if fix_options.get('fix_std_hours'):
             c_sh = resolved_field_map.get('Working Hours')

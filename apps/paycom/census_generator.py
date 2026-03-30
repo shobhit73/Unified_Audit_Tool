@@ -194,7 +194,12 @@ def render_census_sanity_check():
     if has_managers and top_manager_id:
         name_disp = f" ({top_manager_name})" if top_manager_name else ""
         st.info(f"**Top Manager Detected:** Employee **{top_manager_id}**{name_disp}")
-        sort_by_manager = st.checkbox("Sort all reporting managers to the top of download file", value=True, key="pc_sanity_sort_mgr")
+        sort_by_manager = st.checkbox(
+            "Sort all reporting managers to the top of download file", 
+            value=True, 
+            key="pc_sanity_sort_mgr",
+            help="This feature automatically identifies managers (those with reportees) and clusters them at the top of your exported file, sorted by their total headcount. High-level leadership with the most reportees will appear first."
+        )
 
     fix_options = render_auto_fix_options("pc_sanity")
     
@@ -310,6 +315,26 @@ def render_census_sanity_check():
         ]
         date_cols = [c for c in date_cols if c is not None]
         df_download = format_datetime_strings(df_download, date_cols)
+
+        if sort_by_manager and col_sup_code and col_sup_code in df_download.columns:
+            emp_id_col = resolved_field_map.get('Employee ID')
+            if emp_id_col and emp_id_col in df_download.columns:
+                # Count reportees for each manager ID
+                sup_counts = df_download[df_download[col_sup_code].notna()][col_sup_code].value_counts().to_dict()
+                
+                # 1. Primary Sort Key: Reportee Count (Managers with most reportees first)
+                df_download['__mgr_count'] = df_download[emp_id_col].astype(str).str.strip().map(lambda x: sup_counts.get(x, 0))
+                
+                # 2. Secondary Sort Key: Manager's ID (to keep reportees under their specific manager)
+                # We want the manager to be at the top of their group, followed by reportees.
+                # So we map each employee to THEIR supervisor's count.
+                df_download['__group_count'] = df_download[col_sup_code].astype(str).str.strip().map(lambda x: sup_counts.get(x, 0))
+                
+                # Sort: 
+                # Highest Manager Count -> Descending
+                # Group Count -> Descending (to keep reportees near their high-count managers)
+                df_download = df_download.sort_values(by=['__mgr_count', '__group_count'], ascending=[False, False])
+                df_download = df_download.drop(columns=['__mgr_count', '__group_count'])
 
         # Add CRITICAL_WARNINGS column if errors exist
         if not hard_errors.empty:

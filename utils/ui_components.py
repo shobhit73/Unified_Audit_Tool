@@ -65,7 +65,6 @@ def inject_premium_styles():
             color: #050e39 !important;
             margin: 0 !important;
         }
-        </style>
 
         /* Pill Badges */
         .pill-error {

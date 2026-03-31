@@ -323,7 +323,8 @@ def render_census_sanity_check():
                             for issue, ids in sorted(items_dict.items()):
                                 id_str = ", ".join(ids[:3])
                                 if len(ids) > 3: id_str += f" (+{len(ids)-3} more)"
-                                st.markdown(f"- {issue} \n  `IDs: {id_str}`")
+                                # Highlight the issue name
+                                st.markdown(f"- **{issue}** \n  `IDs: {id_str}`")
                         else:
                             st.markdown("_None_")
 
@@ -336,26 +337,6 @@ def render_census_sanity_check():
                         render_actionable_list("Date & Status", legend['Date & Status Logic'])
                     with lcol3:
                         render_actionable_list("Formatting", legend['Contact Formatting'])
-                
-                def render_actionable_list(title, items_dict):
-                    st.markdown(f"**{title}**")
-                    if items_dict:
-                        for issue, ids in sorted(items_dict.items()):
-                            id_str = ", ".join(ids[:3])
-                            if len(ids) > 3: id_str += f" (+{len(ids)-3} more)"
-                            st.markdown(f"- {issue} \n  `IDs: {id_str}`")
-                    else:
-                        st.markdown("_None_")
-
-                with lcol1:
-                    render_actionable_list("Field Integrity", legend['Missing/Duplicate Info'])
-                    if zip_count > 0:
-                        st.info(f"ℹ️ {zip_count} Zip Code issues are hidden from this view but included in the download.")
-                        
-                with lcol2:
-                    render_actionable_list("Date & Status", legend['Date & Status Logic'])
-                with lcol3:
-                    render_actionable_list("Formatting", legend['Contact Formatting'])
                     
                 st.markdown("<br>", unsafe_allow_html=True)
                 

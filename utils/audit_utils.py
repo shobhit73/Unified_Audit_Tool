@@ -627,7 +627,7 @@ def validate_source_data(df_source, resolved_field_map):
         if type_col and type_col in df_source.columns:
             val = row.get(type_col)
             if pd.isna(val) or str(val).strip() == "":
-                missing.append("Employment Type (DOL Status)")
+                missing.append("Employment Type (blank)")
                 dol_status_blanks.append({
                     'Employee ID': emp_ref,
                     'Current DOL Status': '(Blank)',
@@ -696,13 +696,13 @@ def validate_source_data(df_source, resolved_field_map):
                 })
         
         if is_pay_type_blank and not (is_driver and is_flsa_blank):
-            missing.append("Pay Type")
+            missing.append("Pay Type (blank)")
                 
         # 4b. Blank Work Location
         if location_col and location_col in df_source.columns:
             val = row.get(location_col)
             if pd.isna(val) or str(val).strip() == "":
-                missing.append("Work Location")
+                missing.append("Work Location (blank)")
         
         # 5. Invalid Zip Code (must be 5 digits)
         if zip_col and zip_col in df_source.columns:

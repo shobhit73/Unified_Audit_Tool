@@ -7,7 +7,7 @@ def inject_premium_styles():
         @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@200;400;700;800&family=Inter:wght@300;400;600&display=swap');
 
         /* Typography: Apply to content but NOT to system icons/expander-arrows */
-        p, li, label, .stMarkdown, .stTable, .stDataFrame {
+        .stMarkdown p, .stMarkdown li, .stMarkdown label, .stTable, .stDataFrame {
             font-family: 'Inter', sans-serif !important;
             color: #1b1c1c !important;
         }
@@ -37,15 +37,19 @@ def inject_premium_styles():
         /* Glossy Primary Button - High Contrast Fix */
         div.stButton > button {
             background: linear-gradient(135deg, #050e39 0%, #1c244e 100%) !important;
-            color: #ffffff !important;
             border: none !important;
             border-radius: 8px !important;
             padding: 12px 32px !important;
-            font-weight: 700 !important;
-            font-family: 'Manrope', sans-serif !important;
-            text-shadow: 0 1px 2px rgba(0,0,0,0.2);
             transition: all 0.3s ease !important;
             box-shadow: 0 4px 12px rgba(5, 14, 57, 0.2) !important;
+        }
+        
+        /* Force White Text on ALL button children (p, span, labels) */
+        div.stButton > button * {
+            color: #ffffff !important;
+            font-weight: 700 !important;
+            font-family: 'Manrope', sans-serif !important;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.2) !important;
         }
 
         /* Refined Expander (FIX: Don't break the SVG icons) */

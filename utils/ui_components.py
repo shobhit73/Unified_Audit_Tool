@@ -114,27 +114,23 @@ def action_hub_container(type='error'):
     return st.container() # In Streamlit, styling full containers requires CSS injection based on nesting or IDs, but for this MVP we'll use markdown blocks inside.
 
 def render_finding_card(title, data_dict, type='error'):
-    """Renders a high-fidelity card for audit findings."""
+    """Renders a high-fidelity card for audit findings (minified for Streamlit compatibility)."""
     bg_color = "#fff5f5" if type == 'error' else "#fffaf3"
     border_color = "#ba1a1a" if type == 'error' else "#e8881f"
     text_color = "#93000a" if type == 'error' else "#673700"
-    pill_class = 'pill-error' if type == 'error' else 'pill-warning'
     
-    html = f"""
-    <div style="background: {bg_color}; border-left: 5px solid {border_color}; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <h5 style="color: {text_color} !important; border: none !important; padding: 0 !important; margin: 0 !important;">{title}</h5>
-        </div>
-        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 12px;">
-    """
+    # We build a single-line minified HTML string to avoid Streamlit markdown parsing issues
+    html = f'<div style="background: {bg_color}; border-left: 5px solid {border_color}; border-radius: 8px; padding: 16px; margin-bottom: 16px;">'
+    html += f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">'
+    html += f'<h5 style="color: {text_color}; border: none; padding: 0; margin: 0;">{title}</h5>'
+    html += '</div>'
+    html += '<div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 12px;">'
     
     for label, value in data_dict.items():
-        html += f"""
-        <div>
-            <p style="font-size: 0.75rem; color: #46464f; margin: 0;">{label}</p>
-            <p style="font-size: 1rem; font-weight: 600; color: {text_color}; margin: 0;">{value}</p>
-        </div>
-        """
+        html += '<div>'
+        html += f'<p style="font-size: 0.75rem; color: #46464f; margin: 0;">{label}</p>'
+        html += f'<p style="font-size: 1rem; font-weight: 600; color: {text_color}; margin: 0;">{value}</p>'
+        html += '</div>'
         
-    html += "</div></div>"
+    html += '</div></div>'
     st.markdown(html, unsafe_allow_html=True)

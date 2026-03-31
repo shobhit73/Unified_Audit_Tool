@@ -194,6 +194,21 @@ def render_census_sanity_check():
     df_adp, original_columns, norm_to_orig, resolved_field_map = preprocess_adp_file(adp_file)
     if df_adp is None: return
 
+    # --- PROVIDER MISMATCH DETECTION ---
+    critical_adp_cols = ['Employee ID', 'First Name', 'Last Name']
+    missing_critical = [c for c in critical_adp_cols if not resolved_field_map.get(c)]
+    
+    if len(missing_critical) > 1:
+        st.error("### ⚠️ Mismatched File Detected")
+        st.markdown(f"""
+            <div class='action-hub-error'>
+                <p>It looks like you've uploaded a file that doesn't match the <b>ADP Census</b> format. 
+                This often happens if a Paycom export is uploaded here by mistake.</p>
+                <p><b>Recommendation:</b> Please switch to the <b>Paycom Hub</b> in the sidebar or upload a valid ADP Census Export.</p>
+            </div>
+        """, unsafe_allow_html=True)
+        return
+
     has_managers, top_manager_id, top_manager_name, col_sup_code = get_manager_info(df_adp, resolved_field_map)
     sort_by_manager = False
     if has_managers and top_manager_id:
@@ -213,14 +228,17 @@ def render_census_sanity_check():
     src_loc_col = resolved_field_map.get('Work Location')
     unique_locs = sorted([str(l).strip() for l in df_adp[src_loc_col].dropna().unique()]) if src_loc_col and src_loc_col in df_adp.columns else []
 
-    st.write("**Work Location Mapping**")
-    edited_locs = st.data_editor(
-        pd.DataFrame({"Source Work Location": unique_locs, "Mapped Uzio Work Location": [""]*len(unique_locs)}),
-        column_config={"Mapped Uzio Work Location": st.column_config.TextColumn("Enter Uzio Location", required=False)},
-        hide_index=True, use_container_width=True, key="adp_sanity_loc_editor"
-    )
-    
-    loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
+    loc_dict = {}
+    if unique_locs:
+        st.write("**Work Location Mapping**")
+        edited_locs = st.data_editor(
+            pd.DataFrame({"Source Work Location": unique_locs, "Mapped Uzio Work Location": [""]*len(unique_locs)}),
+            column_config={"Mapped Uzio Work Location": st.column_config.TextColumn("Enter Uzio Location", required=False)},
+            hide_index=True, use_container_width=True, key="adp_sanity_loc_editor"
+        )
+        loc_dict = dict(zip(edited_locs['Source Work Location'], edited_locs['Mapped Uzio Work Location']))
+    else:
+        st.info("💡 No unique work locations detected in this file for mapping.")
 
     st.markdown("---")
     

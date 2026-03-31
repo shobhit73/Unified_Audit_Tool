@@ -183,10 +183,10 @@ def get_manager_info(df_adp, resolved_field_map):
 
 def render_census_sanity_check():
     inject_premium_styles()
-    st.markdown("<div class='premium-card'>", unsafe_html=True)
+    st.markdown("<div class='premium-card'>", unsafe_allow_html=True)
     st.title("📑 ADP Census Sanity Check")
     st.markdown("Ensure your ADP Census Export is audit-ready for Uzio benefits. This tool identifies critical data gaps, corrects formatting issues, and performs automated logic checks.")
-    st.markdown("</div>", unsafe_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     adp_file = st.file_uploader("Upload ADP Census Export (.xlsx, .csv)", type=["xlsx", "csv"], key="adp_sanity_upload")
     if not adp_file: return

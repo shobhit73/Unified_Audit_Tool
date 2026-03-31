@@ -33,6 +33,19 @@ The entire application is driven by a single `app.py` router that dispatches to 
 
 ---
 
+## 💎 UI & Actionability Constitution
+
+This project follows a high-fidelity **"Editorial Ledger"** design system. To maintain layout stability and prevent UI crashes, all future developers and AI agents **MUST** adhere to the rules defined in:
+
+- [**frontend.md**](file:///c:/Users/shobhit.sharma/Downloads/Deduction%20Tool/frontend.md) — *Mandatory Reading for UI Changes*
+
+### Key Actionability Features:
+- **Right Scroll (Vertical Limits)**: All high-volume audit results are contained in fixed-height scrollable windows to prevent "infinite scroll" and keep the page reachable.
+- **Consolidated warnings**: Duplicate issues (e.g., multiple termination date errors) are automatically grouped into single entries with associated Employee IDs using Regex sanitization.
+- **ID-Mapped Findings**: No error is shown without its corresponding Employee IDs, making results immediately actionable in the source system.
+
+---
+
 ## Architecture
 
 ```mermaid

@@ -239,35 +239,67 @@ def render_census_sanity_check():
     dol_status_blanks = validation.get('dol_status_blanks', pd.DataFrame())
     smart_driver_fixes = validation.get('smart_driver_fixes', pd.DataFrame())
 
-    # Show soft warnings first
-    has_soft_warnings = not position_blanks.empty or not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty or not anomalies.empty or not smart_driver_fixes.empty
-    if has_soft_warnings:
-        with st.expander("System Minor Warnings & Mapping Suggestions", expanded=False):
-            st.info("💡 **Note:** The following suggestions can be automatically applied by checking the corresponding boxes above in the **Auto-Correction Options** section.")
-            if not position_blanks.empty:
-                st.markdown(f"- ℹ️ **Position Auto-Fill:** {len(position_blanks)} employee(s) have a blank Position. 'Department Description' can be used as a fallback.")
-            if not flsa_corrections.empty:
-                st.markdown(f"- ℹ️ **FLSA Mismatches:** {len(flsa_corrections)} employee(s) have mismatched FLSA classifications vs Pay Type.")
-            if not flsa_blanks.empty:
-                st.markdown(f"- ⚠️ **Blank FLSA:** {len(flsa_blanks)} employee(s) have no FLSA status.")
-            if not smart_driver_fixes.empty:
-                st.markdown(f"- 🚛 **Smart Driver Fixes:** {len(smart_driver_fixes)} employee(s) can be auto-corrected (Blank FLSA + Driver Position/Dept).")
-                st.markdown(f"- ⚠️ **Blank FLSA Classification:** {len(flsa_blanks)} employee(s) have a Pay Type set but FLSA Classification is blank.")
-            if not anomalies.empty:
-                st.markdown(f"- ⚠️ **FLSA Anomalies:** {len(anomalies)} employee(s) have Hourly Exempt or Salaried Non-Exempt mismatches.")
-            if not intern_corrections.empty:
-                st.markdown(f"- ⚠️ **Intern → Part Time:** {len(intern_corrections)} employee(s) have 'Intern' as Worker Category.")
+    # --- NEW DASHBOARD UI ---
+    st.markdown("### 🔍 Validation Dashboard")
+    
+    # 1. Critical Errors Summary
+    error_summary = validation.get('error_summary', {'Missing Info': [], 'Date & Status Logic': [], 'Contact Formatting': []})
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        count = len(error_summary['Missing Info'])
+        st.metric("Missing Info", count, delta="- Errors" if count > 0 else None, delta_color="inverse")
+        if count > 0:
+            with st.expander("Show IDs", expanded=False):
+                st.write(", ".join(error_summary['Missing Info'][:50]) + ("..." if count > 50 else ""))
+                
+    with col2:
+        count = len(error_summary['Date & Status Logic'])
+        st.metric("Date & Status Logic", count, delta="- Errors" if count > 0 else None, delta_color="inverse")
+        if count > 0:
+            with st.expander("Show IDs", expanded=False):
+                st.write(", ".join(error_summary['Date & Status Logic'][:50]) + ("..." if count > 50 else ""))
 
-    # Show hard errors
+    with col3:
+        count = len(error_summary['Contact Formatting'])
+        st.metric("Contact Formatting", count, delta="- Errors" if count > 0 else None, delta_color="inverse")
+        if count > 0:
+            with st.expander("Show IDs", expanded=False):
+                st.write(", ".join(error_summary['Contact Formatting'][:50]) + ("..." if count > 50 else ""))
+
+    # 2. Detailed Table for Hard Errors
     if not hard_errors.empty:
-        st.error(f"**⛔ {len(hard_errors)} Critical Error(s) Found in Source Data!**")
-        with st.expander(f"View All {len(hard_errors)} Error Details", expanded=False):
+        st.error(f"**⛔ {len(hard_errors)} Critical Issue(s) found across {len(hard_errors['Employee ID'].unique())} employees.**")
+        with st.expander("View Full Detail Table", expanded=False):
             st.dataframe(hard_errors, hide_index=True, use_container_width=True)
     else:
-        st.success("✅ Source data passed all critical sanity checks!")
+        st.success("✅ Source data passed all critical integrity checks!")
 
-    if st.button("Download Corrected Source"):
+    # 3. System Minor Warnings & Mapping Suggestions
+    has_soft_warnings = not position_blanks.empty or not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty or not anomalies.empty or not smart_driver_fixes.empty
+    if has_soft_warnings:
+        with st.expander("💡 System Minor Warnings & Mapping Suggestions", expanded=False):
+            st.info("The following suggestions can be automatically applied using the checkboxes at the top.")
+            wcol1, wcol2 = st.columns(2)
+            with wcol1:
+                st.markdown("**FLSA & Pay Rules**")
+                if not flsa_corrections.empty: st.markdown(f"- ℹ️ **FLSA Mismatches:** {len(flsa_corrections)} employee(s).")
+                if not flsa_blanks.empty: st.markdown(f"- ⚠️ **Blank FLSA:** {len(flsa_blanks)} employee(s).")
+                if not anomalies.empty: st.markdown(f"- ⚠️ **FLSA Anomalies:** {len(anomalies)} employee(s).")
+                if not smart_driver_fixes.empty: st.markdown(f"- 🚛 **Smart Driver Fixes:** {len(smart_driver_fixes)} employee(s).")
+            with wcol2:
+                st.markdown("**Employment & Contact**")
+                if not intern_corrections.empty: st.markdown(f"- ⚠️ **Intern Codes:** {len(intern_corrections)} employee(s) to be mapped to Part Time.")
+                if not email_fallbacks.empty: st.markdown(f"- 📧 **Email Fallbacks:** {len(email_fallbacks)} employee(s) using personal email.")
+                if not position_blanks.empty: st.markdown(f"- ℹ️ **Position Auto-Fill:** {len(position_blanks)} employee(s) have a blank Position.")
+
+    if st.button("Download Corrected Source", type="primary"):
         df_download = df_paycom.copy()
+
+        # --- Inject CRITICAL_WARNINGS for audit ---
+        issue_map = hard_errors.groupby('Employee ID')['Issue'].apply(lambda issues: "; ".join(issues)).to_dict()
+        df_download['CRITICAL_WARNINGS'] = df_download[resolved_field_map.get('Employee ID')].astype(str).str.strip().map(issue_map).fillna("")
+        
         audit_trail = []
         emp_id_col = resolved_field_map.get('Employee ID')
         emp_name_col = next((c for c in df_download.columns if 'name' in str(c).lower()), None)

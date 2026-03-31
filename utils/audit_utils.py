@@ -580,13 +580,29 @@ def validate_source_data(df_source, resolved_field_map):
             if pd.isna(ssn_val) or str(ssn_val).strip() == "":
                 missing.append("SSN (blank)")
 
-        # 1. Blank Employment Status
+        # 1. Blank Employment Status & Broad Status Checks
         if status_col and status_col in df_source.columns:
-            val = str(row.get(status_col)).strip() if pd.notna(row.get(status_col)) else ""
-            if not val:
+            raw_status = row.get(status_col)
+            status_val = str(raw_status).strip() if pd.notna(raw_status) else ""
+            status_lower = status_val.lower()
+
+            if not status_val:
                 missing.append("Employment Status (blank)")
-            elif val in ['A04L', 'A08V'] or any(sub in val.upper() for sub in ['A04L', 'A08V']):
-                missing.append(f"Invalid Status ({val})")
+            else:
+                # A. Check for non-standard statuses (neither Active nor Terminated)
+                # We allow some common variants like 'A', 'T', 'Active', 'Terminated', 'Inactive'
+                valid_bases = ['active', 'terminated', 'inactive', 'a', 't']
+                is_standard = any(base in status_lower for base in valid_bases)
+                
+                if not is_standard or status_lower in ['a04l', 'a08v']:
+                    missing.append(f"Non-standard Status ({status_val})")
+
+                # B. Logic Check: Terminated/Inactive but missing Termination Date
+                if any(term_base in status_lower for term_base in ['terminated', 'inactive', 't']):
+                    if term_date_col and term_date_col in df_source.columns:
+                        tdate = row.get(term_date_col)
+                        if pd.isna(tdate) or str(tdate).strip() == "" or str(tdate).lower() == "nan":
+                            missing.append("Terminated/Inactive but missing Termination Date")
         
         # 2. Blank Employment Type / DOL Status
         # Find DOL_Status column (it maps to Employment Type in Uzio)
@@ -742,8 +758,9 @@ def validate_source_data(df_source, resolved_field_map):
         emergency_cols = ['emergency_1_contact', 'emergency_1_relationship']
         for ec in emergency_cols:
             if ec in df_source.columns:
-                val = str(row.get(ec)).strip()
-                if pd.notna(row.get(ec)) and val and val.lower() != "nan":
+                ec_raw = row.get(ec)
+                val = str(ec_raw).strip()
+                if pd.notna(ec_raw) and val and val.lower() != "nan":
                     # Allow alphanumeric, spaces, hyphens, and apostrophes
                     if not re.match(r"^[A-Za-z0-9\s\-\']+$", val):
                         missing.append(f"Special characters in {ec} ('{val}')")
@@ -871,6 +888,31 @@ def validate_source_data(df_source, resolved_field_map):
                         'Status': 'Active (DOL_Status blank)'
                     })
     
+    # 13. Create detailed summary for UI Dashboard
+    error_summary = {
+        'Missing Info': [],
+        'Date & Status Logic': [],
+        'Contact Formatting': []
+    }
+    
+    for err in hard_errors:
+        issue = err['Issue']
+        eid = err['Employee ID']
+        name = err.get('Name', '')
+        ref = f"{eid} ({name})" if name else eid
+        
+        # Categorize
+        is_date_status = any(m in issue for m in ['predates date of hire', 'Terminated/Inactive but missing', 'Non-standard Status'])
+        is_contact = 'Special characters' in issue
+        
+        if is_date_status:
+            error_summary['Date & Status Logic'].append(ref)
+        elif is_contact:
+            error_summary['Contact Formatting'].append(ref)
+        else:
+            # Everything else is missing info or basic formatting (SSN, Job Title, Zip, etc)
+            error_summary['Missing Info'].append(ref)
+
     return {
         'hard_errors': pd.DataFrame(hard_errors),
         'flsa_corrections': pd.DataFrame(flsa_corrections),
@@ -883,7 +925,8 @@ def validate_source_data(df_source, resolved_field_map):
         'inactive_statuses': pd.DataFrame(inactive_statuses),
         'position_blanks': pd.DataFrame(position_blanks),
         'dol_status_blanks': pd.DataFrame(dol_status_blanks),
-        'smart_driver_fixes': pd.DataFrame(smart_driver_fixes)
+        'smart_driver_fixes': pd.DataFrame(smart_driver_fixes),
+        'error_summary': error_summary
     }
 
 def generate_uzio_template(df_source, vendor_field_map, fix_options=None):

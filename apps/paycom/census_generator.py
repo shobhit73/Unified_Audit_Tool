@@ -262,9 +262,8 @@ def render_census_sanity_check():
         with st.expander("🛠️ Census Integrity & Mapping Action Center", expanded=not hard_errors.empty):
             # 1. Critical Hard Errors (If Any)
             if not hard_errors.empty:
-                render_premium_header("⛔ Critical Data Issues", "These issues must be addressed in the source system or through auto-fixes.")
-                
-                # Categorized breakdown for the card (Actionable IDs)
+                # Categorized breakdown for the card (Actionable IDs with Consolidation & Scroll)
+                import re
                 from collections import defaultdict
                 legend = {
                     'Missing/Duplicate Info': defaultdict(list), 
@@ -282,16 +281,27 @@ def render_census_sanity_check():
                             zip_count += 1
                             continue
                             
+                        # --- CONSOLIDATION LOGIC (Sanitize specific values for grouping) ---
+                        clean_issue = p
+                        # 1. Group Date Mismatches
+                        if "predates date of hire" in p:
+                            clean_issue = "Termination date predates Hire date"
+                        # 2. Group Special Characters
+                        elif "Special characters in" in p:
+                            match = re.search(r"Special characters in (.*?)(?:\s|$)", p)
+                            if match:
+                                clean_issue = f"Special characters in {match.group(1).strip()}"
+                        
                         # Categorization Matcher
-                        if any(m in p for m in ['predates', 'Terminated', 'Non-standard', 'Annual Salary']): 
+                        if any(m in clean_issue for m in ['Termination', 'Hire', 'Terminated', 'Non-standard', 'Annual Salary']): 
                             cat = 'Date & Status Logic'
-                        elif 'Special characters' in p: 
+                        elif 'Special characters' in clean_issue: 
                             cat = 'Contact Formatting'
                         else: 
                             cat = 'Missing/Duplicate Info'
                         
-                        if eid not in legend[cat][p]:
-                            legend[cat][p].append(eid)
+                        if eid not in legend[cat][clean_issue]:
+                            legend[cat][clean_issue].append(eid)
                 
                 render_finding_card(
                     "Integrity Audit Results", 
@@ -303,7 +313,29 @@ def render_census_sanity_check():
                     type='error'
                 )
 
-                lcol1, lcol2, lcol3 = st.columns(3)
+                # --- SCROLLABLE ACTION CENTER ---
+                with st.container(height=400, border=True):
+                    lcol1, lcol2, lcol3 = st.columns(3)
+                    
+                    def render_actionable_list(title, items_dict):
+                        st.markdown(f"**{title}**")
+                        if items_dict:
+                            for issue, ids in sorted(items_dict.items()):
+                                id_str = ", ".join(ids[:3])
+                                if len(ids) > 3: id_str += f" (+{len(ids)-3} more)"
+                                st.markdown(f"- {issue} \n  `IDs: {id_str}`")
+                        else:
+                            st.markdown("_None_")
+
+                    with lcol1:
+                        render_actionable_list("Field Integrity", legend['Missing/Duplicate Info'])
+                        if zip_count > 0:
+                            st.info(f"ℹ️ {zip_count} Zip Code issues are hidden from this view but included in the download.")
+                            
+                    with lcol2:
+                        render_actionable_list("Date & Status", legend['Date & Status Logic'])
+                    with lcol3:
+                        render_actionable_list("Formatting", legend['Contact Formatting'])
                 
                 def render_actionable_list(title, items_dict):
                     st.markdown(f"**{title}**")

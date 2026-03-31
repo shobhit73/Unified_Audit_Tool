@@ -418,20 +418,11 @@ def render_census_sanity_check():
                 df_download = df_download.sort_values(by=['__mgr_count', '__group_count'], ascending=[False, False])
                 df_download = df_download.drop(columns=['__mgr_count', '__group_count'])
 
-        # --- New: Apply Strict Column Sequencing ---
-        priority_cols = [
-            ('Employee ID', 'Employee_Code'),
-            ('First Name', 'Legal_Firstname'),
-            ('Last Name', 'Legal_Lastname'),
-            ('Reports To ID', 'Supervisor_Primary_Code'),
-            ('Employment Type', 'DOL_Status'),
-            ('Pay Type', 'Pay_Type'),
-            ('Work Location', 'Work_Location'),
-            ('Workers Comp Code', 'Workers_Comp_Code'),
-            ('FLSA Classification', 'Exempt_Status'),
-            ('Employment Status', 'Employee_Status'),
-            ('Job Title', 'Position'),
-            ('Department', 'Department_Desc')
+        # --- New: Apply Strict Column Sequencing (Original Headers preserved) ---
+        priority_keys = [
+            'Employee ID', 'First Name', 'Last Name', 'Reports To ID',
+            'Employment Type', 'Pay Type', 'Work Location', 'Workers Comp Code',
+            'FLSA Classification', 'Employment Status', 'Job Title', 'Department'
         ]
         
         final_col_order = []
@@ -442,20 +433,26 @@ def render_census_sanity_check():
         if 'CRITICAL_WARNINGS' in df_download.columns:
             final_col_order.append('CRITICAL_WARNINGS')
             
-        # 1. Add Priority Columns in exact order
-        for norm_key, target_name in priority_cols:
-            orig_col = resolved_field_map.get(norm_key)
-            if orig_col and orig_col in df_download.columns:
-                final_col_order.append(orig_col)
-                renaming_dict[orig_col] = target_name
-                used_orig_cols.add(orig_col)
+        # 1. Add Priority Columns in exact order (Using original labels)
+        for norm_key in priority_keys:
+            orig_col_norm = resolved_field_map.get(norm_key)
+            if orig_col_norm and orig_col_norm in df_download.columns:
+                final_col_order.append(orig_col_norm)
+                # Restore EXACT original header from source
+                original_label = norm_to_orig.get(orig_col_norm, orig_col_norm)
+                renaming_dict[orig_col_norm] = original_label
+                used_orig_cols.add(orig_col_norm)
         
         # 2. Append all other original columns that weren't in the priority list
         for col in df_download.columns:
             if col not in used_orig_cols and col != 'CRITICAL_WARNINGS':
                 final_col_order.append(col)
+                # Ensure even non-priority columns map back to their original source names
+                original_label = norm_to_orig.get(col, col)
+                if original_label != col:
+                    renaming_dict[col] = original_label
 
-        # Reorder and Rename
+        # Reorder and Rename back to source headers
         df_download = df_download[final_col_order]
         df_download = df_download.rename(columns=renaming_dict)
 

@@ -582,9 +582,11 @@ def validate_source_data(df_source, resolved_field_map):
 
         # 1. Blank Employment Status
         if status_col and status_col in df_source.columns:
-            val = row.get(status_col)
-            if pd.isna(val) or str(val).strip() == "":
-                missing.append("Employment Status")
+            val = str(row.get(status_col)).strip() if pd.notna(row.get(status_col)) else ""
+            if not val:
+                missing.append("Employment Status (blank)")
+            elif val in ['A04L', 'A08V'] or any(sub in val.upper() for sub in ['A04L', 'A08V']):
+                missing.append(f"Invalid Status ({val})")
         
         # 2. Blank Employment Type / DOL Status
         # Find DOL_Status column (it maps to Employment Type in Uzio)
@@ -717,19 +719,13 @@ def validate_source_data(df_source, resolved_field_map):
                 if len(sv) > 2:
                     missing.append(f"State ('{sv}' is full name, need 2-char abbreviation)")
                     
-        # 9. Termination Date vs Hire Date validity (only if Terminated/Inactive)
+        # 9. Termination Date vs Hire Date validity
         if hire_date_col and hire_date_col in df_source.columns and term_date_col and term_date_col in df_source.columns:
             hire_val = row.get(hire_date_col)
             term_val = row.get(term_date_col)
             
-            # Check if Employee Status is actually terminated or inactive
-            is_terminated = False
-            if status_col and status_col in df_source.columns:
-                emp_status_val = str(row.get(status_col)).strip().lower()
-                if "term" in emp_status_val or "inactive" in emp_status_val:
-                    is_terminated = True
-            
-            if is_terminated and pd.notna(hire_val) and str(hire_val).strip() != "" and pd.notna(term_val) and str(term_val).strip() != "":
+            # Check if both dates are present (if either exists, both must be valid relative to each other)
+            if pd.notna(hire_val) and str(hire_val).strip() != "" and pd.notna(term_val) and str(term_val).strip() != "":
                 # Attempt to parse both dates
                 try:
                     # Using pd.to_datetime with errors='coerce' to safely parse strings to datetimes
@@ -742,6 +738,16 @@ def validate_source_data(df_source, resolved_field_map):
                 except Exception:
                     pass # Ignore if dates are malformed, we just won't flag this specific error
         
+        # --- Special Character Check (Emergency Contact & Relationship) ---
+        emergency_cols = ['emergency_1_contact', 'emergency_1_relationship']
+        for ec in emergency_cols:
+            if ec in df_source.columns:
+                val = str(row.get(ec)).strip()
+                if pd.notna(row.get(ec)) and val and val.lower() != "nan":
+                    # Allow alphanumeric, spaces, hyphens, and apostrophes
+                    if not re.match(r"^[A-Za-z0-9\s\-\']+$", val):
+                        missing.append(f"Special characters in {ec} ('{val}')")
+
         if missing:
             hard_errors.append({
                 'Employee ID': emp_ref,

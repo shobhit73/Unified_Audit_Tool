@@ -239,81 +239,49 @@ def render_census_sanity_check():
     dol_status_blanks = validation.get('dol_status_blanks', pd.DataFrame())
     smart_driver_fixes = validation.get('smart_driver_fixes', pd.DataFrame())
 
-    # --- NEW DASHBOARD UI ---
-    st.markdown("### 🔍 Validation Dashboard")
+    # --- UNIFIED VALIDATION & MAPPING CENTER ---
+    has_issues = not hard_errors.empty or not position_blanks.empty or not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty or not anomalies.empty or not smart_driver_fixes.empty
     
-    # 1. Critical Errors Summary
-    error_summary = validation.get('error_summary', {'Missing Info': [], 'Date & Status Logic': [], 'Contact Formatting': []})
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        count = len(error_summary.get('Missing Info', []))
-        st.metric("Missing/Duplicate Info", count, delta="- Errors" if count > 0 else None, delta_color="inverse")
-        if count > 0:
-            with st.expander("Show IDs", expanded=False):
-                st.write(", ".join(error_summary['Missing Info'][:50]) + ("..." if count > 50 else ""))
-                
-    with col2:
-        count = len(error_summary.get('Date & Status Logic', []))
-        st.metric("Date & Status Logic", count, delta="- Errors" if count > 0 else None, delta_color="inverse")
-        if count > 0:
-            with st.expander("Show IDs", expanded=False):
-                st.write(", ".join(error_summary['Date & Status Logic'][:50]) + ("..." if count > 50 else ""))
+    if has_issues:
+        with st.expander("🛠️ Census Integrity & Mapping Action Center", expanded=not hard_errors.empty):
+            # 1. Critical Hard Errors (If Any)
+            if not hard_errors.empty:
+                st.markdown("##### ⛔ Critical Data Issues (Must Fix)")
+                # Show the categorized legend
+                legend = {'Missing/Duplicate Info': set(), 'Date & Status Logic': set(), 'Contact Formatting': set()}
+                for _, err in hard_errors.iterrows():
+                    issue_text = str(err['Issue'])
+                    parts = [p.strip() for p in issue_text.split(",") if p.strip()]
+                    for p in parts:
+                        if any(m in p for m in ['predates', 'Terminated', 'Non-standard']): legend['Date & Status Logic'].add(p)
+                        elif 'Special characters' in p: legend['Contact Formatting'].add(p)
+                        else: legend['Missing/Duplicate Info'].add(p)
 
-    with col3:
-        count = len(error_summary.get('Contact Formatting', []))
-        st.metric("Contact Formatting", count, delta="- Errors" if count > 0 else None, delta_color="inverse")
-        if count > 0:
-            with st.expander("Show IDs", expanded=False):
-                st.write(", ".join(error_summary['Contact Formatting'][:50]) + ("..." if count > 50 else ""))
+                lcol1, lcol2, lcol3 = st.columns(3)
+                with lcol1:
+                    st.markdown("**Field Integrity**")
+                    if legend['Missing/Duplicate Info']:
+                        for itm in sorted(legend['Missing/Duplicate Info']): st.markdown(f"- {itm}")
+                    else: st.markdown("_None_")
+                with lcol2:
+                    st.markdown("**Date & Status**")
+                    if legend['Date & Status Logic']:
+                        for itm in sorted(legend['Date & Status Logic']): st.markdown(f"- {itm}")
+                    else: st.markdown("_None_")
+                with lcol3:
+                    st.markdown("**Formatting**")
+                    if legend['Contact Formatting']:
+                        for itm in sorted(legend['Contact Formatting']): st.markdown(f"- {itm}")
+                    else: st.markdown("_None_")
 
-    # --- NEW: ISSUE LEGEND (What's Wrong?) ---
-    if not hard_errors.empty:
-        # Group unique issue types by category
-        legend = {'Missing/Duplicate Info': set(), 'Date & Status Logic': set(), 'Contact Formatting': set()}
-        for _, err in hard_errors.iterrows():
-            issue_text = str(err['Issue'])
-            parts = [p.strip() for p in issue_text.split(",") if p.strip()]
-            for p in parts:
-                if any(m in p for m in ['predates', 'Terminated', 'Non-standard']):
-                    legend['Date & Status Logic'].add(p)
-                elif 'Special characters' in p:
-                    legend['Contact Formatting'].add(p)
-                else:
-                    legend['Missing/Duplicate Info'].add(p)
+                st.warning(f"**{len(hard_errors)} Critical Issue(s)** found across {len(hard_errors['Employee ID'].unique())} employees.")
+                with st.expander("🔍 Show Affected Employee IDs", expanded=False):
+                    st.dataframe(hard_errors, hide_index=True, use_container_width=True)
+                st.divider()
 
-        st.markdown("#### 💡 What exactly is wrong in this file?")
-        with st.container(border=True):
-            lcol1, lcol2, lcol3 = st.columns(3)
-            with lcol1:
-                st.markdown("**Missing/Duplicate Info**")
-                if legend['Missing/Duplicate Info']:
-                    for itm in sorted(legend['Missing/Duplicate Info']): st.markdown(f"- {itm}")
-                else: st.markdown("_None_")
-            with lcol2:
-                st.markdown("**Date & Status Logic**")
-                if legend['Date & Status Logic']:
-                    for itm in sorted(legend['Date & Status Logic']): st.markdown(f"- {itm}")
-                else: st.markdown("_None_")
-            with lcol3:
-                st.markdown("**Contact Formatting**")
-                if legend['Contact Formatting']:
-                    for itm in sorted(legend['Contact Formatting']): st.markdown(f"- {itm}")
-                else: st.markdown("_None_")
-
-    # 2. Detailed Table for Hard Errors
-    if not hard_errors.empty:
-        st.error(f"**⛔ {len(hard_errors)} Critical Issue(s) found across {len(hard_errors['Employee ID'].unique())} employees.**")
-        with st.expander("View Full Detail Table", expanded=False):
-            st.dataframe(hard_errors, hide_index=True, use_container_width=True)
-    else:
-        st.success("✅ Source data passed all critical integrity checks!")
-
-    # 3. System Minor Warnings & Mapping Suggestions
-    has_soft_warnings = not position_blanks.empty or not flsa_corrections.empty or not flsa_blanks.empty or not intern_corrections.empty or not email_fallbacks.empty or not anomalies.empty or not smart_driver_fixes.empty
-    if has_soft_warnings:
-        with st.expander("💡 System Minor Warnings & Mapping Suggestions", expanded=False):
-            st.info("The following suggestions can be automatically applied using the checkboxes at the top.")
+            # 2. Automated Mapping Suggestions
+            st.markdown("##### 💡 Automated Mapping Suggestions")
+            st.info("The following can be automatically applied using the checkboxes at the top.")
             wcol1, wcol2 = st.columns(2)
             with wcol1:
                 st.markdown("**FLSA & Pay Rules**")
@@ -326,6 +294,8 @@ def render_census_sanity_check():
                 if not intern_corrections.empty: st.markdown(f"- ⚠️ **Intern Codes:** {len(intern_corrections)} employee(s) to be mapped to Part Time.")
                 if not email_fallbacks.empty: st.markdown(f"- 📧 **Email Fallbacks:** {len(email_fallbacks)} employee(s) using personal email.")
                 if not position_blanks.empty: st.markdown(f"- ℹ️ **Position Auto-Fill:** {len(position_blanks)} employee(s) have a blank Position.")
+    else:
+        st.success("✅ Source data passed all integrity checks!")
 
     if st.button("Download Corrected Source", type="primary"):
         df_download = df_paycom.copy()

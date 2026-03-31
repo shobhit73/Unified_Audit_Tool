@@ -264,15 +264,34 @@ def render_census_sanity_check():
             if not hard_errors.empty:
                 render_premium_header("⛔ Critical Data Issues", "These issues must be addressed in the source system or through auto-fixes.")
                 
-                # Categorized breakdown for the card
-                legend = {'Missing/Duplicate Info': set(), 'Date & Status Logic': set(), 'Contact Formatting': set()}
+                # Categorized breakdown for the card (Actionable IDs)
+                from collections import defaultdict
+                legend = {
+                    'Missing/Duplicate Info': defaultdict(list), 
+                    'Date & Status Logic': defaultdict(list), 
+                    'Contact Formatting': defaultdict(list)
+                }
+                zip_count = 0
+                
                 for _, err in hard_errors.iterrows():
+                    eid = str(err['Employee ID'])
                     issue_text = str(err['Issue'])
                     parts = [p.strip() for p in issue_text.split(",") if p.strip()]
                     for p in parts:
-                        if any(m in p for m in ['predates', 'Terminated', 'Non-standard']): legend['Date & Status Logic'].add(p)
-                        elif 'Special characters' in p: legend['Contact Formatting'].add(p)
-                        else: legend['Missing/Duplicate Info'].add(p)
+                        if "Zip Code" in p:
+                            zip_count += 1
+                            continue
+                            
+                        # Categorization Matcher
+                        if any(m in p for m in ['predates', 'Terminated', 'Non-standard', 'Annual Salary']): 
+                            cat = 'Date & Status Logic'
+                        elif 'Special characters' in p: 
+                            cat = 'Contact Formatting'
+                        else: 
+                            cat = 'Missing/Duplicate Info'
+                        
+                        if eid not in legend[cat][p]:
+                            legend[cat][p].append(eid)
                 
                 render_finding_card(
                     "Integrity Audit Results", 
@@ -285,23 +304,29 @@ def render_census_sanity_check():
                 )
 
                 lcol1, lcol2, lcol3 = st.columns(3)
-                with lcol1:
-                    st.markdown("**Field Integrity**")
-                    if legend['Missing/Duplicate Info']:
-                        for itm in sorted(legend['Missing/Duplicate Info']): st.markdown(f"- {itm}")
-                    else: st.markdown("_None_")
-                with lcol2:
-                    st.markdown("**Date & Status**")
-                    if legend['Date & Status Logic']:
-                        for itm in sorted(legend['Date & Status Logic']): st.markdown(f"- {itm}")
-                    else: st.markdown("_None_")
-                with lcol3:
-                    st.markdown("**Formatting**")
-                    if legend['Contact Formatting']:
-                        for itm in sorted(legend['Contact Formatting']): st.markdown(f"- {itm}")
-                    else: st.markdown("_None_")
+                
+                def render_actionable_list(title, items_dict):
+                    st.markdown(f"**{title}**")
+                    if items_dict:
+                        for issue, ids in sorted(items_dict.items()):
+                            id_str = ", ".join(ids[:3])
+                            if len(ids) > 3: id_str += f" (+{len(ids)-3} more)"
+                            st.markdown(f"- {issue} \n  `IDs: {id_str}`")
+                    else:
+                        st.markdown("_None_")
 
-                st.warning(f"**{len(hard_errors)} Critical Issue(s)** found across {len(hard_errors['Employee ID'].unique())} employees.")
+                with lcol1:
+                    render_actionable_list("Field Integrity", legend['Missing/Duplicate Info'])
+                    if zip_count > 0:
+                        st.info(f"ℹ️ {zip_count} Zip Code issues are hidden from this view but included in the download.")
+                        
+                with lcol2:
+                    render_actionable_list("Date & Status", legend['Date & Status Logic'])
+                with lcol3:
+                    render_actionable_list("Formatting", legend['Contact Formatting'])
+                    
+                st.markdown("<br>", unsafe_allow_html=True)
+                
                 with st.expander("🔍 Show Affected Employee IDs", expanded=False):
                     st.dataframe(hard_errors, hide_index=True, use_container_width=True)
                 

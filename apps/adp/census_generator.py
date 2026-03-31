@@ -302,7 +302,8 @@ def render_census_sanity_check():
                 st.warning(f"**{len(hard_errors)} Critical Issue(s)** found across {len(hard_errors['Employee ID'].unique())} employees.")
                 with st.expander("🔍 Show Affected Employee IDs", expanded=False):
                     st.dataframe(hard_errors, hide_index=True, use_container_width=True)
-                st.divider()
+                
+                st.markdown("<br>", unsafe_allow_html=True)
 
             # 2. Automated Mapping Suggestions
             st.markdown("##### 💡 Automated Mapping Suggestions")

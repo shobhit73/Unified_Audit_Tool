@@ -6,17 +6,18 @@ def inject_premium_styles():
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@200;400;700;800&family=Inter:wght@300;400;600&display=swap');
 
-        /* Global Typography Override */
-        html, body, [class*="st-"] {
-            font-family: 'Inter', sans-serif;
-            color: #1b1c1c;
+        /* Typography: Apply to content but NOT to system icons/expander-arrows */
+        p, li, label, .stMarkdown, .stTable, .stDataFrame {
+            font-family: 'Inter', sans-serif !important;
+            color: #1b1c1c !important;
         }
 
+        /* Headers with Manrope */
         h1, h2, h3, h4, h5, h6 {
             font-family: 'Manrope', sans-serif !important;
             font-weight: 700 !important;
             color: #050e39 !important;
-            letter-spacing: -0.02em;
+            letter-spacing: -0.02em !important;
         }
 
         /* The Editorial Card Surface */
@@ -29,58 +30,42 @@ def inject_premium_styles():
             border: 1px solid rgba(198, 197, 208, 0.2);
         }
 
-        /* Action Hub: Critical Info (Soft Rose) */
-        .action-hub-error {
-            background: linear-gradient(145deg, #fff5f5, #ffffff);
-            border-left: 5px solid #ba1a1a;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 16px;
-        }
-        .action-hub-error h5 { color: #93000a !important; margin-top: 0 !important; }
+        /* Action Hub Theme */
+        .action-hub-error { background: linear-gradient(145deg, #fff5f5, #ffffff); border-left: 5px solid #ba1a1a; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+        .action-hub-warning { background: linear-gradient(145deg, #fffaf3, #ffffff); border-left: 5px solid #e8881f; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
 
-        /* Action Hub: Mapping Suggestions (Soft Amber) */
-        .action-hub-warning {
-            background: linear-gradient(145deg, #fffaf3, #ffffff);
-            border-left: 5px solid #e8881f;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 16px;
-        }
-        .action-hub-warning h5 { color: #673700 !important; margin-top: 0 !important; }
-
-        /* Glossy Primary Button */
-        div.stButton > button:first-child {
+        /* Glossy Primary Button - High Contrast Fix */
+        div.stButton > button {
             background: linear-gradient(135deg, #050e39 0%, #1c244e 100%) !important;
-            color: white !important;
+            color: #ffffff !important;
             border: none !important;
             border-radius: 8px !important;
             padding: 12px 32px !important;
             font-weight: 700 !important;
             font-family: 'Manrope', sans-serif !important;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.2);
             transition: all 0.3s ease !important;
             box-shadow: 0 4px 12px rgba(5, 14, 57, 0.2) !important;
         }
-        div.stButton > button:hover {
-            transform: translateY(-2px) !important;
-            box-shadow: 0 6px 18px rgba(5, 14, 57, 0.3) !important;
-            background: linear-gradient(135deg, #1c244e 0%, #050e39 100%) !important;
-        }
 
-        /* Refined Expander (Drawer Style) */
+        /* Refined Expander (FIX: Don't break the SVG icons) */
         .stExpander {
             border: none !important;
-            background-color: #f5f3f3 !important;
+            background-color: #f8f9fa !important;
             border-radius: 12px !important;
-            margin-bottom: 12px !important;
+            margin-bottom: 16px !important;
+            border: 1px solid rgba(0,0,0,0.05) !important;
         }
-        .stExpander summary {
+        
+        /* Targeted Title text - Leave the summary arrow alone */
+        div[data-testid="stExpanderSummary"] > div:last-child p {
             font-family: 'Manrope', sans-serif !important;
             font-weight: 700 !important;
-            font-size: 1.1rem !important;
+            font-size: 1.05rem !important;
             color: #050e39 !important;
-            padding: 12px !important;
+            margin: 0 !important;
         }
+        </style>
 
         /* Pill Badges */
         .pill-error {

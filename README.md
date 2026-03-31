@@ -207,6 +207,7 @@ Output: Excel report with multiple validation sheets.
 |---|---|---|
 | Blank SSN | 🔴 Hard Error | No |
 | Blank Employment Status | 🔴 Hard Error | No |
+| **Invalid Status (A04L, A08V)** | 🔴 Hard Error | No — Flagged for manual review |
 | Blank Employment Type / DOL Status | 🟡 Warning | ✅ Yes — defaults to Full Time |
 | Blank Pay Type (non-Driver) | 🔴 Hard Error | No |
 | Blank Pay Type (Driver) | 🟡 Warning | ✅ Yes — forced to Hourly |
@@ -217,7 +218,8 @@ Output: Excel report with multiple validation sheets.
 | Invalid Zip Code (not 5 digits) | 🔴 Hard Error | ✅ Yes — padded/truncated |
 | Salaried employee in Hourly-Only role | 🔴 Hard Error | ✅ Yes — convert to Hourly |
 | Invalid State (full name instead of abbreviation) | 🔴 Hard Error | No |
-| Termination Date before Hire Date | 🔴 Hard Error | No |
+| **Termination Date before Hire Date** | 🔴 Hard Error | No — Date consistency check |
+| **Special Characters in Emergency Fields** | 🔴 Hard Error | No — Paycom restricted characters |
 | Blank Working Hours | 🟡 Warning | ✅ Yes — default to 40 |
 | Blank Work Email | 🟡 Warning | ✅ Yes — fallback to Personal Email |
 | High Hourly Rate (> $100/hr) | 🔵 Anomaly | No |
@@ -232,6 +234,13 @@ Output: Populated Uzio .xlsm template + Fix Log sheet.
 ```
 Purpose: Update SPECIFIC columns in an existing Uzio template from source data.
 Output: Updated .xlsm template showing only changed rows/fields.
+```
+
+### 4. Corrected Source Download
+```
+Purpose: Download the source data with priority columns moved to the front for easy auditing.
+Integrity: Preserves ALL original source headers exactly as they appeared in the upload.
+Sequence: Moves the 12 most critical columns (ID, Name, Job, Dept, etc.) to the very beginning.
 ```
 
 ---

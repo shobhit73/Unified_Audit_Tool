@@ -2,6 +2,7 @@ import io
 import pandas as pd
 import streamlit as st
 from utils.audit_utils import generate_uzio_template, check_duplicate_columns, format_datetime_strings
+from utils.ui_components import inject_premium_styles, render_premium_header, render_finding_card
 
 APP_TITLE = "ADP to Uzio Census Template Generator"
 
@@ -181,15 +182,13 @@ def get_manager_info(df_adp, resolved_field_map):
     return has_managers, top_manager_id, top_manager_name, col_sup_code
 
 def render_census_sanity_check():
-    st.title("ADP Census Sanity Check")
-    st.markdown("""
-    **Instructions**:
-    1. Upload your **ADP Census Export**.
-    2. Review the detected errors and mapping suggestions.
-    3. Download the **Corrected Source Data** containing automated fixes.
-    """)
-    
-    adp_file = st.file_uploader("Upload ADP Census Export", type=["xlsx", "csv"], key="adp_sanity_upload")
+    inject_premium_styles()
+    st.markdown("<div class='premium-card'>", unsafe_html=True)
+    st.title("📑 ADP Census Sanity Check")
+    st.markdown("Ensure your ADP Census Export is audit-ready for Uzio benefits. This tool identifies critical data gaps, corrects formatting issues, and performs automated logic checks.")
+    st.markdown("</div>", unsafe_html=True)
+
+    adp_file = st.file_uploader("Upload ADP Census Export (.xlsx, .csv)", type=["xlsx", "csv"], key="adp_sanity_upload")
     if not adp_file: return
 
     df_adp, original_columns, norm_to_orig, resolved_field_map = preprocess_adp_file(adp_file)
@@ -209,8 +208,7 @@ def render_census_sanity_check():
     fix_options = render_auto_fix_options("adp_sanity")
     
     # --- MAPPING UI ---
-    st.markdown("### 🗺️ Mapping Configuration (Optional)")
-    st.info("Provide mappings here to include them in the **Corrected Source** download.")
+    render_premium_header("🗺️ Mapping Configuration", "Provide mappings here to include them in the **Corrected Source** download.")
     
     src_loc_col = resolved_field_map.get('Work Location')
     unique_locs = sorted([str(l).strip() for l in df_adp[src_loc_col].dropna().unique()]) if src_loc_col and src_loc_col in df_adp.columns else []
@@ -244,8 +242,9 @@ def render_census_sanity_check():
         with st.expander("🛠️ Census Integrity & Mapping Action Center", expanded=not hard_errors.empty):
             # 1. Critical Hard Errors (If Any)
             if not hard_errors.empty:
-                st.markdown("##### ⛔ Critical Data Issues (Must Fix)")
-                # Show the categorized legend
+                render_premium_header("⛔ Critical Data Issues", "These issues must be addressed in the source system or through auto-fixes.")
+                
+                # Categorized breakdown for the card
                 legend = {'Missing/Duplicate Info': set(), 'Date & Status Logic': set(), 'Contact Formatting': set()}
                 for _, err in hard_errors.iterrows():
                     issue_text = str(err['Issue'])
@@ -254,6 +253,16 @@ def render_census_sanity_check():
                         if any(m in p for m in ['predates', 'Terminated', 'Non-standard']): legend['Date & Status Logic'].add(p)
                         elif 'Special characters' in p: legend['Contact Formatting'].add(p)
                         else: legend['Missing/Duplicate Info'].add(p)
+                
+                render_finding_card(
+                    "Integrity Audit Results", 
+                    {
+                        "Critical Issues": len(hard_errors),
+                        "Employees Affected": len(hard_errors['Employee ID'].unique()),
+                        "Category": "Data Integrity"
+                    },
+                    type='error'
+                )
 
                 lcol1, lcol2, lcol3 = st.columns(3)
                 with lcol1:

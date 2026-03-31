@@ -349,17 +349,32 @@ def render_census_sanity_check():
             st.markdown("##### 💡 Automated Mapping Suggestions")
             st.info("The following can be automatically applied using the checkboxes at the top.")
             wcol1, wcol2 = st.columns(2)
+            
+            def get_ids_str(df_in):
+                if df_in.empty: return ""
+                ids = df_in['Employee ID'].unique().tolist()
+                id_str = ", ".join(str(x) for x in ids[:3])
+                if len(ids) > 3: id_str += f" (+{len(ids)-3} more)"
+                return f" `IDs: {id_str}`"
+
             with wcol1:
                 st.markdown("**FLSA & Pay Rules**")
-                if not flsa_corrections.empty: st.markdown(f"- ℹ️ **FLSA Mismatches:** {len(flsa_corrections)} employee(s).")
-                if not flsa_blanks.empty: st.markdown(f"- ⚠️ **Blank FLSA:** {len(flsa_blanks)} employee(s).")
-                if not anomalies.empty: st.markdown(f"- ⚠️ **FLSA Anomalies:** {len(anomalies)} employee(s).")
-                if not smart_driver_fixes.empty: st.markdown(f"- 🚛 **Smart Driver Fixes:** {len(smart_driver_fixes)} employee(s).")
+                if not flsa_corrections.empty: 
+                    st.markdown(f"- ℹ️ **FLSA Mismatches:** {len(flsa_corrections)} employee(s).{get_ids_str(flsa_corrections)}")
+                if not flsa_blanks.empty: 
+                    st.markdown(f"- ⚠️ **Blank FLSA:** {len(flsa_blanks)} employee(s).{get_ids_str(flsa_blanks)}")
+                if not anomalies.empty: 
+                    st.markdown(f"- ⚠️ **FLSA Anomalies:** {len(anomalies)} employee(s).{get_ids_str(anomalies)}")
+                if not smart_driver_fixes.empty: 
+                    st.markdown(f"- 🚛 **Smart Driver Fixes:** {len(smart_driver_fixes)} employee(s).{get_ids_str(smart_driver_fixes)}")
             with wcol2:
                 st.markdown("**Employment & Contact**")
-                if not intern_corrections.empty: st.markdown(f"- ⚠️ **Intern Codes:** {len(intern_corrections)} employee(s) to be mapped to Part Time.")
-                if not email_fallbacks.empty: st.markdown(f"- 📧 **Email Fallbacks:** {len(email_fallbacks)} employee(s) using personal email.")
-                if not position_blanks.empty: st.markdown(f"- ℹ️ **Position Auto-Fill:** {len(position_blanks)} employee(s) have a blank Position.")
+                if not intern_corrections.empty: 
+                    st.markdown(f"- ⚠️ **Intern Codes:** {len(intern_corrections)} employee(s).{get_ids_str(intern_corrections)}")
+                if not email_fallbacks.empty: 
+                    st.markdown(f"- 📧 **Email Fallbacks:** {len(email_fallbacks)} employee(s).{get_ids_str(email_fallbacks)}")
+                if not position_blanks.empty: 
+                    st.markdown(f"- ℹ️ **Position Auto-Fill:** {len(position_blanks)} employee(s).{get_ids_str(position_blanks)}")
     else:
         st.success("✅ Source data passed all integrity checks!")
 

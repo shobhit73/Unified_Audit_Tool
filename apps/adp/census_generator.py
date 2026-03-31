@@ -357,17 +357,17 @@ def render_census_sanity_check():
             with wcol1:
                 st.markdown("**FLSA & Pay Rules**")
                 if not flsa_corrections.empty: 
-                    st.markdown(f"- ℹ️ **FLSA Mismatches:** {len(flsa_corrections)} employee(s).{get_ids_str(flsa_corrections)}")
+                    st.markdown(f"- ℹ️ **FLSA Mismatches:** {len(flsa_corrections)} employee(s) *(Pay Type vs FLSA conflict)*.{get_ids_str(flsa_corrections)}")
                 if not flsa_blanks.empty: 
-                    st.markdown(f"- ⚠️ **Blank FLSA:** {len(flsa_blanks)} employee(s).{get_ids_str(flsa_blanks)}")
+                    st.markdown(f"- ⚠️ **Blank FLSA:** {len(flsa_blanks)} employee(s) *(Missing Exempt/Non-Exempt)*.{get_ids_str(flsa_blanks)}")
                 if not anomalies.empty: 
-                    st.markdown(f"- ⚠️ **FLSA Anomalies:** {len(anomalies)} employee(s).{get_ids_str(anomalies)}")
+                    st.markdown(f"- ⚠️ **FLSA Anomalies:** {len(anomalies)} employee(s) *(Contradictory Logic)*.{get_ids_str(anomalies)}")
             with wcol2:
                 st.markdown("**Employment & Contact**")
                 if not intern_corrections.empty: 
-                    st.markdown(f"- ⚠️ **Intern Codes:** {len(intern_corrections)} employee(s).{get_ids_str(intern_corrections)}")
+                    st.markdown(f"- ⚠️ **Intern Codes:** {len(intern_corrections)} employee(s) *(Mapping Intern to Part Time)*.{get_ids_str(intern_corrections)}")
                 if not email_fallbacks.empty: 
-                    st.markdown(f"- 📧 **Email Fallbacks:** {len(email_fallbacks)} employee(s).{get_ids_str(email_fallbacks)}")
+                    st.markdown(f"- 📧 **Email Fallbacks:** {len(email_fallbacks)} employee(s) *(Using personal where work email is missing)*.{get_ids_str(email_fallbacks)}")
     else:
         st.success("✅ Source data passed all integrity checks!")
 

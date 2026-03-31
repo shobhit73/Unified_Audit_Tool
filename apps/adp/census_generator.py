@@ -245,8 +245,8 @@ def render_census_sanity_check():
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        count = len(error_summary['Missing Info'])
-        st.metric("Missing Info", count, delta="- Errors" if count > 0 else None, delta_color="inverse")
+        count = len(error_summary.get('Missing Info', []))
+        st.metric("Missing/Duplicate Info", count, delta="- Errors" if count > 0 else None, delta_color="inverse")
         if count > 0:
             with st.expander("Show IDs", expanded=False):
                 st.write(", ".join(error_summary['Missing Info'][:50]) + ("..." if count > 50 else ""))

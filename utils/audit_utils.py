@@ -547,6 +547,21 @@ def validate_source_data(df_source, resolved_field_map):
     term_date_col = resolved_field_map.get('Termination Date')
     first_name_col = resolved_field_map.get('First Name')
     last_name_col = resolved_field_map.get('Last Name')
+    ssn_col = resolved_field_map.get('SSN')
+    
+    # --- PRE-SCAN for DUPLICATE SSNs ---
+    duplicate_ssns = set()
+    if ssn_col and ssn_col in df_source.columns and emp_id_col and emp_id_col in df_source.columns:
+        # Group by SSN and identify those linked to more than one unique Employee ID
+        # Note: We filter for valid SSNs (not blank) to find true duplicates
+        valid_ssn_mask = df_source[ssn_col].notna() & (df_source[ssn_col].astype(str).str.strip() != "")
+        if valid_ssn_mask.any():
+            temp_df = df_source[valid_ssn_mask][[emp_id_col, ssn_col]].copy()
+            temp_df[ssn_col] = temp_df[ssn_col].astype(str).str.strip()
+            temp_df[emp_id_col] = temp_df[emp_id_col].astype(str).str.strip()
+            
+            ssn_counts = temp_df.groupby(ssn_col)[emp_id_col].nunique()
+            duplicate_ssns = set(ssn_counts[ssn_counts > 1].index)
     
     def get_emp_ref(row, idx):
         ref = f"Row {idx+2}"
@@ -573,12 +588,13 @@ def validate_source_data(df_source, resolved_field_map):
         # --- HARD STOP CHECKS ---
         missing = []
         
-        # 0. Blank SSN
-        ssn_col = resolved_field_map.get('SSN')
         if ssn_col and ssn_col in df_source.columns:
-            ssn_val = row.get(ssn_col)
-            if pd.isna(ssn_val) or str(ssn_val).strip() == "":
+            ssn_val_raw = row.get(ssn_col)
+            ssn_val = str(ssn_val_raw).strip() if pd.notna(ssn_val_raw) else ""
+            if not ssn_val:
                 missing.append("SSN (blank)")
+            elif ssn_val in duplicate_ssns:
+                missing.append(f"Duplicate SSN found across different IDs ({ssn_val})")
 
         # 1. Blank Employment Status & Broad Status Checks
         if status_col and status_col in df_source.columns:

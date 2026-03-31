@@ -254,18 +254,52 @@ def render_census_sanity_check():
                 st.write(", ".join(error_summary['Missing Info'][:50]) + ("..." if count > 50 else ""))
                 
     with col2:
-        count = len(error_summary['Date & Status Logic'])
+        count = len(error_summary.get('Date & Status Logic', []))
         st.metric("Date & Status Logic", count, delta="- Errors" if count > 0 else None, delta_color="inverse")
         if count > 0:
             with st.expander("Show IDs", expanded=False):
                 st.write(", ".join(error_summary['Date & Status Logic'][:50]) + ("..." if count > 50 else ""))
 
     with col3:
-        count = len(error_summary['Contact Formatting'])
+        count = len(error_summary.get('Contact Formatting', []))
         st.metric("Contact Formatting", count, delta="- Errors" if count > 0 else None, delta_color="inverse")
         if count > 0:
             with st.expander("Show IDs", expanded=False):
                 st.write(", ".join(error_summary['Contact Formatting'][:50]) + ("..." if count > 50 else ""))
+
+    # --- NEW: ISSUE LEGEND (What's Wrong?) ---
+    if not hard_errors.empty:
+        # Group unique issue types by category
+        legend = {'Missing/Duplicate Info': set(), 'Date & Status Logic': set(), 'Contact Formatting': set()}
+        for _, err in hard_errors.iterrows():
+            issue_text = str(err['Issue'])
+            parts = [p.strip() for p in issue_text.split(",") if p.strip()]
+            for p in parts:
+                if any(m in p for m in ['predates', 'Terminated', 'Non-standard']):
+                    legend['Date & Status Logic'].add(p)
+                elif 'Special characters' in p:
+                    legend['Contact Formatting'].add(p)
+                else:
+                    legend['Missing/Duplicate Info'].add(p)
+
+        st.markdown("#### 💡 What exactly is wrong in this file?")
+        with st.container(border=True):
+            lcol1, lcol2, lcol3 = st.columns(3)
+            with lcol1:
+                st.markdown("**Missing/Duplicate Info**")
+                if legend['Missing/Duplicate Info']:
+                    for itm in sorted(legend['Missing/Duplicate Info']): st.markdown(f"- {itm}")
+                else: st.markdown("_None_")
+            with lcol2:
+                st.markdown("**Date & Status Logic**")
+                if legend['Date & Status Logic']:
+                    for itm in sorted(legend['Date & Status Logic']): st.markdown(f"- {itm}")
+                else: st.markdown("_None_")
+            with lcol3:
+                st.markdown("**Contact Formatting**")
+                if legend['Contact Formatting']:
+                    for itm in sorted(legend['Contact Formatting']): st.markdown(f"- {itm}")
+                else: st.markdown("_None_")
 
     # 2. Detailed Table for Hard Errors
     if not hard_errors.empty:

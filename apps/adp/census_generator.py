@@ -376,7 +376,7 @@ def render_census_sanity_check():
         
         # --- Inject CRITICAL_WARNINGS for audit ---
         # Map each employee ID to their issues from hard_errors
-        issue_map = hard_errors.groupby('Employee ID')['Issue'].apply(lambda issues: "; ".join(issues)).to_dict()
+        issue_map = hard_errors.groupby('Employee ID')['Issue'].apply(lambda issues: "; ".join(issues)).to_dict() if not hard_errors.empty else {}
         df_download['CRITICAL_WARNINGS'] = df_download[resolved_field_map.get('Employee ID')].astype(str).str.strip().map(issue_map).fillna("")
         
         audit_trail = []

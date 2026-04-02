@@ -308,8 +308,8 @@ def run_audit(uzio_file, paycom_file):
 
         for i in range(1, 9):
             prefix = f"Dist_{i}_"
-            d_acc = norm_digits(row.get(f"{prefix}Acct_Code")).lstrip("0")
-            d_rout = norm_digits(row.get(f"{prefix}Rout_Code")).lstrip("0")
+            d_acc = norm_digits(row.get(f"{prefix}Acct_Code"))
+            d_rout = norm_digits(row.get(f"{prefix}Rout_Code"))
             
             # Extract Amount/Percent always (even if no account, e.g. Check/Cash)
             raw_amt = row.get(f"{prefix}Amount")
@@ -371,8 +371,8 @@ def run_audit(uzio_file, paycom_file):
         paycom_accounts.extend(valid_dists)
 
         # --- Extract NET Pay Account (remainder after distributions) ---
-        net_acc = norm_digits(row.get("Net_Acct_Code")).lstrip("0")
-        net_rout = norm_digits(row.get("Net_Rout_Code")).lstrip("0")
+        net_acc = norm_digits(row.get("Net_Acct_Code"))
+        net_rout = norm_digits(row.get("Net_Rout_Code"))
         
         if net_acc or net_rout:
              p_type = row.get("Net_Type_Code")

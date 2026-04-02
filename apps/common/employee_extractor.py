@@ -17,7 +17,12 @@ def render_employee_extractor():
     # 1. FILE UPLOADERS
     col_u1, col_u2 = st.columns(2)
     with col_u1:
-        source_file = st.file_uploader("1. Upload SOURCE File (ADP/Paycom Census or ADP Direct Deposit)", type=["xlsx", "csv", "xlsm"], key="ee_source")
+        source_file = st.file_uploader(
+            "1. Upload SOURCE File",
+            type=["xlsx", "csv", "xlsm"],
+            key="ee_source",
+            help="Supported: ADP Census, Paycom Census, ADP Direct Deposit, **Uzio Multi-Client Census** (Employee Details sheet), **ADP Emergency & License Report**"
+        )
     with col_u2:
         ref_file = st.file_uploader("2. Upload REFERENCE Order (Uzio Census) - OPTIONAL", type=["xlsx", "xlsm"], key="ee_ref")
 
@@ -26,26 +31,65 @@ def render_employee_extractor():
         return
 
     # 2. READ SOURCE (Strict no-mutation)
+    # Track detected file type for informational banners
+    _detected_source_type = None
+
     try:
         source_file.seek(0)
         if source_file.name.lower().endswith('.csv'):
             df_source = pd.read_csv(source_file, dtype=str)
         else:
-            # Automatic header detection for Source
-            df_header = pd.read_excel(source_file, nrows=10, header=None)
-            header_idx = 0
-            for idx, row in df_header.iterrows():
-                row_vals = [str(x).lower().strip() for x in row.tolist() if pd.notna(x)]
-                if any(k in row_vals for k in ['associate id', 'employee_code', 'employee id*', 'legal first name', 'name', 'company code']):
-                    header_idx = idx
-                    break
-            source_file.seek(0)
-            df_source = pd.read_excel(source_file, header=header_idx, dtype=str)
+            # --- Peek at available sheets ---
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                source_file.seek(0)
+                _xl_peek = pd.ExcelFile(source_file)
+                _available_sheets = _xl_peek.sheet_names
+
+            # CASE 1: Uzio Multi-Client Census — has 'Employee Details' sheet
+            if 'Employee Details' in _available_sheets:
+                source_file.seek(0)
+                df_source = pd.read_excel(source_file, sheet_name='Employee Details', header=3, dtype=str)
+                _detected_source_type = 'uzio'
+
+            else:
+                # CASE 2: Generic Excel — read first sheet with auto header detection
+                _target_sheet = _available_sheets[0] if _available_sheets else 0
+                source_file.seek(0)
+                df_header = pd.read_excel(source_file, sheet_name=_target_sheet, nrows=10, header=None)
+                header_idx = 0
+                _HEADER_KEYWORDS = [
+                    'associate id', 'employee_code', 'employee id*', 'employee id',
+                    'legal first name', 'name', 'company code',
+                    'license/certification description',  # Emergency & License Report
+                    'contact name',                       # Emergency & License Report
+                ]
+                for idx, row in df_header.iterrows():
+                    row_vals = [str(x).lower().strip() for x in row.tolist() if pd.notna(x)]
+                    if any(k in row_vals for k in _HEADER_KEYWORDS):
+                        header_idx = idx
+                        break
+                source_file.seek(0)
+                df_source = pd.read_excel(source_file, sheet_name=_target_sheet, header=header_idx, dtype=str)
+
+                # Detect Emergency & License Report
+                _emer_lic_cols = {'License/Certification Description', 'License/Certification ID', 'Issued By', 'Expiration Date'}
+                if _emer_lic_cols.issubset(set(df_source.columns.tolist())):
+                    _detected_source_type = 'emergency_license'
+
     except Exception as e:
         st.error(f"Error reading source file: {e}")
         return
 
-    st.success(f"Source file loaded: {len(df_source)} rows, {len(df_source.columns)} columns.")
+    # Banner based on detected file type
+    if _detected_source_type == 'uzio':
+        st.success(f"✅ **Uzio Multi-Client Census detected** — 'Employee Details' sheet loaded: {len(df_source)} rows, {len(df_source.columns)} columns.")
+    elif _detected_source_type == 'emergency_license':
+        st.success(f"✅ **ADP Emergency & License Report detected** — {len(df_source)} rows, {len(df_source.columns)} columns. Note: one row per license record (employees may repeat).")
+    else:
+        st.success(f"✅ Source file loaded: {len(df_source)} rows, {len(df_source.columns)} columns.")
+
 
     # 3. IDENTIFY ID COLUMN (Source)
     id_col_source = None
@@ -68,10 +112,12 @@ def render_employee_extractor():
         st.error("Could not identify 'Employee ID' column in source. Headers found: " + ", ".join(all_cols[:10]))
         return
 
-    # Detect if this is a Direct Deposit file (can have multiple rows per employee)
+    # Detect multi-row-per-employee scenarios
     is_direct_deposit = 'ROUTING NUMBER' in all_cols or 'ACCOUNT NUMBER' in all_cols
     if is_direct_deposit:
         st.info("📋 **ADP Direct Deposit report detected.** Multiple rows per employee (split accounts) will all be included in the output.")
+    if _detected_source_type == 'emergency_license':
+        st.info("📋 **Emergency & License Report mode.** An employee may have multiple rows (one per license). All matching rows will be preserved in the output.")
 
     # 4. COLUMN SELECTOR
     st.markdown("---")

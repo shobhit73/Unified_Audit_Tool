@@ -354,7 +354,7 @@ def normalize_paytype_for_compare(x) -> str:
     return s
 
 def deduplicate_adp(df: pd.DataFrame, key_col: str) -> pd.DataFrame:
-    """NEW: Deduplicate ADP Data based on user logic"""
+    """Refactored Deduplication: Safe against Pandas `.apply` column drops"""
     # Identify special columns (normalized)
     col_map = {c: c.lower() for c in df.columns}
     
@@ -368,9 +368,9 @@ def deduplicate_adp(df: pd.DataFrame, key_col: str) -> pd.DataFrame:
     if not status_col:
         return df.drop_duplicates(subset=[key_col], keep="first")
         
-    def pick_best(group):
+    def pick_best_idx(group):
         if len(group) <= 1:
-            return group.iloc[[0]]
+            return group.index[0]
         
         # Helper to parse date for sorting
         def get_date_val(row, col):
@@ -384,44 +384,35 @@ def deduplicate_adp(df: pd.DataFrame, key_col: str) -> pd.DataFrame:
             except:
                 return pd.Timestamp.min
 
-        if isinstance(group, pd.Series):
-             return group.to_frame().T
-
-        group = group.copy()
-        group['__norm_status'] = group[status_col].astype(str).str.lower().str.strip()
+        group_work = group.copy()
+        group_work['__norm_status'] = group_work[status_col].astype(str).str.lower().str.strip()
         
         # Add license check
         if license_id_col:
-            group['__has_license'] = group[license_id_col].apply(lambda x: 1 if norm_blank(x) != "" else 0)
+            group_work['__has_license'] = group_work[license_id_col].apply(lambda x: 1 if norm_blank(x) != "" else 0)
         else:
-            group['__has_license'] = 0
+            group_work['__has_license'] = 0
 
-        actives = group[group['__norm_status'] == 'active']
-        terms = group[group['__norm_status'] == 'terminated']
-        others = group[(group['__norm_status'] != 'active') & (group['__norm_status'] != 'terminated')]
+        actives = group_work[group_work['__norm_status'] == 'active']
+        terms = group_work[group_work['__norm_status'] == 'terminated']
+        others = group_work[(group_work['__norm_status'] != 'active') & (group_work['__norm_status'] != 'terminated')]
         
         # Logic 1: If Actives exist, prioritize them
         if not actives.empty:
-            # Rule: select row where Work Location Description is not blank
             actives['__sort_date'] = actives.apply(lambda r: get_date_val(r, start_date_col), axis=1)
 
             if loc_desc_col:
                 actives['__has_loc'] = actives[loc_desc_col].apply(lambda x: 1 if norm_blank(x) != "" else 0)
-                best_active = actives.sort_values(by=['__has_loc', '__has_license', '__sort_date'], ascending=[False, False, False]).iloc[[0]]
+                best_active = actives.sort_values(by=['__has_loc', '__has_license', '__sort_date'], ascending=[False, False, False])
             else:
-                best_active = actives.sort_values(by=['__has_license', '__sort_date'], ascending=[False, False]).iloc[[0]]
+                best_active = actives.sort_values(by=['__has_license', '__sort_date'], ascending=[False, False])
             
-            return best_active
+            return best_active.index[0]
 
         # Logic 2: Terminated
         if not terms.empty:
-            # Rule: If term dates are different, select latest.
-            # Rule: If one blank and one value -> select latest Position Start Date
-            
-            # Check for blank term dates
             terms['__sort_date'] = pd.Timestamp.min
             
-            # Determine which date to sort by mainly
             use_start_date = False
             if term_date_col:
                 terms['__term_dt_val'] = terms[term_date_col].apply(norm_blank)
@@ -438,28 +429,24 @@ def deduplicate_adp(df: pd.DataFrame, key_col: str) -> pd.DataFrame:
             elif term_date_col:
                  terms['__sort_date'] = terms.apply(lambda r: get_date_val(r, term_date_col), axis=1)
             
-            # Add License priority to Terminated as well (implicitly safe)
-            return terms.sort_values(by=['__has_license', '__sort_date'], ascending=[False, False]).iloc[[0]]
+            best_term = terms.sort_values(by=['__has_license', '__sort_date'], ascending=[False, False])
+            return best_term.index[0]
 
         # Fallback (Others, e.g. Leave)
         if not others.empty:
              others['__sort_date'] = others.apply(lambda r: get_date_val(r, start_date_col), axis=1)
-             return others.sort_values(by=['__has_license', '__sort_date'], ascending=[False, False]).iloc[[0]]
+             best_other = others.sort_values(by=['__has_license', '__sort_date'], ascending=[False, False])
+             return best_other.index[0]
 
-        return group.iloc[[0]]
+        return group_work.index[0]
 
-    # Apply grouping
-    # Fix: as_index=False ensures the group key (e.g. Associate ID) is kept as a column 
-    # and not moved to index, avoiding subsequent KeyError: 'Associate ID'.
-    deduped = df.groupby(key_col, as_index=False, group_keys=False).apply(pick_best)
-    deduped = deduped.reset_index(drop=True)
+    # Find the best index for each group
+    best_indices = df.groupby(key_col, group_keys=False).apply(pick_best_idx)
     
-    # Cleanup temp columns if they leaked (apply usually returns pure subset but safe to drop)
-    cols_to_drop = [c for c in ['__norm_status', '__has_loc', '__sort_date', '__term_dt_val', '__has_license'] if c in deduped.columns]
-    if cols_to_drop:
-        deduped = deduped.drop(columns=cols_to_drop)
-        
-    return deduped
+    # Safely extract rows using exact indices to perfectly preserve all columns
+    deduped = df.loc[best_indices].copy()
+    
+    return deduped.reset_index(drop=True)
 
 # ---------- Core compare ----------
 def run_comparison(uzio_file, adp_file) -> bytes:

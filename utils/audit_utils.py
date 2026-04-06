@@ -607,14 +607,14 @@ def validate_source_data(df_source, resolved_field_map):
             else:
                 # A. Check for non-standard statuses (neither Active nor Terminated)
                 # We allow some common variants like 'A', 'T', 'Active', 'Terminated', 'Inactive'
-                valid_bases = ['active', 'terminated', 'inactive', 'a', 't']
-                is_standard = any(base in status_lower for base in valid_bases)
+                is_standard = status_lower in ['a', 't', 'i'] or any(s in status_lower for s in ['active', 'terminated', 'inactive'])
                 
                 if not is_standard or status_lower in ['a04l', 'a08v']:
                     missing.append(f"Non-standard Status ({status_val})")
 
                 # B. Logic Check: Terminated/Inactive but missing Termination Date
-                if any(term_base in status_lower for term_base in ['terminated', 'inactive', 't']):
+                is_term = status_lower in ['t', 'i'] or any(s in status_lower for s in ['terminated', 'inactive'])
+                if is_term:
                     if term_date_col and term_date_col in df_source.columns:
                         tdate = row.get(term_date_col)
                         if pd.isna(tdate) or str(tdate).strip() == "" or str(tdate).lower() == "nan":

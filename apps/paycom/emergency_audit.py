@@ -132,17 +132,20 @@ def run_audit(file_uzio, file_paycom):
                 return c
         return None
 
-    p_map = {
-        "EmpID": get_p_col("Employee_Code") or get_p_col("Employee ID"),
-        "Name": get_p_col("Emergency_1_Contact"),
-        "Relation": get_p_col("Emergency_1_Relationship"),
-        "Phone": get_p_col("Emergency_1_Phone"),
-        "Language": get_p_col("Emergency_1_Language")
-    }
+    empid_col = get_p_col("Employee_Code") or get_p_col("Employee ID")
     
-    if not p_map["EmpID"]:
+    if not empid_col:
         st.error("Could not find Employee ID column in Paycom file.")
         return None
+
+    p_maps = []
+    for i in range(1, 4):
+        p_maps.append({
+            "Name": get_p_col(f"Emergency_{i}_Contact"),
+            "Relation": get_p_col(f"Emergency_{i}_Relationship"),
+            "Phone": get_p_col(f"Emergency_{i}_Phone"),
+            "Language": get_p_col(f"Emergency_{i}_Language")
+        })
 
     # 4. Process Data
     uzio_data = {}
@@ -166,23 +169,26 @@ def run_audit(file_uzio, file_paycom):
     paycom_data = {}
     p_all_eids = set()
     for idx, row in df_paycom.iterrows():
-        eid = norm_id(row.get(p_map["EmpID"]))
+        eid = norm_id(row.get(empid_col))
         if not eid: continue
         p_all_eids.add(eid)
         
-        # Paycom Census only has ONE emergency contact set (Emergency_1_*)? 
-        # Or assumes checks for just the first one as per request.
-        contact = {
-            "Name": norm_str(row.get(p_map["Name"])),
-            "Relation": norm_relation(row.get(p_map["Relation"])),
-            "Phone": norm_phone(row.get(p_map["Phone"])),
-            "RawPhone": norm_str(row.get(p_map["Phone"])),
-            "Language": norm_str(row.get(p_map["Language"]))
-        }
-        
-        if contact["Name"] or contact["Phone"]:
-            if eid not in paycom_data: paycom_data[eid] = []
-            paycom_data[eid].append(contact)
+        for p_map in p_maps:
+            # Skip if file doesn't have these columns for this index
+            if not p_map["Name"] and not p_map["Phone"]:
+                continue
+
+            contact = {
+                "Name": norm_str(row.get(p_map["Name"])) if p_map["Name"] else "",
+                "Relation": norm_relation(row.get(p_map["Relation"])) if p_map["Relation"] else "",
+                "Phone": norm_phone(row.get(p_map["Phone"])) if p_map["Phone"] else "",
+                "RawPhone": norm_str(row.get(p_map["Phone"])) if p_map["Phone"] else "",
+                "Language": norm_str(row.get(p_map["Language"])) if p_map["Language"] else ""
+            }
+            
+            if contact["Name"] or contact["Phone"]:
+                if eid not in paycom_data: paycom_data[eid] = []
+                paycom_data[eid].append(contact)
 
     # 5. Compare
     rows = []
@@ -329,10 +335,10 @@ def render_ui():
     2. Upload **Paycom Census Export** (.csv or .xlsx).
     
     **Checks**:
-    - Emergency_1_Contact (Name)
-    - Emergency_1_Relationship
-    - Emergency_1_Phone
-    - Emergency_1_Language (Info Only)
+    - Emergency_{1,2,3}_Contact (Name)
+    - Emergency_{1,2,3}_Relationship
+    - Emergency_{1,2,3}_Phone
+    - Emergency_{1,2,3}_Language (Info Only)
     """)
     
     client_name = st.text_input("Client Name", value="Client", key="paycom_emergency_client")

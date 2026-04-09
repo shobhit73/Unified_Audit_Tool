@@ -28,30 +28,52 @@ These files coordinate the audit process. They define internal mappings (e.g., U
 
 ---
 
-## 3. The Audit Report (Excel Tabs)
+## 3. The Audit Report (Excel Schema)
 
-### 1. Comparison Detail
-The row-by-row mismatch report. It compares every field defined in the system mapping.
-- **Data Match Logic**: Uses normalized comparison (e.g., Hourly vs hourly = Match).
+The audit tool generates an Excel file with multiple tabs, each focusing on a specific audit dimension.
 
-### 2. ID Correlation (Identity Match)
-Highlights employees matched via SSN who have inconsistent Employee IDs across platforms. This is vital for cleaning up payroll-system discrepancies.
+### Tab 1: Comparison Detail
+The most granular report. Each row represents a single field audit for a single employee.
+- **Columns**: `Employee ID`, `Employee Name`, `Field`, `Employment Status`, `Employment Status (Source)`, `UZIO_Value`, `SOURCE_Value`, `SOURCE_SourceOfTruth_Status`.
 
-### 3. Salaried Driver Exceptions
-A safety check for logistics clients. It flags any "Driver" job title assigned a "Salaried" pay type, as this often breaks benefit auto-sync systems.
+### Tab 2: ID Correlation (Identity Match)
+Lists employees matched via SSN who have inconsistent IDs across platforms.
+- **Usage**: Use this to identify where record IDs need to be synchronized in either system.
 
-### 4. FLSA Compliance Issues (Enhanced)
-A detailed audit of Exempt vs. Non-Exempt status.
-- **Internal Checks**: Flags "Hourly" employees marked as "Exempt" in Uzio.
-- **Cross-System Mismatches**: Flags when the FLSA status or Pay Type in Uzio does not match the source system (ADP/Paycom).
-- **Context Fallback**: Includes the **Source Department Description** as a fallback reference because source "Job Titles" are frequently blank.
+### Tab 3: Salaried Driver Exceptions
+A safety check for logistics clients.
+- **Trigger**: Job Title contains "Driver" AND Source Pay Type is "Salaried".
 
-### 5. Data Quality Issues
-Flags technically invalid data, such as `00/00/0000` placeholder dates or malformed SSNs.
+### Tab 4: FLSA Compliance Issues
+Audits Exempt vs. Non-Exempt alignment.
+- **Logic**: Checks for internal Uzio inconsistencies (Hourly/Exempt) and cross-system mismatches (Uzio Pay Type vs. Source Pay Type).
+
+### Tab 5: Data Quality Issues
+Identifies malformed data (e.g., `00/00/0000` dates) that requires manual cleanup in the source system.
 
 ---
 
-## 4. Maintenance & Extension Guide
+## 4. Understanding Audit Statuses
+
+The `SourceOfTruth_Status` column in the **Comparison Detail** tab uses specific categories to describe discrepancies:
+
+| Status | Description |
+| :--- | :--- |
+| **Data Match** | Perfect match after normalization (e.g., identical names, formatted dates, or "Hourly" vs "hourly"). |
+| **Data Mismatch** | Both systems have data, but the values are significantly different (e.g., different Birth Dates or Last Names). |
+| **Value missing in Uzio** | A value exists in the Source system (ADP/Paycom) but is blank in Uzio. |
+| **Value missing in Source** | A value exists in Uzio but is blank in the Source system. |
+| **Active in Uzio** | Marked as "Active" in Uzio but either "Terminated/Inactive" in the source or missing entirely. Suggests a missing termination in Uzio. |
+| **Terminated in Uzio** | Marked as "Terminated" in Uzio but "Active" in the source. Suggests a re-hire was processed in payroll but not updated in Uzio. |
+| **Active in Source** | Marked as "Active" in ADP/Paycom but missing from Uzio entirely. Indicates employees that need to be onboarded. |
+| **Terminated in Source** | Marked as "Terminated" in ADP/Paycom but still "Active" in Uzio. |
+| **Employee ID Not Found in Uzio** | The Source ID (even after SSN correlation checks) does not exist in the Uzio export. |
+| **Employee ID Not Found in Source** | The Uzio ID does not exist in the Source system export. |
+| **Column Missing in Sheet** | The mapping refers to a column that was not found in the uploaded file (e.g., mapping expects "Personal Email" but the file lacks it). |
+
+---
+
+## 5. Maintenance & Extension Guide
 
 ### Adding New Fields to Audit
 1. Locate the `ADP_FIELD_MAP` or `PAYCOM_FIELD_MAP` in the respective `census_audit.py`.

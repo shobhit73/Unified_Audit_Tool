@@ -121,7 +121,6 @@ with st.sidebar:
         st.markdown('<div class="provider-header">ADP Tools</div>', unsafe_allow_html=True)
         tool_option = st.radio("Select ADP Tool", [
             "ADP - Deduction Audit", 
-            "ADP - Prior Payroll Audit",
             "ADP - Census Audit",
             "ADP - Census Sanity Check",
             "ADP - Full Census Generation",
@@ -168,11 +167,6 @@ if tool_option == "ADP - Deduction Audit":
     from apps.adp import deduction_audit
     importlib.reload(deduction_audit) 
     deduction_audit.render_ui()
-    
-elif tool_option == "ADP - Prior Payroll Audit":
-    from apps.adp import prior_payroll_audit
-    importlib.reload(prior_payroll_audit)
-    prior_payroll_audit.render_ui()
 
 elif tool_option == "ADP - Census Audit":
     from apps.adp import census_audit

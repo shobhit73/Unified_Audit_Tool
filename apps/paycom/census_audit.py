@@ -727,14 +727,53 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 flsa_raw = safe_val(uzio, u_i, uzio_flsa_col)
             flsa_norm = normalize_space_and_case(flsa_raw)
 
-            # Detect invalid combinations
-            issue = ""
-            if pay_canon == "hourly" and "exempt" in flsa_norm and "non" not in flsa_norm:
-                issue = "Hourly employee classified as Exempt"
-            elif pay_canon == "salaried" and ("non-exempt" in flsa_norm or "non exempt" in flsa_norm or "nonexempt" in flsa_norm):
-                issue = "Salaried employee classified as Non-Exempt"
+            # Get Paycom values for context
+            pc_id = uz_to_pc_id_map.get(eid, eid)
+            p_i = paycom_idx.get(pc_id)
+            
+            pc_pay_type = ""
+            pc_flsa = ""
+            pc_job = ""
+            pc_dept = ""
+            uzio_job = ""
+            
+            if p_i is not None:
+                if pc_pay_type_col in paycom.columns:
+                    pc_pay_type = str(norm_blank(safe_val(paycom, p_i, pc_pay_type_col)) or "").strip()
+                if pc_flsa_col in paycom.columns:
+                    pc_flsa = str(norm_blank(safe_val(paycom, p_i, pc_flsa_col)) or "").strip()
+                if pc_job_title_col in paycom.columns:
+                    pc_job = str(norm_blank(safe_val(paycom, p_i, pc_job_title_col)) or "").strip()
+                if 'Department_Desc' in paycom.columns:
+                    pc_dept = str(norm_blank(safe_val(paycom, p_i, 'Department_Desc')) or "").strip()
+            
+            if 'Job Title' in uzio.columns:
+                uzio_job = str(norm_blank(safe_val(uzio, u_i, 'Job Title')) or "").strip()
 
-            if issue:
+            # Detect Issues
+            all_issues = []
+            
+            # 1. Internal Uzio Inconsistency
+            if pay_canon == "hourly" and "exempt" in flsa_norm and "non" not in flsa_norm:
+                all_issues.append("Hourly employee classified as Exempt (Uzio Internal)")
+            elif pay_canon == "salaried" and ("non-exempt" in flsa_norm or "non exempt" in flsa_norm or "nonexempt" in flsa_norm):
+                all_issues.append("Salaried employee classified as Non-Exempt (Uzio Internal)")
+
+            # 2. Cross-system Mismatches
+            if p_i is not None:
+                # Pay Type Mismatch
+                pc_pt_canon = canonical_pay_type(pc_pay_type)
+                uz_pt_canon = canonical_pay_type(pay_raw)
+                if uz_pt_canon != pc_pt_canon and pc_pt_canon != "":
+                    all_issues.append(f"Pay Type Mismatch (Uzio: {pay_raw} vs Paycom: {pc_pay_type})")
+                
+                # FLSA Mismatch
+                pc_flsa_canon = normalize_space_and_case(pc_flsa)
+                uz_flsa_canon = normalize_space_and_case(flsa_raw)
+                if uz_flsa_canon != pc_flsa_canon and pc_flsa_canon != "":
+                    all_issues.append(f"FLSA Mismatch (Uzio: {flsa_raw} vs Paycom: {pc_flsa})")
+
+            if all_issues:
                 # Get employee name for context
                 fname = ""
                 lname = ""
@@ -743,34 +782,6 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 if uzio_lname_col and uzio_lname_col in uzio.columns:
                     lname = str(norm_blank(uzio.loc[u_i, uzio_lname_col]) or "")
                 emp_name = f"{fname} {lname}".strip()
-
-                # Get Pay Type raw value from Uzio for display
-                pay_raw = ""
-                if uzio_pay_type_col and uzio_pay_type_col in uzio.columns:
-                    pay_raw = str(norm_blank(safe_val(uzio, u_i, uzio_pay_type_col)) or "")
-
-                # Get Paycom values for context
-                pc_id = uz_to_pc_id_map.get(eid, eid)
-                p_i = paycom_idx.get(pc_id)
-                
-                pc_pay_type = ""
-                pc_flsa = ""
-                pc_job = ""
-                pc_dept = ""
-                uzio_job = ""
-                
-                if p_i is not None:
-                    if pc_pay_type_col in paycom.columns:
-                        pc_pay_type = str(norm_blank(safe_val(paycom, p_i, pc_pay_type_col)) or "").strip()
-                    if pc_flsa_col in paycom.columns:
-                        pc_flsa = str(norm_blank(safe_val(paycom, p_i, pc_flsa_col)) or "").strip()
-                    if pc_job_title_col in paycom.columns:
-                        pc_job = str(norm_blank(safe_val(paycom, p_i, pc_job_title_col)) or "").strip()
-                    if 'Department_Desc' in paycom.columns:
-                        pc_dept = str(norm_blank(safe_val(paycom, p_i, 'Department_Desc')) or "").strip()
-                
-                if 'Job Title' in uzio.columns:
-                    uzio_job = str(norm_blank(safe_val(uzio, u_i, 'Job Title')) or "").strip()
 
                 flsa_rows.append({
                     "Employee ID": display_id_map.get(eid, eid),
@@ -782,7 +793,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                     "Job Title (Uzio)": uzio_job,
                     "Job Title (Paycom)": pc_job,
                     "Department (Paycom)": pc_dept,
-                    "Issue": issue,
+                    "Issue": "; ".join(all_issues),
                 })
 
     flsa_issues = pd.DataFrame(flsa_rows, columns=[

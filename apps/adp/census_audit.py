@@ -939,14 +939,53 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             flsa_raw = uzio_idx.at[emp_id, uzio_flsa_col] if uzio_flsa_col in uzio_idx.columns else ""
             flsa_norm = normalize_paytype_text(flsa_raw)  # reuse: lowercases & strips
 
-            # Detect invalid combinations
-            issue = ""
-            if pay_bucket == "hourly" and "exempt" in flsa_norm and "non" not in flsa_norm:
-                issue = "Hourly employee classified as Exempt"
-            elif pay_bucket == "salaried" and ("non-exempt" in flsa_norm or "non exempt" in flsa_norm or "nonexempt" in flsa_norm):
-                issue = "Salaried employee classified as Non-Exempt"
+            # Get ADP values for context
+            adp_id = uz_to_adp_id_map.get(emp_id, emp_id)
+            adp_exists = adp_id in adp_idx.index
+            
+            adp_pay_type = ""
+            adp_flsa = ""
+            adp_job = ""
+            adp_dept = ""
+            uzio_job = ""
+            
+            if adp_exists:
+                if adp_pay_type_col in adp_idx.columns:
+                    adp_pay_type = str(norm_blank(adp_idx.at[adp_id, adp_pay_type_col]) or "").strip()
+                if adp_flsa_col in adp_idx.columns:
+                    adp_flsa = str(norm_blank(adp_idx.at[adp_id, adp_flsa_col]) or "").strip()
+                if adp_job_title_col in adp_idx.columns:
+                    adp_job = str(norm_blank(adp_idx.at[adp_id, adp_job_title_col]) or "").strip()
+                if 'Department Description' in adp_idx.columns:
+                    adp_dept = str(norm_blank(adp_idx.at[adp_id, 'Department Description']) or "").strip()
+            
+            if 'Job Title' in uzio_idx.columns:
+                uzio_job = str(norm_blank(uzio_idx.at[emp_id, 'Job Title']) or "").strip()
 
-            if issue:
+            # Detect Issues
+            all_issues = []
+            
+            # 1. Internal Uzio Inconsistency
+            if pay_bucket == "hourly" and "exempt" in flsa_norm and "non" not in flsa_norm:
+                all_issues.append("Hourly employee classified as Exempt (Uzio Internal)")
+            elif pay_bucket == "salaried" and ("non-exempt" in flsa_norm or "non exempt" in flsa_norm or "nonexempt" in flsa_norm):
+                all_issues.append("Salaried employee classified as Non-Exempt (Uzio Internal)")
+
+            # 2. Cross-system Mismatches
+            if adp_exists:
+                # Pay Type Mismatch
+                uz_pt_canon = normalize_paytype_for_compare(uz_pay_raw)
+                adp_pt_canon = normalize_paytype_for_compare(adp_pay_type)
+                if uz_pt_canon != adp_pt_canon and adp_pt_canon != "":
+                    all_issues.append(f"Pay Type Mismatch (Uzio: {uz_pay_raw} vs ADP: {adp_pay_type})")
+                
+                # FLSA Mismatch
+                uz_flsa_canon = normalize_paytype_text(flsa_raw)
+                adp_flsa_canon = normalize_paytype_text(adp_flsa)
+                if uz_flsa_canon != adp_flsa_canon and adp_flsa_canon != "":
+                    all_issues.append(f"FLSA Mismatch (Uzio: {flsa_raw} vs ADP: {adp_flsa})")
+
+            if all_issues:
                 # Get employee name for context
                 fname = ""
                 lname = ""
@@ -955,29 +994,6 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                 if uzio_lname_col and uzio_lname_col in uzio_idx.columns:
                     lname = str(norm_blank(uzio_idx.at[emp_id, uzio_lname_col]) or "")
                 emp_name = f"{fname} {lname}".strip()
-
-                # Get ADP values for context
-                adp_id = uz_to_adp_id_map.get(emp_id, emp_id)
-                adp_exists = adp_id in adp_idx.index
-                
-                adp_pay_type = ""
-                adp_flsa = ""
-                adp_job = ""
-                adp_dept = ""
-                uzio_job = ""
-                
-                if adp_exists:
-                    if adp_pay_type_col in adp_idx.columns:
-                        adp_pay_type = str(norm_blank(adp_idx.at[adp_id, adp_pay_type_col]) or "").strip()
-                    if adp_flsa_col in adp_idx.columns:
-                        adp_flsa = str(norm_blank(adp_idx.at[adp_id, adp_flsa_col]) or "").strip()
-                    if adp_job_title_col in adp_idx.columns:
-                        adp_job = str(norm_blank(adp_idx.at[adp_id, adp_job_title_col]) or "").strip()
-                    if 'Department Description' in adp_idx.columns:
-                        adp_dept = str(norm_blank(adp_idx.at[adp_id, 'Department Description']) or "").strip()
-                
-                if 'Job Title' in uzio_idx.columns:
-                    uzio_job = str(norm_blank(uzio_idx.at[emp_id, 'Job Title']) or "").strip()
 
                 flsa_rows.append({
                     "Employee ID": emp_id,
@@ -989,7 +1005,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                     "Job Title (Uzio)": uzio_job,
                     "Job Title (ADP)": adp_job,
                     "Department (ADP)": adp_dept,
-                    "Issue": issue,
+                    "Issue": "; ".join(all_issues),
                 })
 
     flsa_issues = pd.DataFrame(flsa_rows, columns=[

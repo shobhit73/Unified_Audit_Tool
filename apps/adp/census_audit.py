@@ -956,17 +956,44 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                     lname = str(norm_blank(uzio_idx.at[emp_id, uzio_lname_col]) or "")
                 emp_name = f"{fname} {lname}".strip()
 
+                # Get ADP values for context
+                adp_id = uz_to_adp_id_map.get(emp_id, emp_id)
+                adp_exists = adp_id in adp_idx.index
+                
+                adp_pay_type = ""
+                adp_flsa = ""
+                adp_job = ""
+                uzio_job = ""
+                
+                if adp_exists:
+                    if adp_pay_type_col in adp_idx.columns:
+                        adp_pay_type = str(norm_blank(adp_idx.at[adp_id, adp_pay_type_col]) or "").strip()
+                    if adp_flsa_col in adp_idx.columns:
+                        adp_flsa = str(norm_blank(adp_idx.at[adp_id, adp_flsa_col]) or "").strip()
+                    if adp_job_title_col in adp_idx.columns:
+                        adp_job = str(norm_blank(adp_idx.at[adp_id, adp_job_title_col]) or "").strip()
+                
+                if 'Job Title' in uzio_idx.columns:
+                    uzio_job = str(norm_blank(uzio_idx.at[emp_id, 'Job Title']) or "").strip()
+
                 flsa_rows.append({
                     "Employee ID": emp_id,
                     "Employee Name": emp_name,
                     "Pay Type (Uzio)": str(norm_blank(uz_pay_raw) or ""),
+                    "Pay Type (ADP)": adp_pay_type,
                     "FLSA Classification (Uzio)": str(norm_blank(flsa_raw) or ""),
+                    "FLSA Classification (ADP)": adp_flsa,
+                    "Job Title (Uzio)": uzio_job,
+                    "Job Title (ADP)": adp_job,
                     "Issue": issue,
                 })
 
     flsa_issues = pd.DataFrame(flsa_rows, columns=[
-        "Employee ID", "Employee Name", "Pay Type (Uzio)",
-        "FLSA Classification (Uzio)", "Issue"
+        "Employee ID", "Employee Name", 
+        "Pay Type (Uzio)", "Pay Type (ADP)",
+        "FLSA Classification (Uzio)", "FLSA Classification (ADP)",
+        "Job Title (Uzio)", "Job Title (ADP)",
+        "Issue"
     ])
 
     # ---------- Data Quality Issues (00/00/0000 dates) ----------

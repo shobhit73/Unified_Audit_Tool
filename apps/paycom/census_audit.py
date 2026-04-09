@@ -749,17 +749,44 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 if uzio_pay_type_col and uzio_pay_type_col in uzio.columns:
                     pay_raw = str(norm_blank(safe_val(uzio, u_i, uzio_pay_type_col)) or "")
 
+                # Get Paycom values for context
+                pc_id = uz_to_pc_id_map.get(eid, eid)
+                p_i = paycom_idx.get(pc_id)
+                
+                pc_pay_type = ""
+                pc_flsa = ""
+                pc_job = ""
+                uzio_job = ""
+                
+                if p_i is not None:
+                    if pc_pay_type_col in paycom.columns:
+                        pc_pay_type = str(norm_blank(safe_val(paycom, p_i, pc_pay_type_col)) or "").strip()
+                    if pc_flsa_col in paycom.columns:
+                        pc_flsa = str(norm_blank(safe_val(paycom, p_i, pc_flsa_col)) or "").strip()
+                    if pc_job_title_col in paycom.columns:
+                        pc_job = str(norm_blank(safe_val(paycom, p_i, pc_job_title_col)) or "").strip()
+                
+                if 'Job Title' in uzio.columns:
+                    uzio_job = str(norm_blank(safe_val(uzio, u_i, 'Job Title')) or "").strip()
+
                 flsa_rows.append({
                     "Employee ID": display_id_map.get(eid, eid),
                     "Employee Name": emp_name,
                     "Pay Type (Uzio)": pay_raw,
+                    "Pay Type (Paycom)": pc_pay_type,
                     "FLSA Classification (Uzio)": str(norm_blank(flsa_raw) or ""),
+                    "FLSA Classification (Paycom)": pc_flsa,
+                    "Job Title (Uzio)": uzio_job,
+                    "Job Title (Paycom)": pc_job,
                     "Issue": issue,
                 })
 
     flsa_issues = pd.DataFrame(flsa_rows, columns=[
-        "Employee ID", "Employee Name", "Pay Type (Uzio)",
-        "FLSA Classification (Uzio)", "Issue"
+        "Employee ID", "Employee Name", 
+        "Pay Type (Uzio)", "Pay Type (Paycom)",
+        "FLSA Classification (Uzio)", "FLSA Classification (Paycom)",
+        "Job Title (Uzio)", "Job Title (Paycom)",
+        "Issue"
     ])
 
     # ---------- Data Quality Issues (00/00/0000 dates) ----------

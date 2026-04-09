@@ -963,7 +963,9 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                 adp_pay_type = ""
                 adp_flsa = ""
                 adp_job = ""
+                adp_dept = ""
                 uzio_job = ""
+                uzio_dept = ""
                 
                 if adp_exists:
                     if adp_pay_type_col in adp_idx.columns:
@@ -972,9 +974,13 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                         adp_flsa = str(norm_blank(adp_idx.at[adp_id, adp_flsa_col]) or "").strip()
                     if adp_job_title_col in adp_idx.columns:
                         adp_job = str(norm_blank(adp_idx.at[adp_id, adp_job_title_col]) or "").strip()
+                    if 'Department Description' in adp_idx.columns:
+                        adp_dept = str(norm_blank(adp_idx.at[adp_id, 'Department Description']) or "").strip()
                 
                 if 'Job Title' in uzio_idx.columns:
                     uzio_job = str(norm_blank(uzio_idx.at[emp_id, 'Job Title']) or "").strip()
+                if 'Department' in uzio_idx.columns:
+                    uzio_dept = str(norm_blank(uzio_idx.at[emp_id, 'Department']) or "").strip()
 
                 flsa_rows.append({
                     "Employee ID": emp_id,
@@ -985,6 +991,8 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                     "FLSA Classification (ADP)": adp_flsa,
                     "Job Title (Uzio)": uzio_job,
                     "Job Title (ADP)": adp_job,
+                    "Department (Uzio)": uzio_dept,
+                    "Department (ADP)": adp_dept,
                     "Issue": issue,
                 })
 
@@ -993,6 +1001,7 @@ def run_comparison(uzio_file, adp_file) -> bytes:
         "Pay Type (Uzio)", "Pay Type (ADP)",
         "FLSA Classification (Uzio)", "FLSA Classification (ADP)",
         "Job Title (Uzio)", "Job Title (ADP)",
+        "Department (Uzio)", "Department (ADP)",
         "Issue"
     ])
 

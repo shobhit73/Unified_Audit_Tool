@@ -289,5 +289,5 @@ def render_ui():
             )
 
 if __name__ == "__main__":
-    st.set_page_config(page_title="Total Comparison Tool", layout="wide")
+    st.set_page_config(page_title="Prior Payroll Audit Tool", layout="wide")
     render_ui()

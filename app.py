@@ -131,7 +131,7 @@ with st.sidebar:
             "ADP - Withholding Audit",
             "ADP - Time Off Tool",
             "ADP - License Details Audit",
-            "ADP - Total Comparison"
+            "ADP - Prior Payroll Audit"
         ], index=0, label_visibility="collapsed")
         
     elif provider == "Paycom":
@@ -213,10 +213,10 @@ elif tool_option == "ADP - License Details Audit":
     importlib.reload(license_audit)
     license_audit.render_ui()
 
-elif tool_option == "ADP - Total Comparison":
-    from apps.adp import total_comparison
-    importlib.reload(total_comparison)
-    total_comparison.render_ui()
+elif tool_option == "ADP - Prior Payroll Audit":
+    from apps.adp import prior_payroll_audit
+    importlib.reload(prior_payroll_audit)
+    prior_payroll_audit.render_ui()
 
 elif tool_option == "Paycom - Census Audit":
     from apps.paycom import census_audit

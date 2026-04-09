@@ -758,7 +758,6 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 pc_job = ""
                 pc_dept = ""
                 uzio_job = ""
-                uzio_dept = ""
                 
                 if p_i is not None:
                     if pc_pay_type_col in paycom.columns:
@@ -772,8 +771,6 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                 
                 if 'Job Title' in uzio.columns:
                     uzio_job = str(norm_blank(safe_val(uzio, u_i, 'Job Title')) or "").strip()
-                if 'Department' in uzio.columns:
-                    uzio_dept = str(norm_blank(safe_val(uzio, u_i, 'Department')) or "").strip()
 
                 flsa_rows.append({
                     "Employee ID": display_id_map.get(eid, eid),
@@ -784,7 +781,6 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
                     "FLSA Classification (Paycom)": pc_flsa,
                     "Job Title (Uzio)": uzio_job,
                     "Job Title (Paycom)": pc_job,
-                    "Department (Uzio)": uzio_dept,
                     "Department (Paycom)": pc_dept,
                     "Issue": issue,
                 })
@@ -794,7 +790,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
         "Pay Type (Uzio)", "Pay Type (Paycom)",
         "FLSA Classification (Uzio)", "FLSA Classification (Paycom)",
         "Job Title (Uzio)", "Job Title (Paycom)",
-        "Department (Uzio)", "Department (Paycom)",
+        "Department (Paycom)",
         "Issue"
     ])
 

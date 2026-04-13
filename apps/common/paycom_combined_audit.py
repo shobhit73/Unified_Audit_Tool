@@ -60,7 +60,7 @@ def read_uzio_master(file):
     # Read first two rows to build combined headers
     df_headers = pd.read_csv(io.StringIO(file.getvalue().decode('utf-8', errors='replace')), nrows=2, header=None)
     
-    row1 = df_headers.iloc[0].fillna(method='ffill').tolist() # Categories
+    row1 = df_headers.iloc[0].ffill().tolist() # Categories
     row2 = df_headers.iloc[1].fillna('').tolist() # Headers
     
     # Combined headers for easy lookup

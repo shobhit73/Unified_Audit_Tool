@@ -718,7 +718,10 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
     flsa_rows = []
     if uzio_flsa_col is not None:
         for eid, u_i in uzio_idx.items():
-            # Get Pay Type from Uzio
+            # Get Pay Type from Uzio (raw value for display, canonical for comparison)
+            pay_raw = ""
+            if uzio_pay_type_col in uzio.columns:
+                pay_raw = str(norm_blank(safe_val(uzio, u_i, uzio_pay_type_col)) or "").strip()
             pay_canon = pay_type_map.get(eid, "")
 
             # Get FLSA Classification from Uzio
@@ -763,8 +766,7 @@ def run_comparison(uzio_file, paycom_file) -> bytes:
             if p_i is not None:
                 # Pay Type Mismatch
                 pc_pt_canon = canonical_pay_type(pc_pay_type)
-                uz_pt_canon = canonical_pay_type(pay_raw)
-                if uz_pt_canon != pc_pt_canon and pc_pt_canon != "":
+                if pay_canon != pc_pt_canon and pc_pt_canon != "":
                     all_issues.append(f"Pay Type Mismatch (Uzio: {pay_raw} vs Paycom: {pc_pay_type})")
                 
                 # FLSA Mismatch

@@ -133,6 +133,9 @@ def render_employee_extractor():
         st.warning("Please select at least one column.")
         return
 
+    # 4b. INCLUSION OPTIONS
+    include_remaining = st.checkbox("Include remaining Source employees in a separate tab?", value=False, help="If checked, employees in the source but NOT in the reference will be added to Sheet 2.")
+
     # 5. DEFINE SEQUENCE
     st.markdown("---")
     st.markdown("### 3. Define Employee Sequence")
@@ -208,61 +211,64 @@ def render_employee_extractor():
         st.info("Waiting for Reference File or Manual ID list to define the sequence...")
         return
 
-    # 6. EXTRACTION LOGIC — 3-Level Progressive Matching
+    # 6. EXTRACTION LOGIC — 3-Level Progressive Matching with Placeholders
     df_source[id_col_source] = df_source[id_col_source].astype(str).str.strip()
     source_id_set = set(df_source[id_col_source].tolist())
     
     # Build Level 2 & Level 3 lookup indexes: normalized -> [list of original source IDs]
     from collections import defaultdict
-    l2_index = defaultdict(set)  # separator-stripped -> original IDs
+    l2_index = defaultdict(set)  # separator_stripped -> original IDs
     l3_index = defaultdict(set)  # fully-stripped -> original IDs
     for sid in source_id_set:
         l2_index[_strip_separators(sid)].add(sid)
         l3_index[_strip_all(sid)].add(sid)
     
     # Process each user-entered ID through 3 levels
-    matched_source_ids = []  # Original source IDs that matched
+    tab1_frames = []         # DataFrames to concat for Tab 1
+    ids_matched_in_source = set() # To identify leftovers
     collision_alerts = []    # IDs that had collisions
     unmatched_ids = []       # IDs that could not be matched
-    input_to_pos = {}        # matched_source_id -> sequence position
     
     for pos, user_id in enumerate(ordered_ids):
         user_id_clean = user_id.strip()
+        matched_orig_id = None
         
         # LEVEL 1: Exact Match
         if user_id_clean in source_id_set:
-            matched_source_ids.append(user_id_clean)
-            input_to_pos[user_id_clean] = pos
-            continue
+            matched_orig_id = user_id_clean
+        else:
+            # LEVEL 2: Strip Hyphens/Spaces
+            l2_key = _strip_separators(user_id_clean)
+            l2_candidates = l2_index.get(l2_key, set())
+            if len(l2_candidates) == 1:
+                matched_orig_id = list(l2_candidates)[0]
+            elif len(l2_candidates) > 1:
+                collision_alerts.append((user_id_clean, 'hyphens/spaces', l2_candidates))
+                continue
+            else:
+                # LEVEL 3: Strip Leading Zeros
+                l3_key = _strip_all(user_id_clean)
+                l3_candidates = l3_index.get(l3_key, set())
+                if len(l3_candidates) == 1:
+                    matched_orig_id = list(l3_candidates)[0]
+                elif len(l3_candidates) > 1:
+                    collision_alerts.append((user_id_clean, 'leading zeros', l3_candidates))
+                    continue
         
-        # LEVEL 2: Strip Hyphens/Spaces
-        l2_key = _strip_separators(user_id_clean)
-        l2_candidates = l2_index.get(l2_key, set())
-        if len(l2_candidates) == 1:
-            orig_id = list(l2_candidates)[0]
-            matched_source_ids.append(orig_id)
-            input_to_pos[orig_id] = pos
-            continue
-        elif len(l2_candidates) > 1:
-            # Collision at Level 2 — multiple source IDs normalize to same value
-            collision_alerts.append((user_id_clean, 'hyphens/spaces', l2_candidates))
-            continue
-        
-        # LEVEL 3: Strip Leading Zeros
-        l3_key = _strip_all(user_id_clean)
-        l3_candidates = l3_index.get(l3_key, set())
-        if len(l3_candidates) == 1:
-            orig_id = list(l3_candidates)[0]
-            matched_source_ids.append(orig_id)
-            input_to_pos[orig_id] = pos
-            continue
-        elif len(l3_candidates) > 1:
-            # Collision at Level 3 — multiple source IDs normalize to same value
-            collision_alerts.append((user_id_clean, 'leading zeros', l3_candidates))
-            continue
-        
-        # No match at any level
-        unmatched_ids.append(user_id_clean)
+        if matched_orig_id:
+            # Found in source — pull all matching rows
+            matching_rows = df_source[df_source[id_col_source] == matched_orig_id].copy()
+            tab1_frames.append(matching_rows)
+            ids_matched_in_source.add(matched_orig_id)
+        else:
+            # Placeholder row for unmatched Reference ID
+            placeholder_data = {col: "" for col in df_source.columns}
+            placeholder_data[id_col_source] = user_id_clean
+            tab1_frames.append(pd.DataFrame([placeholder_data]))
+            unmatched_ids.append(user_id_clean)
+    
+    # Leftovers for Tab 2
+    df_remaining = df_source[~df_source[id_col_source].isin(ids_matched_in_source)].copy()
     
     # --- COLLISION ALERTS ---
     if collision_alerts:
@@ -285,11 +291,8 @@ def render_employee_extractor():
         with st.expander(f"🔻 {len(unmatched_ids)} ID(s) not found in source at any level", expanded=False):
             st.dataframe(pd.DataFrame({"Unmatched ID": unmatched_ids}), hide_index=True, use_container_width=True)
     
-    # Filter and Sort using matched source IDs
-    matched_set = set(matched_source_ids)
-    df_result = df_source[df_source[id_col_source].isin(matched_set)].copy()
-    df_result['sort_key'] = df_result[id_col_source].map(input_to_pos)
-    df_result = df_result.sort_values('sort_key').drop(columns=['sort_key'])
+    # Build df_result from frames
+    df_result = pd.concat(tab1_frames, ignore_index=True) if tab1_frames else pd.DataFrame(columns=df_source.columns)
     
     # Final column subset
     df_result = df_result[selected_cols]
@@ -313,6 +316,15 @@ def render_employee_extractor():
     if 'Issued By' in df_result.columns:
         df_result = convert_state_to_abbreviation(df_result, 'Issued By')
 
+    # Apply formatting and columns to remaining employees
+    df_remaining_out = pd.DataFrame()
+    if include_remaining and not df_remaining.empty:
+        df_remaining_out = df_remaining[selected_cols].copy()
+        if date_like_cols:
+            df_remaining_out = format_datetime_strings(df_remaining_out, date_like_cols)
+        if 'Issued By' in df_remaining_out.columns:
+            df_remaining_out = convert_state_to_abbreviation(df_remaining_out, 'Issued By')
+
     # 8. RESULTS & DOWNLOAD
     st.markdown("---")
     if df_result.empty:
@@ -324,7 +336,10 @@ def render_employee_extractor():
         col1, col2 = st.columns(2)
         # Excel
         buffer_xlsx = io.BytesIO()
-        df_result.to_excel(buffer_xlsx, index=False)
+        with pd.ExcelWriter(buffer_xlsx, engine='openpyxl') as writer:
+            df_result.to_excel(writer, index=False, sheet_name="Sync Result")
+            if include_remaining and not df_remaining_out.empty:
+                df_remaining_out.to_excel(writer, index=False, sheet_name="Remaining IDs")
         buffer_xlsx.seek(0)
         col1.download_button("📥 Download Excel", buffer_xlsx.getvalue(), f"Selective_Census_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         

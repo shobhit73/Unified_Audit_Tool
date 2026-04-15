@@ -233,7 +233,7 @@ def run_comparison(paycom_files, uzio_file, mappings):
             df_p, _, _ = find_header_and_data_paycom(p_file)
             paycom_data_list.append((df_p, p_file.name))
     except Exception as e:
-        return None, f"Error reading payroll files: {e}"
+        return None, None, f"Error reading payroll files: {e}"
 
     results = []
     employee_mismatches = []
@@ -334,7 +334,7 @@ def run_comparison(paycom_files, uzio_file, mappings):
                 column_len = max(curr_df[col].astype(str).map(len).max() if not curr_df.empty else 10, len(col)) + 2
                 sheet.set_column(i, i, min(column_len, 50))
 
-    return df_results, out_buffer.getvalue()
+    return df_results, df_emp_mismatches, out_buffer.getvalue()
 
 def render_ui():
     st.title("Paycom - Prior Payroll Audit Tool")
@@ -351,7 +351,15 @@ def render_ui():
     with st.expander("📁 Upload Payroll Reports", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
-            paycom_files = st.file_uploader("Upload Paycom Prior Payroll File(s)", type=["xlsx", "xls"], accept_multiple_files=True, key="pc_tc_paycom")
+            paycom_files = st.file_uploader(
+                "Upload Paycom Prior Payroll File(s)",
+                type=["xlsx", "xls"],
+                accept_multiple_files=True,
+                key="pc_tc_paycom",
+                help="Select one or more Paycom files (e.g. Priorpayroll_MMDDYYYY_MMDDYYYY_MMDDYYYY.xlsx)"
+            )
+            if paycom_files:
+                st.caption(f"✅ {len(paycom_files)} Paycom file(s) uploaded: {', '.join(f.name for f in paycom_files)}")
         with col2:
             uzio_file = st.file_uploader("Upload UZIO Prior Payroll Register", type=["xlsx", "xls"], key="pc_tc_uzio")
 
@@ -366,6 +374,8 @@ def render_ui():
 
     if "pc_audit_results" not in st.session_state:
         st.session_state.pc_audit_results = None
+    if "pc_audit_emp_mismatches" not in st.session_state:
+        st.session_state.pc_audit_emp_mismatches = None
     if "pc_audit_report" not in st.session_state:
         st.session_state.pc_audit_report = None
 
@@ -382,30 +392,54 @@ def render_ui():
                     st.error("No mappings could be loaded from the mapping files. Please check the column headers.")
                     return
 
-                res_df, report_data = run_comparison(paycom_files, uzio_file, all_mappings)
+                res_df, emp_mismatch_df, report_data = run_comparison(paycom_files, uzio_file, all_mappings)
                 if res_df is not None:
                     st.session_state.pc_audit_results = res_df
+                    st.session_state.pc_audit_emp_mismatches = emp_mismatch_df
                     st.session_state.pc_audit_report = report_data
                 else:
                     st.error(f"Failed to generate results. Error: {report_data}")
 
         if st.session_state.pc_audit_results is not None:
             results_df = st.session_state.pc_audit_results
+            emp_mismatch_df = st.session_state.pc_audit_emp_mismatches
             report_data = st.session_state.pc_audit_report
             
             st.success("Comparison completed!")
             matches = len(results_df[results_df["Status"] == "Match"])
             mismatches = len(results_df[results_df["Status"] == "Mismatch"])
+            emp_mismatch_count = len(emp_mismatch_df["Associate ID"].unique()) if emp_mismatch_df is not None and not emp_mismatch_df.empty else 0
             
-            m1, m2, m3 = st.columns(3)
+            m1, m2, m3, m4 = st.columns(4)
             m1.metric("Total Items", len(results_df))
             m2.metric("Matches", matches)
             m3.metric("Mismatches", mismatches, delta=mismatches if mismatches > 0 else None, delta_color="inverse")
+            m4.metric("Employees with Discrepancies", emp_mismatch_count, delta=emp_mismatch_count if emp_mismatch_count > 0 else None, delta_color="inverse")
             
             st.subheader("Comparison Results")
             def color_status(val):
                 return 'color: green' if val == 'Match' else 'color: red'
             st.dataframe(results_df.style.map(color_status, subset=['Status']), use_container_width=True)
+
+            # --- Employee-level mismatch drill-down ---
+            if emp_mismatch_df is not None and not emp_mismatch_df.empty:
+                with st.expander(f"🔍 Employee-Level Mismatches ({emp_mismatch_count} employee(s) affected)", expanded=True):
+                    st.markdown("""
+                    The table below shows employees where Paycom and UZIO totals do **not** match,  
+                    broken down by **Associate ID → UZIO Item → Pay Date** for easy identification.
+                    """)
+                    def color_diff(val):
+                        try:
+                            return 'color: red' if float(val) != 0 else 'color: green'
+                        except:
+                            return ''
+                    st.dataframe(
+                        emp_mismatch_df.sort_values(["Associate ID", "UZIO Item", "Pay Date"])
+                                       .style.map(color_diff, subset=["Difference"]),
+                        use_container_width=True
+                    )
+            else:
+                st.info("✅ No employee-level discrepancies found across all pay periods.")
             
             st.download_button(
                 label="Download Full Comparison Report",

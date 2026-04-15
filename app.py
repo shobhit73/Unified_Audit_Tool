@@ -146,7 +146,8 @@ with st.sidebar:
             "Paycom - Payment Audit",
             "Paycom - Deduction Audit",
             "Paycom - Emergency Contact Audit",
-            "Paycom - Time Off Tool"
+            "Paycom - Time Off Tool",
+            "Paycom - Prior Payroll Audit Tool"
         ], index=0, label_visibility="collapsed")
         
     elif provider == "Common Utilities":
@@ -277,6 +278,11 @@ elif tool_option == "Paycom - Time Off Tool":
     from apps.paycom import timeoff_audit
     importlib.reload(timeoff_audit)
     timeoff_audit.render_ui()
+
+elif tool_option == "Paycom - Prior Payroll Audit Tool":
+    from apps.paycom import total_comparison
+    importlib.reload(total_comparison)
+    total_comparison.render_ui()
 
 elif tool_option == "Selective Employee Extractor":
     from apps.common import employee_extractor

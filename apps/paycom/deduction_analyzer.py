@@ -1,12 +1,11 @@
+
 import io
 import re
 from datetime import datetime
-from typing import Optional
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-
 
 # st.set_page_config(page_title="Deduction Analyzer", layout="wide")
 
@@ -37,9 +36,6 @@ def yes_no(val) -> str:
 
 
 def is_open_ended_date(val) -> bool:
-    """Treat dates like 00/00/0000, 0/0/0000, 0000, blank-zero hybrids as open-ended.
-    If any zero-date pattern is present, we treat the deduction as running/open.
-    """
     if pd.isna(val):
         return False
     s = str(val).strip()
@@ -71,9 +67,6 @@ def parse_date_safe(val) -> pd.Timestamp:
 
 
 def classify_item(type_code: str, description: str) -> str:
-    """Operational classification for UZIO setup.
-    You can tweak this later to match your business rules.
-    """
     code = upper_clean(type_code)
     desc = upper_clean(description)
 
@@ -88,7 +81,7 @@ def classify_item(type_code: str, description: str) -> str:
         "HEALTHCUES", "REIMBURSE", "OVERPAYMENT",
     ]
 
-    # Special handling for NY items based on your setup context.
+    # Per your working setup choice, keep these separate from normal deductions.
     if code in {"NSD", "PFL"} or desc in {"NEW YORK SDI", "NY PAID FAMILY LEAVE"}:
         return "Tax / Statutory Payroll Item"
 
@@ -136,6 +129,16 @@ def map_presence(in_sched: bool, in_prior: bool) -> str:
     return "Not Found"
 
 
+def setup_relevance(classification: str) -> str:
+    if classification == "Deduction":
+        return "Deduction Setup Needed"
+    if classification == "Contribution":
+        return "Contribution Setup Needed"
+    if classification == "Tax / Statutory Payroll Item":
+        return "Tax Handling Needed"
+    return "Review"
+
+
 def recommend_action(row, analysis_year: int) -> str:
     active = row.get("Active Employee Count", 0) or 0
     terminated = row.get("Terminated Employee Count", 0) or 0
@@ -144,7 +147,8 @@ def recommend_action(row, analysis_year: int) -> str:
     payroll_presence = row.get("Found in Prior Payroll", "No") == "Yes"
     zero_flag = row.get("All Rows Zero Amount/Percent?", "No") == "Yes"
     latest_stop = row.get("Latest Actual Stop Date Parsed")
-    setup_relevance = row.get("Setup Relevance", "")
+    setup_needed = row.get("Setup Relevance", "")
+    family_possible = row.get("Family Consolidation Possible", "")
 
     if classification == "Contribution":
         return "Review - Contribution"
@@ -156,21 +160,42 @@ def recommend_action(row, analysis_year: int) -> str:
         return "Remove Candidate"
     if pd.notna(latest_stop) and latest_stop < pd.Timestamp(f"{analysis_year}-01-01") and active == 0:
         return "Remove Candidate"
-    if payroll_presence and setup_relevance == "Deduction Setup Needed":
+    if payroll_presence and setup_needed == "Deduction Setup Needed":
         return "Keep"
     if zero_flag and active == 0 and terminated == 0:
         return "Review"
+    if family_possible == "No":
+        return "Keep"
     return "Review"
 
 
-def setup_relevance(classification: str) -> str:
-    if classification == "Deduction":
-        return "Deduction Setup Needed"
-    if classification == "Contribution":
-        return "Contribution Setup Needed"
-    if classification == "Tax / Statutory Payroll Item":
-        return "Tax Handling Needed"
-    return "Review"
+def get_deduction_family(type_code: str, description: str) -> str:
+    code = upper_clean(type_code)
+    desc = upper_clean(description)
+
+    if code in {"MDC", "MC1", "MC2", "MC3", "MC4"} or desc.startswith("MEDICAL"):
+        return "Medical"
+    if code in {"DEN", "DEN1", "DEN2", "DEN3", "DEN4"} or desc.startswith("DENTAL"):
+        return "Dental"
+    if code in {"VIS", "VIS1", "VIS2", "VIS3", "VIS4"} or desc.startswith("VISION"):
+        return "Vision"
+    if code in {"CS1", "CS2", "CS3", "CS4", "SO1", "SO2", "SO3"} or "SUPPORT ORDER" in desc:
+        return "Support Order"
+    if code in {"K4P", "R4P"} or "401K" in desc or "ROTH 401K" in desc:
+        return "401K / Retirement"
+    if code.startswith("LN") or "LOAN" in desc:
+        return "Loan"
+    if "GARNISH" in desc or "TAX LEVY" in desc or "WAGE ASSIGN" in desc or "CHILD SUPPORT" in desc:
+        return "Garnishment / Levy"
+    if "AD&D" in desc:
+        return "AD&D"
+    if desc == "STD":
+        return "STD"
+    if "VOL EE LIFE" in desc or "LIFE" in desc:
+        return "Life"
+    if code in {"NSD", "PFL"} or desc in {"NEW YORK SDI", "NY PAID FAMILY LEAVE"}:
+        return "Statutory NY Items"
+    return "Standalone / Review"
 
 
 # -----------------------------
@@ -201,6 +226,7 @@ def build_scheduled_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
     work["Open Date Flag"] = work["Start Open"] | work["Stop Open"]
     work["Start Date Parsed"] = work["Start Date"].apply(parse_date_safe)
     work["Stop Date Parsed"] = work["Stop Date"].apply(parse_date_safe)
+    work["Deduction Family"] = work.apply(lambda r: get_deduction_family(r["Deduction Code"], r["Deduction Desc"]), axis=1)
 
     group_cols = ["Deduction Code", "Deduction Desc"]
 
@@ -227,8 +253,10 @@ def build_scheduled_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
 
         latest_stop_parsed = actual_rows["Stop Date Parsed"].dropna().max() if not actual_rows.empty else pd.NaT
         earliest_start_parsed = actual_rows["Start Date Parsed"].dropna().min() if not actual_rows.empty else pd.NaT
+        family = g["Deduction Family"].mode().iloc[0] if not g["Deduction Family"].dropna().empty else "Standalone / Review"
 
         return pd.Series({
+            "Deduction Family": family,
             "Memo Only": memo_out,
             "Running Flag": "Yes" if running else "No",
             "Date Classification": "Running Deduction" if running else "Actual Dated Deduction",
@@ -265,8 +293,8 @@ def build_prior_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     work["Type Code"] = work["Type Code"].map(norm_text)
     work["Type Description"] = work["Type Description"].map(norm_text)
     work["Amount_num"] = pd.to_numeric(work["Amount"], errors="coerce").fillna(0)
+    work["Deduction Family"] = work.apply(lambda r: get_deduction_family(r["Type Code"], r["Type Description"]), axis=1)
 
-    # Filter out obvious non-deduction lines. Keep taxes/contributions because they help the analysis.
     excluded_desc = {
         "REGULAR", "BONUS (HOURS)", "PTO", "PAID TIME OFF", "NET CHECK",
         "NET DISTRIBUTION 1", "NET DISTRIBUTION 2", "RETRO REGULAR PAY"
@@ -280,6 +308,7 @@ def build_prior_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
             Prior_Payroll_Distinct_Employees=("EE Code", "nunique"),
             Prior_Payroll_Total_Amount=("Amount_num", "sum"),
             Prior_Payroll_NonZero_Row_Count=("Amount_num", lambda s: int(s.ne(0).sum())),
+            Prior_Deduction_Family=("Deduction Family", lambda s: s.mode().iloc[0] if not s.mode().empty else "Standalone / Review"),
         )
         .reset_index()
         .rename(columns={"Type Code": "Deduction Code", "Type Description": "Deduction Desc"})
@@ -288,10 +317,92 @@ def build_prior_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 # -----------------------------
+# Family overlap analysis
+# -----------------------------
+
+def build_family_analysis(scheduled_detail: pd.DataFrame) -> pd.DataFrame:
+    base = scheduled_detail.copy()
+    base["EE Code"] = base["EE Code"].astype(str).str.strip()
+    base["Deduction Code"] = base["Deduction Code"].map(norm_text)
+    base["Deduction Desc"] = base["Deduction Desc"].map(norm_text)
+    base["Deduction Family"] = base["Deduction Family"].fillna("Standalone / Review")
+
+    # One employee can have many rows for the same code; dedupe at employee+family+code level.
+    emp_code = (
+        base[["EE Code", "Deduction Family", "Deduction Code", "Deduction Desc"]]
+        .drop_duplicates()
+    )
+
+    family_totals = (
+        emp_code.groupby("Deduction Family")
+        .agg(
+            Family_Distinct_Employees=("EE Code", "nunique"),
+            Family_Distinct_Codes=("Deduction Code", "nunique"),
+        )
+        .reset_index()
+    )
+
+    emp_family_counts = (
+        emp_code.groupby(["Deduction Family", "EE Code"])
+        .agg(
+            Employee_Family_Code_Count=("Deduction Code", "nunique"),
+            Employee_Family_Codes=("Deduction Code", lambda s: ", ".join(sorted(set(s)))),
+        )
+        .reset_index()
+    )
+
+    overlap = emp_family_counts.loc[emp_family_counts["Employee_Family_Code_Count"] > 1].copy()
+
+    overlap_summary = (
+        overlap.groupby("Deduction Family")
+        .agg(
+            Family_Overlap_Employee_Count=("EE Code", "nunique"),
+            Overlap_Employee_IDs=("EE Code", lambda s: ", ".join(sorted(set(map(str, s))))),
+            Overlap_Code_Combos=("Employee_Family_Codes", lambda s: " | ".join(sorted(set(s)))),
+        )
+        .reset_index()
+    )
+
+    member_codes = (
+        emp_code.groupby("Deduction Family")
+        .agg(
+            Family_Member_Codes=("Deduction Code", lambda s: ", ".join(sorted(set(s)))),
+            Family_Member_Descriptions=("Deduction Desc", lambda s: " | ".join(sorted(set(s)))),
+        )
+        .reset_index()
+    )
+
+    family = family_totals.merge(member_codes, on="Deduction Family", how="left")
+    family = family.merge(overlap_summary, on="Deduction Family", how="left")
+
+    family["Family_Overlap_Employee_Count"] = family["Family_Overlap_Employee_Count"].fillna(0).astype(int)
+    family["Overlap Exists"] = np.where(family["Family_Overlap_Employee_Count"] > 0, "Yes", "No")
+    family["Family Consolidation Possible"] = np.where(family["Family_Overlap_Employee_Count"] > 0, "No", "Yes")
+    family["Family Recommended Setup"] = np.where(
+        family["Family_Overlap_Employee_Count"] > 0,
+        "Keep Separate Family Members",
+        "Can Consolidate to Single Family Deduction"
+    )
+    family["Family Rule Note"] = np.where(
+        family["Family_Overlap_Employee_Count"] > 0,
+        "At least one employee is assigned multiple codes within this family.",
+        "No employee is assigned multiple codes within this family."
+    )
+    family["Overlap_Employee_IDs"] = family["Overlap_Employee_IDs"].fillna("")
+    family["Overlap_Code_Combos"] = family["Overlap_Code_Combos"].fillna("")
+    return family.sort_values(["Family_Overlap_Employee_Count", "Deduction Family"], ascending=[False, True]).reset_index(drop=True)
+
+
+# -----------------------------
 # Merge / final workbook
 # -----------------------------
 
-def build_master_sheet(scheduled_summary: pd.DataFrame, prior_summary: pd.DataFrame, analysis_year: int) -> pd.DataFrame:
+def build_master_sheet(
+    scheduled_summary: pd.DataFrame,
+    prior_summary: pd.DataFrame,
+    family_analysis: pd.DataFrame,
+    analysis_year: int
+) -> pd.DataFrame:
     master = pd.merge(
         scheduled_summary,
         prior_summary,
@@ -314,21 +425,67 @@ def build_master_sheet(scheduled_summary: pd.DataFrame, prior_summary: pd.DataFr
         axis=1,
     )
 
-    # Fill scheduled-only columns for prior-only rows.
     for col in [
         "Memo Only", "Running Flag", "Date Classification", "Start Date", "Stop Date",
-        "Amount or Percent", "All Rows Zero Amount/Percent?", "Zero Value Note"
+        "Amount or Percent", "All Rows Zero Amount/Percent?", "Zero Value Note",
+        "Deduction Family"
     ]:
         if col not in master.columns:
             master[col] = ""
         master[col] = master[col].fillna("")
 
-    # Classification can come from either source.
+    if "Prior_Deduction_Family" in master.columns:
+        master["Deduction Family"] = np.where(
+            master["Deduction Family"].astype(str).str.strip().eq(""),
+            master["Prior_Deduction_Family"].fillna(""),
+            master["Deduction Family"]
+        )
+
     master["Classification"] = master.apply(
         lambda r: classify_item(r.get("Deduction Code", ""), r.get("Deduction Desc", "")),
         axis=1,
     )
     master["Setup Relevance"] = master["Classification"].map(setup_relevance)
+
+    family_cols = [
+        "Deduction Family",
+        "Family_Distinct_Employees",
+        "Family_Distinct_Codes",
+        "Family_Member_Codes",
+        "Family_Overlap_Employee_Count",
+        "Overlap Exists",
+        "Overlap_Employee_IDs",
+        "Overlap_Code_Combos",
+        "Family Consolidation Possible",
+        "Family Recommended Setup",
+        "Family Rule Note",
+    ]
+    family_merge = family_analysis[family_cols].drop_duplicates()
+    master = master.merge(family_merge, on="Deduction Family", how="left")
+
+    for col in [
+        "Family_Distinct_Employees", "Family_Distinct_Codes", "Family_Overlap_Employee_Count"
+    ]:
+        if col in master.columns:
+            master[col] = master[col].fillna(0).astype(int)
+
+    for col in [
+        "Overlap Exists", "Overlap_Employee_IDs", "Overlap_Code_Combos",
+        "Family Consolidation Possible", "Family Recommended Setup", "Family Rule Note"
+    ]:
+        if col in master.columns:
+            master[col] = master[col].fillna("")
+
+    master["Recommended Setup Structure"] = np.where(
+        master["Family Consolidation Possible"] == "No",
+        "Keep Separate",
+        np.where(
+            master["Deduction Family"].isin(["Medical", "Dental", "Vision", "Support Order", "401K / Retirement", "Loan", "Garnishment / Levy"]),
+            "Can Consolidate",
+            "Review"
+        )
+    )
+
     master["Recommendation"] = master.apply(lambda r: recommend_action(r, analysis_year), axis=1)
 
     master["Review Note"] = ""
@@ -345,8 +502,17 @@ def build_master_sheet(scheduled_summary: pd.DataFrame, prior_summary: pd.DataFr
         "Review Note",
     ] = master["Review Note"].astype(str).str.strip() + " All scheduled rows have zero Amount/Percent."
 
+    master.loc[
+        master["Family Consolidation Possible"] == "No",
+        "Review Note",
+    ] = (
+        master["Review Note"].astype(str).str.strip()
+        + " Family overlap exists, so keep separate family member deductions."
+    ).str.strip()
+
     ordered_cols = [
-        "Deduction Code", "Deduction Desc", "Classification", "Setup Relevance", "Recommendation",
+        "Deduction Code", "Deduction Desc", "Deduction Family", "Classification", "Setup Relevance",
+        "Recommended Setup Structure", "Recommendation",
         "Source Presence", "Found in Scheduled Report", "Found in Prior Payroll",
         "Running Flag", "Date Classification", "Start Date", "Stop Date", "Memo Only",
         "Scheduled Row Count", "Scheduled Distinct Employees", "Active Employee Count",
@@ -354,28 +520,37 @@ def build_master_sheet(scheduled_summary: pd.DataFrame, prior_summary: pd.DataFr
         "Amount or Percent", "All Rows Zero Amount/Percent?", "Zero Value Note",
         "Prior_Payroll_Row_Count", "Prior_Payroll_Distinct_Employees",
         "Prior_Payroll_Total_Amount", "Prior_Payroll_NonZero_Row_Count",
-        "Review Note", "Earliest Actual Start Date Parsed", "Latest Actual Stop Date Parsed",
+        "Family_Distinct_Employees", "Family_Distinct_Codes", "Family_Member_Codes",
+        "Family_Overlap_Employee_Count", "Overlap Exists", "Overlap_Employee_IDs",
+        "Overlap_Code_Combos", "Family Consolidation Possible", "Family Recommended Setup",
+        "Family Rule Note", "Review Note",
+        "Earliest Actual Start Date Parsed", "Latest Actual Stop Date Parsed",
     ]
     existing = [c for c in ordered_cols if c in master.columns]
     remaining = [c for c in master.columns if c not in existing]
-    master = master[existing + remaining].sort_values(["Recommendation", "Deduction Code", "Deduction Desc"]).reset_index(drop=True)
+    master = master[existing + remaining].sort_values(
+        ["Recommendation", "Deduction Family", "Deduction Code", "Deduction Desc"]
+    ).reset_index(drop=True)
     return master
 
 
-def to_excel_bytes(master: pd.DataFrame, scheduled_detail: pd.DataFrame, prior_detail: pd.DataFrame) -> bytes:
+def to_excel_bytes(
+    master: pd.DataFrame,
+    family_analysis: pd.DataFrame,
+    scheduled_detail: pd.DataFrame,
+    prior_detail: pd.DataFrame
+) -> bytes:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         master.to_excel(writer, index=False, sheet_name="Master_Summary")
+        family_analysis.to_excel(writer, index=False, sheet_name="Family_Analysis")
         scheduled_detail.to_excel(writer, index=False, sheet_name="Scheduled_Detail")
         prior_detail.to_excel(writer, index=False, sheet_name="Prior_Payroll_Detail")
 
         wb = writer.book
         ws = writer.sheets["Master_Summary"]
-
-        # Freeze header
         ws.freeze_panes = "A2"
 
-        # Light formatting / widths
         for col_cells in ws.columns:
             max_len = 0
             col_letter = col_cells[0].column_letter
@@ -384,12 +559,13 @@ def to_excel_bytes(master: pd.DataFrame, scheduled_detail: pd.DataFrame, prior_d
                     max_len = max(max_len, len(str(cell.value)) if cell.value is not None else 0)
                 except Exception:
                     pass
-            ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 35)
+            ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 40)
 
         from openpyxl.styles import PatternFill, Font
         green_fill = PatternFill("solid", fgColor="E2F0D9")
         yellow_fill = PatternFill("solid", fgColor="FFF2CC")
         red_fill = PatternFill("solid", fgColor="F4CCCC")
+        purple_fill = PatternFill("solid", fgColor="EADCF8")
         blue_fill = PatternFill("solid", fgColor="D9EAF7")
         bold = Font(bold=True)
 
@@ -403,13 +579,14 @@ def to_excel_bytes(master: pd.DataFrame, scheduled_detail: pd.DataFrame, prior_d
         for row in range(2, ws.max_row + 1):
             running = ws.cell(row, idx.get("Running Flag", 1)).value == "Yes" if idx.get("Running Flag") else False
             zero_flag = ws.cell(row, idx.get("All Rows Zero Amount/Percent?", 1)).value == "Yes" if idx.get("All Rows Zero Amount/Percent?") else False
-            active = ws.cell(row, idx.get("Active Employee Count", 1)).value or 0 if idx.get("Active Employee Count") else 0
-            term = ws.cell(row, idx.get("Terminated Employee Count", 1)).value or 0 if idx.get("Terminated Employee Count") else 0
             rec = ws.cell(row, idx.get("Recommendation", 1)).value if idx.get("Recommendation") else ""
+            family_overlap = ws.cell(row, idx.get("Family Consolidation Possible", 1)).value == "No" if idx.get("Family Consolidation Possible") else False
 
             fill = None
             if rec == "Remove Candidate":
                 fill = red_fill
+            elif family_overlap:
+                fill = purple_fill
             elif zero_flag:
                 fill = yellow_fill
             elif running:
@@ -428,10 +605,11 @@ def to_excel_bytes(master: pd.DataFrame, scheduled_detail: pd.DataFrame, prior_d
 # -----------------------------
 
 def render_ui():
-    st.title    ("Scheduled Deduction + Prior Payroll Analyzer")
+    st.title("Scheduled Deduction + Prior Payroll Analyzer")
     st.write(
         "Upload a Paycom **Scheduled Deduction Report** and a **Prior Payroll** file. "
-        "The app will create one smart summary sheet to help decide what should be set up as company-level deductions in UZIO."
+        "The app will create one smart summary sheet plus family overlap analysis to help decide "
+        "what should be set up as company-level deductions in UZIO."
     )
 
     col1, col2, col3 = st.columns([1, 1, 1])
@@ -455,8 +633,14 @@ def render_ui():
 
             scheduled_summary, scheduled_detail = build_scheduled_summary(sched_df)
             prior_summary, prior_detail = build_prior_summary(prior_df)
-            master = build_master_sheet(scheduled_summary, prior_summary, analysis_year=int(analysis_year))
-            excel_bytes = to_excel_bytes(master, scheduled_detail, prior_detail)
+            family_analysis = build_family_analysis(scheduled_detail)
+            master = build_master_sheet(
+                scheduled_summary=scheduled_summary,
+                prior_summary=prior_summary,
+                family_analysis=family_analysis,
+                analysis_year=int(analysis_year)
+            )
+            excel_bytes = to_excel_bytes(master, family_analysis, scheduled_detail, prior_detail)
 
             st.success("Analysis completed.")
 
@@ -464,10 +648,13 @@ def render_ui():
             k1.metric("Total items in master", len(master))
             k2.metric("Keep", int((master["Recommendation"] == "Keep").sum()))
             k3.metric("Remove candidate", int((master["Recommendation"] == "Remove Candidate").sum()))
-            k4.metric("Review buckets", int(master["Recommendation"].astype(str).str.startswith("Review").sum()))
+            k4.metric("Families with overlap", int((family_analysis["Family_Overlap_Employee_Count"] > 0).sum()))
 
             st.subheader("Master Summary Preview")
             st.dataframe(master, use_container_width=True, height=500)
+
+            st.subheader("Family Analysis Preview")
+            st.dataframe(family_analysis, use_container_width=True, height=300)
 
             st.download_button(
                 "Download Smart Analysis Workbook",
@@ -480,15 +667,20 @@ def render_ui():
             with st.expander("Business rules used"):
                 st.markdown(
                     """
-    - If **any row** of a scheduled deduction has `0000` in Start Date or Stop Date, it is treated as a **Running Deduction**.
-    - If a scheduled deduction is running, the tool keeps that running classification and does not rely on actual dates for decisioning.
-    - `A`, `T`, and `V` employee statuses are counted separately from the scheduled deduction report.
-    - A deduction is flagged **All Rows Zero Amount/Percent = Yes** only if **every scheduled row** for that deduction has zero/blank normalized Amount and zero/blank normalized Percent.
-    - Prior payroll lines ending with **Match** or **Memo** are classified as **Contribution**.
-    - **NSD** and **PFL** are classified as **Tax / Statutory Payroll Item** in this version, based on your current working assumption.
-    - Recommendation logic is a starting point and can be adjusted to match your final UZIO setup policy.
+- If **any row** of a scheduled deduction has `0000` in Start Date or Stop Date, it is treated as a **Running Deduction**.
+- If a scheduled deduction is running, the tool keeps that running classification and does not rely on actual dates for decisioning.
+- `A`, `T`, and `V` employee statuses are counted separately from the scheduled deduction report.
+- A deduction is flagged **All Rows Zero Amount/Percent = Yes** only if **every scheduled row** for that deduction has zero/blank normalized Amount and zero/blank normalized Percent.
+- Prior payroll lines ending with **Match** or **Memo** are classified as **Contribution**.
+- **NSD** and **PFL** are classified as **Tax / Statutory Payroll Item** in this version, based on your current working assumption.
+- Deduction families such as **Medical** and **Support Order** are analyzed at employee level.
+- If any employee has more than one code within the same family, then **Family Consolidation Possible = No** and the recommendation is to **Keep Separate**.
                     """
                 )
 
         except Exception as e:
             st.exception(e)
+
+
+if __name__ == "__main__":
+    render_ui()

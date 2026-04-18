@@ -145,6 +145,7 @@ with st.sidebar:
             "Paycom - Withholding Audit",
             "Paycom - Payment Audit",
             "Paycom - Deduction Audit",
+            "Paycom - Deduction Analyzer",
             "Paycom - Emergency Contact Audit",
             "Paycom - Time Off Tool",
             "Paycom - Prior Payroll Audit Tool"
@@ -263,6 +264,11 @@ elif tool_option == "Paycom - Deduction Audit":
     from apps.paycom import deduction_audit
     importlib.reload(deduction_audit)
     deduction_audit.render_ui()
+
+elif tool_option == "Paycom - Deduction Analyzer":
+    from apps.paycom import deduction_analyzer
+    importlib.reload(deduction_analyzer)
+    deduction_analyzer.render_ui()
 
 elif tool_option == "ADP - Withholding Audit":
     from apps.adp import withholding_audit

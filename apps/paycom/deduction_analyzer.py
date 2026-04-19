@@ -205,7 +205,7 @@ def get_deduction_family(type_code: str, description: str) -> str:
 def build_scheduled_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     required_cols = [
         "EE Code", "EE Status", "Deduction Code", "Deduction Desc", "Memo Only",
-        "Amount", "Percent", "Start Date", "Stop Date"
+        "Amount", "Percent", "Tax Treatment", "Start Date", "Stop Date"
     ]
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
@@ -236,7 +236,25 @@ def build_scheduled_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
         active_ee = g.loc[g["EE Status"] == "A", "EE Code"].nunique()
         term_ee = g.loc[g["EE Status"] == "T", "EE Code"].nunique()
         v_ee = g.loc[g["EE Status"] == "V", "EE Code"].nunique()
-        value_basis = classify_value_basis(g)
+        value_basis_raw = classify_value_basis(g)
+        basis_map = {
+            "Amount": "Fixed Dollar",
+            "Percent": "Percent",
+            "Amount and Percent": "Both",
+            "No Non-Zero Amount/Percent Found": "Zero/None"
+        }
+        value_basis = basis_map.get(value_basis_raw, value_basis_raw)
+
+        tax_raw = g["Tax Treatment"].dropna().unique().tolist()
+        tax_val = tax_raw[0] if tax_raw else ""
+        
+        if "After Tax" in tax_val:
+            tax_cat = "Post-tax"
+        elif "Pre-Tax" in tax_val or "Taxable Only (401k)" in tax_val:
+            tax_cat = "Pre-tax"
+        else:
+            tax_cat = "Review"
+
         zero_flag, zero_note = all_rows_zero_flag(g)
 
         if running:
@@ -269,7 +287,10 @@ def build_scheduled_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
             "Active Employee Count": active_ee,
             "Terminated Employee Count": term_ee,
             "V Status Employee Count": v_ee,
-            "Amount or Percent": value_basis,
+            "Amount or Percent": value_basis_raw,
+            "Value Basis": value_basis,
+            "Tax Treatment": tax_val,
+            "Tax Category": tax_cat,
             "All Rows Zero Amount/Percent?": zero_flag,
             "Zero Value Note": zero_note,
         })
@@ -512,9 +533,9 @@ def build_master_sheet(
 
     ordered_cols = [
         "Deduction Code", "Deduction Desc", "Deduction Family", "Classification", "Setup Relevance",
-        "Recommended Setup Structure", "Recommendation",
+        "Tax Category", "Value Basis", "Recommended Setup Structure", "Recommendation",
         "Source Presence", "Found in Scheduled Report", "Found in Prior Payroll",
-        "Running Flag", "Date Classification", "Start Date", "Stop Date", "Memo Only",
+        "Running Flag", "Date Classification", "Start Date", "Stop Date", "Tax Treatment", "Memo Only",
         "Scheduled Row Count", "Scheduled Distinct Employees", "Active Employee Count",
         "Terminated Employee Count", "V Status Employee Count",
         "Amount or Percent", "All Rows Zero Amount/Percent?", "Zero Value Note",

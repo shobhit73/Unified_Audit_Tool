@@ -1112,36 +1112,15 @@ def build_contribution_master_table(
 # Output / app helpers
 # -----------------------
 
-def safe_sheet_name(prefix: str, name: str) -> str:
-    base = re.sub(r"[^A-Za-z0-9_]+", "_", Path(name).stem)
-    sheet = f"{prefix}_{base}" if prefix else base
-    return sheet[:31] or "Sheet1"
-
-
-
 def to_excel_bytes(outputs: dict[str, dict[str, pd.DataFrame]]) -> bytes:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         if "deduction" in outputs:
-            outputs["deduction"]["master"].to_excel(writer, sheet_name="Deductions_Master", index=False)
-            outputs["deduction"]["raw"].to_excel(writer, sheet_name="Deduction_Raw_SQL", index=False)
-            outputs["deduction"]["summary"].to_excel(writer, sheet_name="Deduction_Defaults", index=False)
-            for source_name, group in outputs["deduction"]["master"].groupby("Source File"):
-                group.to_excel(writer, sheet_name=safe_sheet_name("D", source_name), index=False)
-
+            outputs["deduction"]["master"].to_excel(writer, sheet_name="Deductions", index=False)
         if "earning" in outputs:
-            outputs["earning"]["master"].to_excel(writer, sheet_name="Earnings_Master", index=False)
-            outputs["earning"]["raw"].to_excel(writer, sheet_name="Earning_Raw_SQL", index=False)
-            outputs["earning"]["summary"].to_excel(writer, sheet_name="Earning_Defaults", index=False)
-            for source_name, group in outputs["earning"]["master"].groupby("Source File"):
-                group.to_excel(writer, sheet_name=safe_sheet_name("E", source_name), index=False)
-
+            outputs["earning"]["master"].to_excel(writer, sheet_name="Earnings", index=False)
         if "contribution" in outputs:
-            outputs["contribution"]["master"].to_excel(writer, sheet_name="Contributions_Master", index=False)
-            outputs["contribution"]["raw"].to_excel(writer, sheet_name="Contribution_Raw_SQL", index=False)
-            outputs["contribution"]["summary"].to_excel(writer, sheet_name="Contribution_Defaults", index=False)
-            for source_name, group in outputs["contribution"]["master"].groupby("Source File"):
-                group.to_excel(writer, sheet_name=safe_sheet_name("C", source_name), index=False)
+            outputs["contribution"]["master"].to_excel(writer, sheet_name="Contributions", index=False)
     output.seek(0)
     return output.getvalue()
 
@@ -1322,11 +1301,6 @@ def render_dataset_section(kind: str, payload: dict[str, pd.DataFrame], client_n
         key=f"xlsx_{kind}",
     )
 
-    with st.expander(f"Raw parsed {title.lower()} SQL rows"):
-        st.dataframe(raw_df, use_container_width=True, height=350)
-
-    with st.expander(summary_label):
-        st.dataframe(summary_df, use_container_width=True, height=350)
 
 
 

@@ -469,12 +469,13 @@ def deduction_setup_notes(row: pd.Series) -> str:
 
 
 
+
 def deduction_ui_mapping_notes(row: pd.Series) -> str:
     notes: list[str] = []
-    if str(row.get("Deduction Method") or ""):
-        notes.append(f"Method UI shows {row['Deduction Method']}")
-    if str(row.get("W-2 Box") or ""):
-        notes.append(f"W-2 Box UI shows {row['W-2 Box']}")
+    if str(row.get("Deduction Method (UI)") or ""):
+        notes.append(f"Method UI shows {row['Deduction Method (UI)']}")
+    if str(row.get("W-2 Box (UI)") or ""):
+        notes.append(f"W-2 Box UI shows {row['W-2 Box (UI)']}")
     if str(row.get("Weekly Schedule") or "") == "Every Paycheck":
         notes.append("Weekly schedule maps from 'All'")
     if str(row.get("Biweekly Schedule") or "") == "Every Paycheck":
@@ -492,10 +493,10 @@ def build_deduction_master_table(raw_df: pd.DataFrame) -> tuple[pd.DataFrame, pd
     df["Company"] = df["source_file"].map(lambda x: file_alias(x, "deduction"))
     df["Master Deduction List"] = infer_master_list_name(df)
 
-    df["Deduction Method"] = df.get("deduction_method", "").map(method_ui)
+    df["Deduction Method (UI)"] = df.get("deduction_method", "").map(method_ui)
     df["Amount Per Pay"] = df.get("amount_per_pay", "").map(amount_display)
     df["Amount %"] = df.get("amount_per_pay_percent", "").map(amount_display)
-    df["W-2 Box"] = df.get("w2_box", "").map(w2_box_ui)
+    df["W-2 Box (UI)"] = df.get("w2_box", "").map(w2_box_ui)
     df["W-2 Label"] = df.get("w2_label", "").fillna("")
     df["Sync From Benefit"] = df.get("sync_from_benefit", "").map(yes_no_blank)
     df["Auto Assign to Employee"] = df.get("auto_assign_to_ee", "").map(yes_no_blank)
@@ -546,10 +547,10 @@ def build_deduction_master_table(raw_df: pd.DataFrame) -> tuple[pd.DataFrame, pd
         "display_name",
         "Derived Deduction Type",
         "deduction_type_name",
-        "Deduction Method",
+        "Deduction Method (UI)",
         "Amount Per Pay",
         "Amount %",
-        "W-2 Box",
+        "W-2 Box (UI)",
         "W-2 Label",
         "deduction_code",
         "Sync From Benefit",
@@ -1230,8 +1231,8 @@ def render_dataset_section(kind: str, payload: dict[str, pd.DataFrame]) -> None:
                 "Master Deduction ID",
                 "Company Deduction Name",
                 "Derived Deduction Type",
-                "Deduction Method",
-                "W-2 Box",
+                "Deduction Method (UI)",
+                "W-2 Box (UI)",
                 "Deduction Code",
                 "Sync From Benefit",
                 "Auto Assign to Employee",

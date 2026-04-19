@@ -1204,7 +1204,7 @@ def build_outputs(parsed: dict[str, pd.DataFrame]) -> dict[str, dict[str, pd.Dat
 
 
 
-def render_dataset_section(kind: str, payload: dict[str, pd.DataFrame]) -> None:
+def render_dataset_section(kind: str, payload: dict[str, pd.DataFrame], client_name: str = "") -> None:
     master_df = payload["master"]
     raw_df = payload["raw"]
     summary_df = payload["summary"]
@@ -1294,11 +1294,19 @@ def render_dataset_section(kind: str, payload: dict[str, pd.DataFrame]) -> None:
         excel_name = "ups_company_contribution_master_table.xlsx"
         summary_label = "Likely default summary by contribution_code"
 
+    if "Client Name" in master_df.columns:
+        preview_cols.insert(0, "Client Name")
+
     st.dataframe(master_df[preview_cols], use_container_width=True, height=500)
 
     csv_bytes = master_df.to_csv(index=False).encode("utf-8")
     excel_bytes = to_excel_bytes({kind: payload})
     d1, d2 = st.columns(2)
+    
+    file_prefix = f"{client_name.replace(' ', '_').lower()}_" if client_name else ""
+    csv_name = f"{file_prefix}{csv_name}"
+    excel_name = f"{file_prefix}{excel_name}"
+    
     d1.download_button(
         f"Download {title.lower()} master table (CSV)",
         data=csv_bytes,
@@ -1328,53 +1336,72 @@ def render_ui() -> None:
 
     st.title("UPS Company Deduction / Earning / Contribution → Master Table")
     st.caption(
-        "Upload one or more SQL dump files. The app auto-detects ups_company_deduction, "
-        "ups_company_earning_detail, and ups_company_contribution/contritbution inserts. Mixed uploads are supported. "
-        "When both deductions and contributions are uploaded, the contribution table also tries to map the linked deduction name."
+        "Upload separate SQL dump files for Deductions, Earnings, and Contributions. "
+        "The app supports merging them into a master table."
     )
+    
+    st.markdown("### Client Configuration")
+    client_name = st.text_input("Client Name", placeholder="Enter Client Name (e.g., Acme Corp)").strip()
+    
+    st.markdown("### Upload Files")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        ded_files = st.file_uploader("Upload Deduction SQL(s)", type=["sql"], accept_multiple_files=True, key="ded")
+    with col2:
+        earn_files = st.file_uploader("Upload Earning SQL(s)", type=["sql"], accept_multiple_files=True, key="earn")
+    with col3:
+        cont_files = st.file_uploader("Upload Contribution SQL(s)", type=["sql"], accept_multiple_files=True, key="cont")
+    
+    all_uploaded = (ded_files or []) + (earn_files or []) + (cont_files or [])
 
-    uploaded_files = st.file_uploader(
-        "Upload SQL file(s)",
-        type=["sql"],
-        accept_multiple_files=True,
-    )
-
-    if not uploaded_files:
-        st.info("Upload at least one .sql file to generate the master table.")
+    if not all_uploaded:
+        st.info("Upload at least one .sql file.")
         return
 
-    try:
-        parsed = parse_uploaded_files(uploaded_files)
-        outputs = build_outputs(parsed)
-        total_rows = sum(len(payload["master"]) for payload in outputs.values())
-        type_labels = ", ".join(sorted(outputs.keys()))
-        st.success(f"Processed {len(uploaded_files)} file(s). Detected: {type_labels}. Built {total_rows} total row(s).")
+    st.markdown("---")
+    if st.button("Run Processing", type="primary"):
+        try:
+            parsed = parse_uploaded_files(all_uploaded)
+            outputs = build_outputs(parsed)
+            
+            # Incorporate Client Name
+            if client_name:
+                for kind in outputs:
+                    if "master" in outputs[kind]:
+                        outputs[kind]["master"].insert(0, "Client Name", client_name)
 
-        combined_excel_bytes = to_excel_bytes(outputs)
-        st.download_button(
-            "Download combined workbook (Excel)",
-            data=combined_excel_bytes,
-            file_name="ups_company_deduction_earning_contribution_master_tables.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="combined_workbook",
-        )
+            total_rows = sum(len(payload["master"]) for payload in outputs.values())
+            type_labels = ", ".join(sorted(outputs.keys()))
+            st.success(f"Processed files. Detected: {type_labels}. Built {total_rows} total row(s).")
+            
+            st.subheader("Downloads")
+            combined_excel_name = f"{client_name.replace(' ', '_').lower()}_ups_company_master_tables.xlsx" if client_name else "ups_company_master_tables.xlsx"
 
-        ordered_kinds = [k for k in ["deduction", "earning", "contribution"] if k in outputs]
-        if len(ordered_kinds) == 1:
-            only_kind = ordered_kinds[0]
-            render_dataset_section(only_kind, outputs[only_kind])
-        else:
-            tab_titles = [
-                {"deduction": "Deductions", "earning": "Earnings", "contribution": "Contributions"}[k]
-                for k in ordered_kinds
-            ]
-            tabs = st.tabs(tab_titles)
-            for tab, kind in zip(tabs, ordered_kinds):
-                with tab:
-                    render_dataset_section(kind, outputs[kind])
+            combined_excel_bytes = to_excel_bytes(outputs)
+            st.download_button(
+                "Download combined workbook (Excel)",
+                data=combined_excel_bytes,
+                file_name=combined_excel_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="combined_workbook",
+            )
 
-    except Exception as exc:
-        st.error(str(exc))
+            ordered_kinds = [k for k in ["deduction", "earning", "contribution"] if k in outputs]
+            if len(ordered_kinds) == 1:
+                only_kind = ordered_kinds[0]
+                render_dataset_section(only_kind, outputs[only_kind], client_name)
+            else:
+                tab_titles = [
+                    {"deduction": "Deductions", "earning": "Earnings", "contribution": "Contributions"}[k]
+                    for k in ordered_kinds
+                ]
+                tabs = st.tabs(tab_titles)
+                for tab, kind in zip(tabs, ordered_kinds):
+                    with tab:
+                        render_dataset_section(kind, outputs[kind], client_name)
+
+        except Exception as exc:
+            st.error(str(exc))
 
 
 if __name__ == "__main__":

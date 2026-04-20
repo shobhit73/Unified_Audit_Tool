@@ -243,8 +243,11 @@ def generate_configuration_tab(master_df: pd.DataFrame, config_df: pd.DataFrame)
     config_df["_match_key"] = config_df["Company Deduction Name"].astype(str).str.strip().str.lower()
     keeps["_match_key"] = keeps["Deduction Desc"].astype(str).str.strip().str.lower()
 
+    # Deduplicate config mapping to avoid Cartesian product/repeating rows
+    config_dedup = config_df.drop_duplicates(subset=["_match_key"]).copy()
+
     # Join
-    merged = pd.merge(keeps, config_df, on="_match_key", how="left")
+    merged = pd.merge(keeps, config_dedup, on="_match_key", how="left")
 
     # Dynamic Overrides: Priority is the Paycom source data for Tax and Method
     # Derived Deduction Type (Config) <- Tax Category (Paycom)

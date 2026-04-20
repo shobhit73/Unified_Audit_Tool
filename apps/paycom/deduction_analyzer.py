@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "assets", "deduction_setup_config.xlsx")
+_current_dir = os.path.abspath(os.path.dirname(__file__))
+CONFIG_PATH = os.path.join(_current_dir, "assets", "deduction_setup_config.xlsx")
 
 # st.set_page_config(page_title="Deduction Analyzer", layout="wide")
 
@@ -675,10 +676,6 @@ def to_excel_bytes(
         action_df.to_excel(writer, index=False, sheet_name="Action_Checklist")
         if config_guide is not None and not config_guide.empty:
             config_guide.to_excel(writer, index=False, sheet_name="Uzio_Setup_Guide")
-        master_sorted.to_excel(writer, index=False, sheet_name="Audit_Master_Detail")
-        family_analysis.to_excel(writer, index=False, sheet_name="Audit_Family_Detail")
-        scheduled_detail.to_excel(writer, index=False, sheet_name="Audit_Scheduled")
-        prior_detail.to_excel(writer, index=False, sheet_name="Audit_Prior_Payroll")
 
         wb = writer.book
         from openpyxl.styles import PatternFill, Font
@@ -730,16 +727,6 @@ def to_excel_bytes(
                 cell.font = bold
                 cell.fill = blue_fill
             adjust_cols(ws2)
-
-        # 3. Format Audit_Master_Detail
-        if "Audit_Master_Detail" in writer.sheets:
-            wsm = writer.sheets["Audit_Master_Detail"]
-            wsm.freeze_panes = "A2"
-            for cell in wsm[1]:
-                cell.font = bold
-                cell.fill = blue_fill
-            adjust_cols(wsm)
-
 
     output.seek(0)
     return output.getvalue()

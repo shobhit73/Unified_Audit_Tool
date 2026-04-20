@@ -260,6 +260,9 @@ def generate_configuration_tab(master_df: pd.DataFrame, config_df: pd.DataFrame)
     merged["Derived Deduction Type"] = merged["Tax Category"]
     merged["Deduction Method (UI)"] = merged["Value Basis"].map(basis_to_uzio).fillna(merged["Value Basis"])
 
+    # We only keep the specific codes that are part of an overlap if it's a variant plan
+    # Otherwise we recommend consolidation.
+    
     # Select and order final Uzio columns
     uzio_cols = [
         "Company Deduction Name", "Derived Deduction Type", "Deduction Method (UI)", 
@@ -432,6 +435,9 @@ def build_prior_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 def build_family_analysis(scheduled_detail: pd.DataFrame) -> pd.DataFrame:
     base = scheduled_detail.copy()
+    base["_Classification"] = base.apply(lambda r: classify_item(r.get("Deduction Code", ""), r.get("Deduction Desc", "")), axis=1)
+    base = base[base["_Classification"] != "Contribution"].copy()
+    
     base["EE Code"] = base["EE Code"].astype(str).str.strip()
     base["Deduction Code"] = base["Deduction Code"].map(norm_text)
     base["Deduction Desc"] = base["Deduction Desc"].map(norm_text)
@@ -439,7 +445,7 @@ def build_family_analysis(scheduled_detail: pd.DataFrame) -> pd.DataFrame:
 
     # One employee can have many rows for the same code; dedupe at employee+family+code level.
     emp_code = (
-        base[["EE Code", "Deduction Family", "Deduction Code", "Deduction Desc"]]
+        base[["EE Code", "EE Name", "Deduction Family", "Deduction Code", "Deduction Desc"]]
         .drop_duplicates()
     )
 
@@ -455,20 +461,36 @@ def build_family_analysis(scheduled_detail: pd.DataFrame) -> pd.DataFrame:
     emp_family_counts = (
         emp_code.groupby(["Deduction Family", "EE Code"])
         .agg(
+            EE_Name=("EE Name", "first"),
             Employee_Family_Code_Count=("Deduction Code", "nunique"),
-            Employee_Family_Codes=("Deduction Code", lambda s: ", ".join(sorted(set(s)))),
+            Employee_Family_Codes=("Deduction Code", lambda s: list(set(s))),
+            Employee_Family_Code_Str=("Deduction Code", lambda s: ", ".join(sorted(set(s)))),
         )
         .reset_index()
     )
 
     overlap = emp_family_counts.loc[emp_family_counts["Employee_Family_Code_Count"] > 1].copy()
 
+    # Identify which SPECIFIC codes are part of overlaps
+    all_overlapping_codes_per_family = {}
+    family_overlap_names = {}
+    
+    for _, row in overlap.iterrows():
+        fam = row["Deduction Family"]
+        codes = row["Employee_Family_Codes"]
+        name = row["EE_Name"]
+        if fam not in all_overlapping_codes_per_family:
+            all_overlapping_codes_per_family[fam] = set()
+            family_overlap_names[fam] = set()
+        all_overlapping_codes_per_family[fam].update(codes)
+        family_overlap_names[fam].add(name)
+
     overlap_summary = (
         overlap.groupby("Deduction Family")
         .agg(
             Family_Overlap_Employee_Count=("EE Code", "nunique"),
             Overlap_Employee_IDs=("EE Code", lambda s: ", ".join(sorted(set(map(str, s))))),
-            Overlap_Code_Combos=("Employee_Family_Codes", lambda s: " | ".join(sorted(set(s)))),
+            Overlap_Code_Combos=("Employee_Family_Code_Str", lambda s: " | ".join(sorted(set(s)))),
         )
         .reset_index()
     )
@@ -487,16 +509,16 @@ def build_family_analysis(scheduled_detail: pd.DataFrame) -> pd.DataFrame:
 
     family["Family_Overlap_Employee_Count"] = family["Family_Overlap_Employee_Count"].fillna(0).astype(int)
     family["Overlap Exists"] = np.where(family["Family_Overlap_Employee_Count"] > 0, "Yes", "No")
-    family["Family Consolidation Possible"] = np.where(family["Family_Overlap_Employee_Count"] > 0, "No", "Yes")
+    
+    # Store the overlapping codes in the family analysis for later lookup
+    family["Overlapping_Codes_Set"] = family["Deduction Family"].map(lambda x: tuple(sorted(list(all_overlapping_codes_per_family.get(x, [])))))
+    family["Overlapping_Employee_Names"] = family["Deduction Family"].map(lambda x: ", ".join(sorted(list(family_overlap_names.get(x, []))))[:200])
+
+    family["Family Consolidation Possible"] = np.where(family["Family_Overlap_Employee_Count"] > 0, "Partial", "Yes")
     family["Family Recommended Setup"] = np.where(
         family["Family_Overlap_Employee_Count"] > 0,
-        "Keep Separate Family Members",
-        "Can Consolidate to Single Family Deduction"
-    )
-    family["Family Rule Note"] = np.where(
-        family["Family_Overlap_Employee_Count"] > 0,
-        "At least one employee is assigned multiple codes within this family.",
-        "No employee is assigned multiple codes within this family."
+        "Keep Overlapping Variants, Merge Others",
+        "Can Consolidate All into Single Plan"
     )
     family["Overlap_Employee_IDs"] = family["Overlap_Employee_IDs"].fillna("")
     family["Overlap_Code_Combos"] = family["Overlap_Code_Combos"].fillna("")
@@ -568,7 +590,8 @@ def build_master_sheet(
         "Overlap_Code_Combos",
         "Family Consolidation Possible",
         "Family Recommended Setup",
-        "Family Rule Note",
+        "Overlapping_Codes_Set",
+        "Overlapping_Employee_Names"
     ]
     family_merge = family_analysis[family_cols].drop_duplicates()
     master = master.merge(family_merge, on="Deduction Family", how="left")
@@ -581,7 +604,7 @@ def build_master_sheet(
 
     for col in [
         "Overlap Exists", "Overlap_Employee_IDs", "Overlap_Code_Combos",
-        "Family Consolidation Possible", "Family Recommended Setup", "Family Rule Note"
+        "Family Consolidation Possible", "Family Recommended Setup"
     ]:
         if col in master.columns:
             master[col] = master[col].fillna("")
@@ -597,6 +620,39 @@ def build_master_sheet(
     )
 
     master["Recommendation"] = master.apply(lambda r: recommend_action(r, analysis_year), axis=1)
+
+    # Apply Overlap-Only Consolidation Correction
+    def refine_overlap_recommendation(row):
+        rec = row["Recommendation"]
+        if "Setup Required" not in rec:
+            return rec
+            
+        fam = row["Deduction Family"]
+        code = row["Deduction Code"]
+        desc = row["Deduction Desc"]
+        
+        # Identify Standard/Primary Plan
+        primary_keywords = ["STANDARD", "MEDICAL", "DENTAL", "VISION", "SUPPORT ORDER", "BASIC"]
+        is_primary = any(k in str(desc).upper() for k in primary_keywords) and not re.search(r"\d", str(desc))
+        
+        # Get overlapping codes for this family
+        over_codes = row.get("Overlapping_Codes_Set", [])
+        if not isinstance(over_codes, (list, tuple)):
+            over_codes = []
+        
+        if code in over_codes:
+            return "Setup Required (Overlapping)"
+        
+        if is_primary:
+            return "Setup Required (Standard)"
+            
+        # Any other variant plan that isn't overlapping should be avoided/merged
+        if "Medical" in fam or "Dental" in fam or "Vision" in fam or "Support Order" in fam or "401k" in fam.lower():
+            return "Avoid - Consolidate into Standard"
+            
+        return rec
+
+    master["Recommendation"] = master.apply(refine_overlap_recommendation, axis=1)
 
     master["Review Note"] = ""
     master.loc[
@@ -656,35 +712,50 @@ def to_excel_bytes(
     # 1. Prepare Action Checklist
     action_cols = [
         "Deduction Code", "Deduction Desc", "Recommendation", 
-        "Classification", "Source Presence", "Family Recommended Setup", "Setup Relevance"
+        "Classification", "Source Presence", "Family Recommended Setup"
     ]
     action_df = master[[c for c in action_cols if c in master.columns]].copy()
     
     sort_order = {
-        "Setup Required": 0, 
-        "Setup Contribution": 1, 
-        "Manual Review": 2, 
-        "Review - Tax/Statutory": 3, 
-        "Archive / Ignore": 4
+        "Setup Required (Overlapping)": 0,
+        "Setup Required (Standard)": 1,
+        "Setup Required": 2, 
+        "Setup Contribution": 3, 
+        "Manual Review": 4, 
+        "Avoid - Consolidate into Standard": 5,
+        "Review - Tax/Statutory": 6, 
+        "Archive / Ignore": 7
     }
-    action_df["_sort"] = action_df["Recommendation"].map(sort_order).fillna(5)
+    action_df["_sort"] = action_df["Recommendation"].map(sort_order).fillna(8)
     action_df = action_df.sort_values(by=["_sort", "Recommendation", "Deduction Desc"]).drop(columns=["_sort"])
     
-    master_sorted = master.copy()
-    master_sorted["_sort"] = master_sorted["Recommendation"].map(sort_order).fillna(5)
-    master_sorted = master_sorted.sort_values(by=["_sort", "Recommendation", "Deduction Desc"]).drop(columns=["_sort"])
-    
+    # 2. Prepare Consolidation Plan
+    consol_cols = ["Deduction Family", "Deduction Code", "Deduction Desc", "Recommendation", "Overlapping_Employee_Names"]
+    if "Overlapping_Employee_Names" in master.columns:
+        consol_df = master[master["Recommendation"].isin(["Setup Required (Overlapping)", "Avoid - Consolidate into Standard"])][consol_cols].copy()
+        consol_df["Reasoning"] = np.where(
+            consol_df["Recommendation"] == "Setup Required (Overlapping)",
+            "Conflict found: Employee(s) [" + consol_df["Overlapping_Employee_Names"] + "] have multiple plans. Must keep separate.",
+            "No employee-level overlaps found. Safe to merge into Standard plan to simplify setup."
+        )
+        consol_df = consol_df.sort_values(["Deduction Family", "Recommendation"])
+    else:
+        consol_df = pd.DataFrame(columns=["Note"], data=[["No consolidation logic required for this file."]])
+
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         action_df.to_excel(writer, index=False, sheet_name="Action_Checklist")
         if config_guide is not None and not config_guide.empty:
             config_guide.to_excel(writer, index=False, sheet_name="Uzio_Setup_Guide")
-
+        if not consol_df.empty:
+            consol_df.to_excel(writer, index=False, sheet_name="Consolidation_Plan")
+            
         wb = writer.book
         from openpyxl.styles import PatternFill, Font
         blue_fill = PatternFill("solid", fgColor="D9EAF7")
         green_fill = PatternFill("solid", fgColor="E2F0D9")
         yellow_fill = PatternFill("solid", fgColor="FFF2CC")
         red_fill = PatternFill("solid", fgColor="F4CCCC")
+        purple_fill = PatternFill("solid", fgColor="E2D9F7")
         bold = Font(bold=True)
 
         def adjust_cols(ws):
@@ -715,6 +786,8 @@ def to_excel_bytes(
                     fill = red_fill
                 elif rec == "Manual Review" or "Review" in str(rec):
                     fill = yellow_fill
+                elif "Avoid" in str(rec):
+                    fill = purple_fill
                 elif "Setup" in str(rec):
                     fill = green_fill
                 if fill:
@@ -729,6 +802,23 @@ def to_excel_bytes(
                 cell.font = bold
                 cell.fill = blue_fill
             adjust_cols(ws2)
+
+        # 3. Format Consolidation_Plan
+        if "Consolidation_Plan" in writer.sheets:
+            ws_cp = writer.sheets["Consolidation_Plan"]
+            ws_cp.freeze_panes = "A2"
+            for cell in ws_cp[1]:
+                cell.font = bold
+                cell.fill = blue_fill
+            adjust_cols(ws_cp)
+            
+            headers = [c.value for c in ws_cp[1]]
+            idx = {name: i + 1 for i, name in enumerate(headers)}
+            for row in range(2, ws_cp.max_row + 1):
+                rec = ws_cp.cell(row, idx.get("Recommendation", 1)).value if idx.get("Recommendation") else ""
+                fill = green_fill if "Overlapping" in str(rec) else purple_fill
+                for col in range(1, ws_cp.max_column + 1):
+                    ws_cp.cell(row, col).fill = fill
 
     output.seek(0)
     return output.getvalue()

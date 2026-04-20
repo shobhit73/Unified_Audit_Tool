@@ -153,23 +153,35 @@ def recommend_action(row, analysis_year: int) -> str:
     setup_needed = row.get("Setup Relevance", "")
     family_possible = row.get("Family Consolidation Possible", "")
 
+    is_old_date = pd.notna(latest_stop) and latest_stop < pd.Timestamp(f"{analysis_year}-01-01")
+
     if classification == "Contribution":
-        return "Review - Contribution"
+        return "Setup Contribution"
     if classification == "Tax / Statutory Payroll Item":
         return "Review - Tax/Statutory"
+    
     if active > 0:
-        return "Keep"
-    if running and active == 0 and terminated > 0:
-        return "Remove Candidate"
-    if pd.notna(latest_stop) and latest_stop < pd.Timestamp(f"{analysis_year}-01-01") and active == 0:
-        return "Remove Candidate"
+        return "Setup Required"
     if payroll_presence and setup_needed == "Deduction Setup Needed":
-        return "Keep"
+        return "Setup Required"
+        
+    # Zero Amount + Old Date + Terminated
+    if zero_flag and is_old_date and active == 0:
+        return "Archive / Ignore"
+        
+    if running and active == 0 and terminated > 0:
+        return "Archive / Ignore"
+        
+    if is_old_date and active == 0:
+        return "Archive / Ignore"
+        
     if zero_flag and active == 0 and terminated == 0:
-        return "Review"
+        return "Archive / Ignore"
+        
     if family_possible == "No":
-        return "Keep"
-    return "Review"
+        return "Setup Required"
+        
+    return "Manual Review"
 
 
 def get_deduction_family(type_code: str, description: str) -> str:
@@ -218,10 +230,11 @@ def generate_configuration_tab(master_df: pd.DataFrame, config_df: pd.DataFrame)
     if config_df.empty:
         return pd.DataFrame(columns=["Note", "Message"], data=[["Configuration File Missing", "Please ensure the assets folder contains deduction_setup_config.xlsx"]])
 
-    # We only configure items recommended to "Keep"
-    keeps = master_df[master_df["Recommendation"] == "Keep"].copy()
+    # We only configure items recommended to be setup
+    setup_recommendations = ["Setup Required", "Keep"]
+    keeps = master_df[master_df["Recommendation"].isin(setup_recommendations)].copy()
     if keeps.empty:
-        return pd.DataFrame(columns=["Note"], data=[["No 'Keep' recommendations found to configure."]])
+        return pd.DataFrame(columns=["Note"], data=[["No 'Setup Required' recommendations found to configure."]])
 
     # Standardize names for matching
     config_df["_match_key"] = config_df["Company Deduction Name"].astype(str).str.strip().str.lower()
@@ -385,11 +398,15 @@ def build_prior_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     work["Amount_num"] = pd.to_numeric(work["Amount"], errors="coerce").fillna(0)
     work["Deduction Family"] = work.apply(lambda r: get_deduction_family(r["Type Code"], r["Type Description"]), axis=1)
 
-    excluded_desc = {
-        "REGULAR", "BONUS (HOURS)", "PTO", "PAID TIME OFF", "NET CHECK",
-        "NET DISTRIBUTION 1", "NET DISTRIBUTION 2", "RETRO REGULAR PAY"
-    }
-    filtered = work.loc[~work["Type Description"].str.upper().isin(excluded_desc)].copy()
+    if "Code Description" in work.columns:
+        work["Code Description"] = work["Code Description"].fillna("").astype(str)
+        filtered = work.loc[work["Code Description"].str.strip().str.upper() == "DEDUCTIONS"].copy()
+    else:
+        excluded_desc = {
+            "REGULAR", "BONUS (HOURS)", "PTO", "PAID TIME OFF", "NET CHECK",
+            "NET DISTRIBUTION 1", "NET DISTRIBUTION 2", "RETRO REGULAR PAY"
+        }
+        filtered = work.loc[~work["Type Description"].str.upper().isin(excluded_desc)].copy()
 
     summary = (
         filtered.groupby(["Type Code", "Type Description"], dropna=False)
@@ -632,79 +649,97 @@ def to_excel_bytes(
     config_guide: pd.DataFrame = None
 ) -> bytes:
     output = io.BytesIO()
+    
+    # 1. Prepare Action Checklist
+    action_cols = [
+        "Deduction Code", "Deduction Desc", "Recommendation", 
+        "Classification", "Source Presence", "Family Recommended Setup", "Setup Relevance"
+    ]
+    action_df = master[[c for c in action_cols if c in master.columns]].copy()
+    
+    sort_order = {
+        "Setup Required": 0, 
+        "Setup Contribution": 1, 
+        "Manual Review": 2, 
+        "Review - Tax/Statutory": 3, 
+        "Archive / Ignore": 4
+    }
+    action_df["_sort"] = action_df["Recommendation"].map(sort_order).fillna(5)
+    action_df = action_df.sort_values(by=["_sort", "Recommendation", "Deduction Desc"]).drop(columns=["_sort"])
+    
+    master_sorted = master.copy()
+    master_sorted["_sort"] = master_sorted["Recommendation"].map(sort_order).fillna(5)
+    master_sorted = master_sorted.sort_values(by=["_sort", "Recommendation", "Deduction Desc"]).drop(columns=["_sort"])
+    
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        master.to_excel(writer, index=False, sheet_name="Master_Summary")
+        action_df.to_excel(writer, index=False, sheet_name="Action_Checklist")
         if config_guide is not None and not config_guide.empty:
-            config_guide.to_excel(writer, index=False, sheet_name="Uzio_Configuration_Guide")
-        family_analysis.to_excel(writer, index=False, sheet_name="Family_Analysis")
-        scheduled_detail.to_excel(writer, index=False, sheet_name="Scheduled_Detail")
-        prior_detail.to_excel(writer, index=False, sheet_name="Prior_Payroll_Detail")
+            config_guide.to_excel(writer, index=False, sheet_name="Uzio_Setup_Guide")
+        master_sorted.to_excel(writer, index=False, sheet_name="Audit_Master_Detail")
+        family_analysis.to_excel(writer, index=False, sheet_name="Audit_Family_Detail")
+        scheduled_detail.to_excel(writer, index=False, sheet_name="Audit_Scheduled")
+        prior_detail.to_excel(writer, index=False, sheet_name="Audit_Prior_Payroll")
 
         wb = writer.book
         from openpyxl.styles import PatternFill, Font
         blue_fill = PatternFill("solid", fgColor="D9EAF7")
+        green_fill = PatternFill("solid", fgColor="E2F0D9")
+        yellow_fill = PatternFill("solid", fgColor="FFF2CC")
+        red_fill = PatternFill("solid", fgColor="F4CCCC")
         bold = Font(bold=True)
 
-        # 1. Format Master_Summary
-        if "Master_Summary" in writer.sheets:
-            ws1 = writer.sheets["Master_Summary"]
-            ws1.freeze_panes = "A2"
-            for cell in ws1[1]:
-                cell.font = bold
-                cell.fill = blue_fill
-            for col_cells in ws1.columns:
+        def adjust_cols(ws):
+            for col_cells in ws.columns:
                 max_len = 0
                 col_letter = col_cells[0].column_letter
                 for cell in col_cells[:2000]:
                     try:
                         max_len = max(max_len, len(str(cell.value)) if cell.value is not None else 0)
                     except: pass
-                ws1.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 40)
+                ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 40)
 
-        # 2. Format Uzio_Configuration_Guide
-        if "Uzio_Configuration_Guide" in writer.sheets:
-            ws2 = writer.sheets["Uzio_Configuration_Guide"]
-            ws2.freeze_panes = "B2" # Freeze on Match Status
+        # 1. Format Action_Checklist
+        if "Action_Checklist" in writer.sheets:
+            ws_ac = writer.sheets["Action_Checklist"]
+            ws_ac.freeze_panes = "A2"
+            for cell in ws_ac[1]:
+                cell.font = bold
+                cell.fill = blue_fill
+            adjust_cols(ws_ac)
+            
+            headers = [c.value for c in ws_ac[1]]
+            idx = {name: i + 1 for i, name in enumerate(headers)}
+            for row in range(2, ws_ac.max_row + 1):
+                rec = ws_ac.cell(row, idx.get("Recommendation", 1)).value if idx.get("Recommendation") else ""
+                fill = None
+                if rec == "Archive / Ignore":
+                    fill = red_fill
+                elif rec == "Manual Review" or "Review" in str(rec):
+                    fill = yellow_fill
+                elif "Setup" in str(rec):
+                    fill = green_fill
+                if fill:
+                    for col in range(1, ws_ac.max_column + 1):
+                        ws_ac.cell(row, col).fill = fill
+
+        # 2. Format Uzio_Setup_Guide
+        if "Uzio_Setup_Guide" in writer.sheets:
+            ws2 = writer.sheets["Uzio_Setup_Guide"]
+            ws2.freeze_panes = "B2"
             for cell in ws2[1]:
                 cell.font = bold
                 cell.fill = blue_fill
-            for col_cells in ws2.columns:
-                max_len = 0
-                col_letter = col_cells[0].column_letter
-                for cell in col_cells[:2000]:
-                    try:
-                        max_len = max(max_len, len(str(cell.value)) if cell.value is not None else 0)
-                    except: pass
-                ws2.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 40)
+            adjust_cols(ws2)
 
-        if "Master_Summary" in writer.sheets:
-            headers = [c.value for c in ws1[1]]
-            idx = {name: i + 1 for i, name in enumerate(headers)}
+        # 3. Format Audit_Master_Detail
+        if "Audit_Master_Detail" in writer.sheets:
+            wsm = writer.sheets["Audit_Master_Detail"]
+            wsm.freeze_panes = "A2"
+            for cell in wsm[1]:
+                cell.font = bold
+                cell.fill = blue_fill
+            adjust_cols(wsm)
 
-            for row in range(2, ws1.max_row + 1):
-                running = ws1.cell(row, idx.get("Running Flag", 1)).value == "Yes" if idx.get("Running Flag") else False
-                zero_flag = ws1.cell(row, idx.get("All Rows Zero Amount/Percent?", 1)).value == "Yes" if idx.get("All Rows Zero Amount/Percent?") else False
-                rec = ws1.cell(row, idx.get("Recommendation", 1)).value if idx.get("Recommendation") else ""
-                family_overlap = ws1.cell(row, idx.get("Family Consolidation Possible", 1)).value == "No" if idx.get("Family Consolidation Possible") else False
-
-                green_fill = PatternFill("solid", fgColor="E2F0D9")
-                yellow_fill = PatternFill("solid", fgColor="FFF2CC")
-                red_fill = PatternFill("solid", fgColor="F4CCCC")
-                purple_fill = PatternFill("solid", fgColor="EADCF8")
-
-                fill = None
-                if rec == "Remove Candidate":
-                    fill = red_fill
-                elif family_overlap:
-                    fill = purple_fill
-                elif zero_flag:
-                    fill = yellow_fill
-                elif running:
-                    fill = green_fill
-
-                if fill:
-                    for col in range(1, ws1.max_column + 1):
-                        ws1.cell(row, col).fill = fill
 
     output.seek(0)
     return output.getvalue()

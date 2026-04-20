@@ -838,9 +838,9 @@ def render_ui():
 
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
-        scheduled_file = st.file_uploader("Scheduled Deduction Report (.xlsx)", type=["xlsx"], key="scheduled")
+        scheduled_file = st.file_uploader("Scheduled Deduction Report", type=["xlsx", "csv"], key="scheduled")
     with col2:
-        prior_file = st.file_uploader("Prior Payroll File (.xlsx)", type=["xlsx"], key="prior")
+        prior_file = st.file_uploader("Prior Payroll File", type=["xlsx", "csv"], key="prior")
     with col3:
         analysis_year = st.number_input("Analysis year for end-date checks", min_value=2020, max_value=2035, value=2026, step=1)
 
@@ -852,8 +852,16 @@ def render_ui():
             st.stop()
 
         try:
-            sched_df = pd.read_excel(scheduled_file, sheet_name=0)
-            prior_df = pd.read_excel(prior_file, sheet_name=0)
+            def load_df(file):
+                if file.name.lower().endswith(".csv"):
+                    try:
+                        return pd.read_csv(file)
+                    except UnicodeDecodeError:
+                        return pd.read_csv(file, encoding="latin1")
+                return pd.read_excel(file)
+
+            sched_df = load_df(scheduled_file)
+            prior_df = load_df(prior_file)
 
             scheduled_summary, scheduled_detail = build_scheduled_summary(sched_df)
             prior_summary, prior_detail = build_prior_summary(prior_df)

@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-_current_dir = os.path.abspath(os.path.dirname(__file__))
-CONFIG_PATH = os.path.join(_current_dir, "assets", "deduction_setup_config.xlsx")
+# Use the user's active configuration file location
+CONFIG_PATH = os.path.join(os.getcwd(), "Deduction Analyzer", "Deduction Setup Config.xlsx")
 
 # st.set_page_config(page_title="Deduction Analyzer", layout="wide")
 
@@ -219,17 +219,19 @@ def get_deduction_family(type_code: str, description: str) -> str:
 # -----------------------------
 
 def get_local_config() -> pd.DataFrame:
-    if not os.path.exists(CONFIG_PATH):
-        return pd.DataFrame()
     try:
+        if not os.path.exists(CONFIG_PATH):
+            st.error(f"Config path not found: {CONFIG_PATH}")
+            return pd.DataFrame()
         return pd.read_excel(CONFIG_PATH)
-    except Exception:
+    except Exception as e:
+        st.error(f"Error reading config: {e}")
         return pd.DataFrame()
 
 
 def generate_configuration_tab(master_df: pd.DataFrame, config_df: pd.DataFrame) -> pd.DataFrame:
     if config_df.empty:
-        return pd.DataFrame(columns=["Note", "Message"], data=[["Configuration File Missing", "Please ensure the assets folder contains deduction_setup_config.xlsx"]])
+        return pd.DataFrame(columns=["Note", "Message"], data=[["Configuration File Missing", f"Please ensure the config file is placed at: {CONFIG_PATH}"]])
 
     # We only configure items recommended to be setup
     setup_recommendations = ["Setup Required", "Keep"]

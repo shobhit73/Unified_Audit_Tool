@@ -1,11 +1,14 @@
 
 import io
+import os
 import re
 from datetime import datetime
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "assets", "deduction_setup_config.xlsx")
 
 # st.set_page_config(page_title="Deduction Analyzer", layout="wide")
 
@@ -196,6 +199,72 @@ def get_deduction_family(type_code: str, description: str) -> str:
     if code in {"NSD", "PFL"} or desc in {"NEW YORK SDI", "NY PAID FAMILY LEAVE"}:
         return "Statutory NY Items"
     return "Standalone / Review"
+
+
+# -----------------------------
+# Configuration mapping logic
+# -----------------------------
+
+def get_local_config() -> pd.DataFrame:
+    if not os.path.exists(CONFIG_PATH):
+        return pd.DataFrame()
+    try:
+        return pd.read_excel(CONFIG_PATH)
+    except Exception:
+        return pd.DataFrame()
+
+
+def generate_configuration_tab(master_df: pd.DataFrame, config_df: pd.DataFrame) -> pd.DataFrame:
+    if config_df.empty:
+        return pd.DataFrame(columns=["Note", "Message"], data=[["Configuration File Missing", "Please ensure the assets folder contains deduction_setup_config.xlsx"]])
+
+    # We only configure items recommended to "Keep"
+    keeps = master_df[master_df["Recommendation"] == "Keep"].copy()
+    if keeps.empty:
+        return pd.DataFrame(columns=["Note"], data=[["No 'Keep' recommendations found to configure."]])
+
+    # Standardize names for matching
+    config_df["_match_key"] = config_df["Company Deduction Name"].astype(str).str.strip().str.lower()
+    keeps["_match_key"] = keeps["Deduction Desc"].astype(str).str.strip().str.lower()
+
+    # Join
+    merged = pd.merge(keeps, config_df, on="_match_key", how="left")
+
+    # Dynamic Overrides: Priority is the Paycom source data for Tax and Method
+    # Derived Deduction Type (Config) <- Tax Category (Paycom)
+    # Deduction Method (UI) (Config) <- Value Basis (Paycom)
+    
+    # Map Paycom Value Basis to Uzio UI terms
+    basis_to_uzio = {
+        "Fixed Dollar": "Fixed $",
+        "Percent": "% of Gross Pay",
+        "Both": "Fixed $ / % of Gross Pay",
+        "Zero/None": "Manual Check"
+    }
+    merged["Derived Deduction Type"] = merged["Tax Category"]
+    merged["Deduction Method (UI)"] = merged["Value Basis"].map(basis_to_uzio).fillna(merged["Value Basis"])
+
+    # Select and order final Uzio columns
+    uzio_cols = [
+        "Company Deduction Name", "Derived Deduction Type", "Deduction Method (UI)", 
+        "Amount Per Pay", "Amount %", "W-2 Box (UI)", "W-2 Label", "Sync From Benefit", 
+        "Product Category Code", "Garnishment Type", "Other Garnishment Type", 
+        "Auto Assign to Employee", "Weekly Schedule", "Biweekly Schedule", 
+        "Semimonthly Schedule", "Arrears Applicable", "Arrears Processing Method", 
+        "Flat Arrears Amount", "Assign Paycheck Limit", "Paycheck Minimum", 
+        "Paycheck Maximum", "Deduction Priority", "Plan Type", "Plan ID", "Deferral Limit"
+    ]
+    
+    # Identify missed matches
+    merged["Match Status"] = np.where(merged["Company Deduction Name"].isna(), "Manual Mapping Required", "Mapped from Config")
+    
+    # Fill missing Company Deduction Name with Paycom Desc if match failed
+    merged["Company Deduction Name"] = merged["Company Deduction Name"].fillna(merged["Deduction Desc"])
+
+    existing_cols = [c for c in uzio_cols if c in merged.columns]
+    final_uzio = merged[["Match Status"] + existing_cols].copy()
+    
+    return final_uzio
 
 
 # -----------------------------
@@ -559,63 +628,83 @@ def to_excel_bytes(
     master: pd.DataFrame,
     family_analysis: pd.DataFrame,
     scheduled_detail: pd.DataFrame,
-    prior_detail: pd.DataFrame
+    prior_detail: pd.DataFrame,
+    config_guide: pd.DataFrame = None
 ) -> bytes:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         master.to_excel(writer, index=False, sheet_name="Master_Summary")
+        if config_guide is not None and not config_guide.empty:
+            config_guide.to_excel(writer, index=False, sheet_name="Uzio_Configuration_Guide")
         family_analysis.to_excel(writer, index=False, sheet_name="Family_Analysis")
         scheduled_detail.to_excel(writer, index=False, sheet_name="Scheduled_Detail")
         prior_detail.to_excel(writer, index=False, sheet_name="Prior_Payroll_Detail")
 
         wb = writer.book
-        ws = writer.sheets["Master_Summary"]
-        ws.freeze_panes = "A2"
-
-        for col_cells in ws.columns:
-            max_len = 0
-            col_letter = col_cells[0].column_letter
-            for cell in col_cells[:2000]:
-                try:
-                    max_len = max(max_len, len(str(cell.value)) if cell.value is not None else 0)
-                except Exception:
-                    pass
-            ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 40)
-
         from openpyxl.styles import PatternFill, Font
-        green_fill = PatternFill("solid", fgColor="E2F0D9")
-        yellow_fill = PatternFill("solid", fgColor="FFF2CC")
-        red_fill = PatternFill("solid", fgColor="F4CCCC")
-        purple_fill = PatternFill("solid", fgColor="EADCF8")
         blue_fill = PatternFill("solid", fgColor="D9EAF7")
         bold = Font(bold=True)
 
-        for cell in ws[1]:
-            cell.font = bold
-            cell.fill = blue_fill
+        # 1. Format Master_Summary
+        if "Master_Summary" in writer.sheets:
+            ws1 = writer.sheets["Master_Summary"]
+            ws1.freeze_panes = "A2"
+            for cell in ws1[1]:
+                cell.font = bold
+                cell.fill = blue_fill
+            for col_cells in ws1.columns:
+                max_len = 0
+                col_letter = col_cells[0].column_letter
+                for cell in col_cells[:2000]:
+                    try:
+                        max_len = max(max_len, len(str(cell.value)) if cell.value is not None else 0)
+                    except: pass
+                ws1.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 40)
 
-        headers = [c.value for c in ws[1]]
-        idx = {name: i + 1 for i, name in enumerate(headers)}
+        # 2. Format Uzio_Configuration_Guide
+        if "Uzio_Configuration_Guide" in writer.sheets:
+            ws2 = writer.sheets["Uzio_Configuration_Guide"]
+            ws2.freeze_panes = "B2" # Freeze on Match Status
+            for cell in ws2[1]:
+                cell.font = bold
+                cell.fill = blue_fill
+            for col_cells in ws2.columns:
+                max_len = 0
+                col_letter = col_cells[0].column_letter
+                for cell in col_cells[:2000]:
+                    try:
+                        max_len = max(max_len, len(str(cell.value)) if cell.value is not None else 0)
+                    except: pass
+                ws2.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 40)
 
-        for row in range(2, ws.max_row + 1):
-            running = ws.cell(row, idx.get("Running Flag", 1)).value == "Yes" if idx.get("Running Flag") else False
-            zero_flag = ws.cell(row, idx.get("All Rows Zero Amount/Percent?", 1)).value == "Yes" if idx.get("All Rows Zero Amount/Percent?") else False
-            rec = ws.cell(row, idx.get("Recommendation", 1)).value if idx.get("Recommendation") else ""
-            family_overlap = ws.cell(row, idx.get("Family Consolidation Possible", 1)).value == "No" if idx.get("Family Consolidation Possible") else False
+        if "Master_Summary" in writer.sheets:
+            headers = [c.value for c in ws1[1]]
+            idx = {name: i + 1 for i, name in enumerate(headers)}
 
-            fill = None
-            if rec == "Remove Candidate":
-                fill = red_fill
-            elif family_overlap:
-                fill = purple_fill
-            elif zero_flag:
-                fill = yellow_fill
-            elif running:
-                fill = green_fill
+            for row in range(2, ws1.max_row + 1):
+                running = ws1.cell(row, idx.get("Running Flag", 1)).value == "Yes" if idx.get("Running Flag") else False
+                zero_flag = ws1.cell(row, idx.get("All Rows Zero Amount/Percent?", 1)).value == "Yes" if idx.get("All Rows Zero Amount/Percent?") else False
+                rec = ws1.cell(row, idx.get("Recommendation", 1)).value if idx.get("Recommendation") else ""
+                family_overlap = ws1.cell(row, idx.get("Family Consolidation Possible", 1)).value == "No" if idx.get("Family Consolidation Possible") else False
 
-            if fill:
-                for col in range(1, ws.max_column + 1):
-                    ws.cell(row, col).fill = fill
+                green_fill = PatternFill("solid", fgColor="E2F0D9")
+                yellow_fill = PatternFill("solid", fgColor="FFF2CC")
+                red_fill = PatternFill("solid", fgColor="F4CCCC")
+                purple_fill = PatternFill("solid", fgColor="EADCF8")
+
+                fill = None
+                if rec == "Remove Candidate":
+                    fill = red_fill
+                elif family_overlap:
+                    fill = purple_fill
+                elif zero_flag:
+                    fill = yellow_fill
+                elif running:
+                    fill = green_fill
+
+                if fill:
+                    for col in range(1, ws1.max_column + 1):
+                        ws1.cell(row, col).fill = fill
 
     output.seek(0)
     return output.getvalue()
@@ -661,9 +750,19 @@ def render_ui():
                 family_analysis=family_analysis,
                 analysis_year=int(analysis_year)
             )
-            excel_bytes = to_excel_bytes(master, family_analysis, scheduled_detail, prior_detail)
+            
+            # Persistent Config Integration
+            config_df = get_local_config()
+            config_guide = generate_configuration_tab(master, config_df)
+            
+            excel_bytes = to_excel_bytes(master, family_analysis, scheduled_detail, prior_detail, config_guide)
 
             st.success("Analysis completed.")
+            if not config_df.empty:
+                mapped_count = (config_guide["Match Status"] == "Mapped from Config").sum()
+                st.info(f"Matched {mapped_count} deductions to standard Uzio configurations.")
+            else:
+                st.warning("Local configuration file (deduction_setup_config.xlsx) not found. Setup guide will be generic.")
 
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("Total items in master", len(master))
@@ -673,6 +772,10 @@ def render_ui():
 
             st.subheader("Master Summary Preview")
             st.dataframe(master, use_container_width=True, height=500)
+            
+            if not config_guide.empty:
+                st.subheader("Uzio Configuration Preview")
+                st.dataframe(config_guide, use_container_width=True, height=400)
 
             st.subheader("Family Analysis Preview")
             st.dataframe(family_analysis, use_container_width=True, height=300)
@@ -688,14 +791,13 @@ def render_ui():
             with st.expander("Business rules used"):
                 st.markdown(
                     """
+- **Dual-Tab Output**: Produces a summary recommendation tab and a technical configuration tab.
+- **Tax & Method**: These are derived from Paycom's source files to ensure accuracy.
+- **Standard Mapping**: uzio-specific settings (W-2, Arrears, etc.) are looked up from the saved `deduction_setup_config.xlsx`.
 - If **any row** of a scheduled deduction has `0000` in Start Date or Stop Date, it is treated as a **Running Deduction**.
-- If a scheduled deduction is running, the tool keeps that running classification and does not rely on actual dates for decisioning.
 - `A`, `T`, and `V` employee statuses are counted separately from the scheduled deduction report.
-- A deduction is flagged **All Rows Zero Amount/Percent = Yes** only if **every scheduled row** for that deduction has zero/blank normalized Amount and zero/blank normalized Percent.
-- Prior payroll lines ending with **Match** or **Memo** are classified as **Contribution**.
-- **NSD** and **PFL** are classified as **Tax / Statutory Payroll Item** in this version, based on your current working assumption.
 - Deduction families such as **Medical** and **Support Order** are analyzed at employee level.
-- If any employee has more than one code within the same family, then **Family Consolidation Possible = No** and the recommendation is to **Keep Separate**.
+- If any employee has more than one code within the same family, then **Family Consolidation Possible = No**.
                     """
                 )
 

@@ -8,7 +8,10 @@ from utils.audit_utils import clean_money_val, norm_colname
 def load_mapping(file, cat_name, source_col, uzio_col):
     """Load a mapping file and return a list of mappings (Source_Name, UZIO_Name)."""
     try:
-        df = pd.read_excel(file)
+        if str(file.name).lower().endswith('.csv'):
+            df = pd.read_csv(file)
+        else:
+            df = pd.read_excel(file)
         # Normalize headers to find columns
         df.columns = [norm_colname(c) for c in df.columns]
         
@@ -79,6 +82,22 @@ def parse_paycom_filename_date(filename):
 
 def find_header_and_data_uzio(file):
     """Specific logic for Uzio reports (often multi-row headers)."""
+    if str(file.name).lower().endswith('.csv'):
+        df_peek = pd.read_csv(file, header=None, nrows=50)
+        header_idx = 0
+        for i, row in df_peek.iterrows():
+            row_str = " ".join([str(x).lower() for x in row if pd.notna(x)])
+            if "employee id" in row_str or "employee name" in row_str:
+                header_idx = i
+                break
+                
+        df = pd.read_csv(file, header=header_idx)
+        header_top = None
+        if header_idx > 0:
+            header_top = df_peek.iloc[header_idx - 1].tolist()
+            
+        return df, header_top, "Sheet1"
+
     xls = pd.ExcelFile(file)
     target_sheet = xls.sheet_names[0]
     if len(xls.sheet_names) > 1 and "criteria" in xls.sheet_names[0].lower():
@@ -101,6 +120,17 @@ def find_header_and_data_uzio(file):
 
 def find_header_and_data_paycom(file):
     """Specific logic for Paycom reports."""
+    if str(file.name).lower().endswith('.csv'):
+        df_peek = pd.read_csv(file, header=None, nrows=20)
+        header_idx = 0
+        for i, row in df_peek.iterrows():
+            row_str = " ".join([str(x).lower() for x in row if pd.notna(x)])
+            if any(kw in row_str for kw in ["ee code", "description", "earning", "amount", "row labels"]):
+                header_idx = i
+                break
+        df = pd.read_csv(file, header=header_idx)
+        return df, None, "Sheet1"
+
     # Read first sheet
     xls = pd.ExcelFile(file)
     df_peek = pd.read_excel(xls, sheet_name=xls.sheet_names[0], header=None, nrows=10)
@@ -343,8 +373,8 @@ def render_ui():
     between Paycom and UZIO reports based on provided mapping files.
     
     **Required Files**:
-    1.  **Paycom Prior Payroll File(s)** (Excel - format `Priorpayroll_MMDDYYYY_MMDDYYYY_MMDDYYYY.xlsx`)
-    2.  **UZIO Prior Payroll Register File** (Excel)
+    1.  **Paycom Prior Payroll File(s)** (Excel/CSV - format `Priorpayroll_MMDDYYYY_MMDDYYYY_MMDDYYYY.xlsx`)
+    2.  **UZIO Prior Payroll Register File** (Excel/CSV)
     3.  **4 Mapping Files** (Earnings, Deductions, Contributions, Taxes)
     """)
     
@@ -353,7 +383,7 @@ def render_ui():
         with col1:
             paycom_files = st.file_uploader(
                 "Upload Paycom Prior Payroll File(s)",
-                type=["xlsx", "xls"],
+                type=["xlsx", "xls", "csv"],
                 accept_multiple_files=True,
                 key="pc_tc_paycom",
                 help="Select one or more Paycom files (e.g. Priorpayroll_MMDDYYYY_MMDDYYYY_MMDDYYYY.xlsx)"
@@ -361,16 +391,16 @@ def render_ui():
             if paycom_files:
                 st.caption(f"✅ {len(paycom_files)} Paycom file(s) uploaded: {', '.join(f.name for f in paycom_files)}")
         with col2:
-            uzio_file = st.file_uploader("Upload UZIO Prior Payroll Register", type=["xlsx", "xls"], key="pc_tc_uzio")
+            uzio_file = st.file_uploader("Upload UZIO Prior Payroll Register", type=["xlsx", "xls", "csv"], key="pc_tc_uzio")
 
     with st.expander("🗺️ Upload Mapping Files", expanded=True):
         m_col1, m_col2 = st.columns(2)
         with m_col1:
-            earn_file = st.file_uploader("Earnings Mapping File", type=["xlsx", "xls"], key="pc_tc_m_earn")
-            cont_file = st.file_uploader("Contributions Mapping File", type=["xlsx", "xls"], key="pc_tc_m_cont")
+            earn_file = st.file_uploader("Earnings Mapping File", type=["xlsx", "xls", "csv"], key="pc_tc_m_earn")
+            cont_file = st.file_uploader("Contributions Mapping File", type=["xlsx", "xls", "csv"], key="pc_tc_m_cont")
         with m_col2:
-            ded_file = st.file_uploader("Deductions Mapping File", type=["xlsx", "xls"], key="pc_tc_m_ded")
-            tax_file = st.file_uploader("Taxes Mapping File", type=["xlsx", "xls"], key="pc_tc_m_tax")
+            ded_file = st.file_uploader("Deductions Mapping File", type=["xlsx", "xls", "csv"], key="pc_tc_m_ded")
+            tax_file = st.file_uploader("Taxes Mapping File", type=["xlsx", "xls", "csv"], key="pc_tc_m_tax")
 
     if "pc_audit_results" not in st.session_state:
         st.session_state.pc_audit_results = None

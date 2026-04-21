@@ -7,7 +7,10 @@ from utils.audit_utils import clean_money_val, norm_colname
 def load_mapping(file, cat_name, adp_col, uzio_col):
     """Load a mapping file and return a list of mappings (ADP_Name, UZIO_Name)."""
     try:
-        df = pd.read_excel(file)
+        if str(file.name).lower().endswith('.csv'):
+            df = pd.read_csv(file)
+        else:
+            df = pd.read_excel(file)
         # Normalize headers to find columns
         df.columns = [norm_colname(c) for c in df.columns]
         
@@ -54,6 +57,26 @@ def normalize_id(id_val):
 
 def find_header_and_data(file):
     """Find the correct header row and read the data, skipping metadata sheets."""
+    if str(file.name).lower().endswith('.csv'):
+        # Peek at first 50 rows to find header
+        df_peek = pd.read_csv(file, header=None, nrows=50)
+        header_idx = 0
+        for i, row in df_peek.iterrows():
+            row_str = " ".join([str(x).lower() for x in row if pd.notna(x)])
+            if "employee id" in row_str or "employee name" in row_str:
+                header_idx = i
+                break
+                
+        # Read the full file starting from the header row
+        df = pd.read_csv(file, header=header_idx)
+        
+        # Also get the row ABOVE the header (for Uzio's multi-row headers)
+        header_top = None
+        if header_idx > 0:
+            header_top = df_peek.iloc[header_idx - 1].tolist()
+            
+        return df, header_top, "Sheet1"
+
     xls = pd.ExcelFile(file)
     target_sheet = xls.sheet_names[0]
     
@@ -264,26 +287,26 @@ def render_ui():
     between ADP and UZIO reports based on provided mapping files.
     
     **Required Files**:
-    1.  **ADP Prior Payroll File** (Excel)
-    2.  **UZIO Prior Payroll Register File** (Excel)
+    1.  **ADP Prior Payroll File(s)** (Excel/CSV)
+    2.  **UZIO Prior Payroll Register File** (Excel/CSV)
     3.  **4 Mapping Files** (Earnings, Deductions, Contributions, Taxes)
     """)
     
     with st.expander("📁 Upload Payroll Reports", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
-            adp_files = st.file_uploader("Upload ADP Prior Payroll File(s)", type=["xlsx", "xls"], accept_multiple_files=True, key="tc_adp")
+            adp_files = st.file_uploader("Upload ADP Prior Payroll File(s)", type=["xlsx", "xls", "csv"], accept_multiple_files=True, key="tc_adp")
         with col2:
-            uzio_file = st.file_uploader("Upload UZIO Prior Payroll Register", type=["xlsx", "xls"], key="tc_uzio")
+            uzio_file = st.file_uploader("Upload UZIO Prior Payroll Register", type=["xlsx", "xls", "csv"], key="tc_uzio")
 
     with st.expander("🗺️ Upload Mapping Files", expanded=True):
         m_col1, m_col2 = st.columns(2)
         with m_col1:
-            earn_file = st.file_uploader("Earnings Mapping File", type=["xlsx", "xls"], key="tc_m_earn")
-            cont_file = st.file_uploader("Contributions Mapping File", type=["xlsx", "xls"], key="tc_m_cont")
+            earn_file = st.file_uploader("Earnings Mapping File", type=["xlsx", "xls", "csv"], key="tc_m_earn")
+            cont_file = st.file_uploader("Contributions Mapping File", type=["xlsx", "xls", "csv"], key="tc_m_cont")
         with m_col2:
-            ded_file = st.file_uploader("Deductions Mapping File", type=["xlsx", "xls"], key="tc_m_ded")
-            tax_file = st.file_uploader("Taxes Mapping File", type=["xlsx", "xls"], key="tc_m_tax")
+            ded_file = st.file_uploader("Deductions Mapping File", type=["xlsx", "xls", "csv"], key="tc_m_ded")
+            tax_file = st.file_uploader("Taxes Mapping File", type=["xlsx", "xls", "csv"], key="tc_m_tax")
 
     # Handle results persistence
     if "audit_results" not in st.session_state:

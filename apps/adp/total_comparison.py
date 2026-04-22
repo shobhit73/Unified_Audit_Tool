@@ -7,6 +7,7 @@ from utils.audit_utils import clean_money_val, norm_colname
 def load_mapping(file, cat_name, adp_col, uzio_col):
     """Load a mapping file and return a list of mappings (ADP_Name, UZIO_Name)."""
     try:
+        file.seek(0)
         if str(file.name).lower().endswith('.csv'):
             df = pd.read_csv(file)
         else:
@@ -57,8 +58,10 @@ def normalize_id(id_val):
 
 def find_header_and_data(file):
     """Find the correct header row and read the data, skipping metadata sheets."""
+    file.seek(0)
     if str(file.name).lower().endswith('.csv'):
         # Peek at first 50 rows to find header
+        file.seek(0)
         df_peek = pd.read_csv(file, header=None, nrows=50)
         header_idx = 0
         for i, row in df_peek.iterrows():
@@ -68,6 +71,7 @@ def find_header_and_data(file):
                 break
                 
         # Read the full file starting from the header row
+        file.seek(0)
         df = pd.read_csv(file, header=header_idx)
         
         # Also get the row ABOVE the header (for Uzio's multi-row headers)

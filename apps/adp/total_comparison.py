@@ -79,38 +79,68 @@ def find_header_and_data(file):
         if header_idx > 0:
             header_top = df_peek.iloc[header_idx - 1].tolist()
             
-        return df, header_top, "Sheet1"
-
-    xls = pd.ExcelFile(file)
-    target_sheet = xls.sheet_names[0]
-    
-    # Skip "Report Criteria" or similar metadata sheets
-    if len(xls.sheet_names) > 1 and "criteria" in xls.sheet_names[0].lower():
-        target_sheet = xls.sheet_names[1]
-    
-    # Peek at first 50 rows to find header
-    df_peek = pd.read_excel(xls, sheet_name=target_sheet, header=None, nrows=50)
-    header_idx = 0
-    for i, row in df_peek.iterrows():
-        row_str = " ".join([str(x).lower() for x in row if pd.notna(x)])
-        if "employee id" in row_str or "employee name" in row_str:
-            header_idx = i
-            break
-            
-    # Read the full sheet starting from the header row
-    df = pd.read_excel(xls, sheet_name=target_sheet, header=header_idx)
-    
-    # Also get the row ABOVE the header (for Uzio's multi-row headers)
-    header_top = None
-    if header_idx > 0:
-        header_top = df_peek.iloc[header_idx - 1].tolist()
+        target_sheet = "Sheet1"
+    else:
+        xls = pd.ExcelFile(file)
+        target_sheet = xls.sheet_names[0]
         
+        # Skip "Report Criteria" or similar metadata sheets
+        if len(xls.sheet_names) > 1 and "criteria" in xls.sheet_names[0].lower():
+            target_sheet = xls.sheet_names[1]
+        
+        # Peek at first 50 rows to find header
+        df_peek = pd.read_excel(xls, sheet_name=target_sheet, header=None, nrows=50)
+        header_idx = 0
+        for i, row in df_peek.iterrows():
+            row_str = " ".join([str(x).lower() for x in row if pd.notna(x)])
+            if "employee id" in row_str or "employee name" in row_str:
+                header_idx = i
+                break
+                
+        # Read the full sheet starting from the header row
+        df = pd.read_excel(xls, sheet_name=target_sheet, header=header_idx)
+        
+        # Also get the row ABOVE the header (for Uzio's multi-row headers)
+        header_top = None
+        if header_idx > 0:
+            header_top = df_peek.iloc[header_idx - 1].tolist()
+
+    # --- GRAND TOTAL ROW DETECTION ---
+    # Sometimes ADP exports include a grand total at the very bottom but fail to clear 
+    # the last employee's ID from that row, messing up totals for that employee.
+    if len(df) > 1:
+        last_row = df.iloc[-1]
+        prev_row = df.iloc[-2]
+        
+        shared_cols = 0
+        for c in df.columns[:5]:
+            v_last = str(last_row[c]).strip()
+            v_prev = str(prev_row[c]).strip()
+            if v_last and v_last == v_prev and v_last.lower() != 'nan':
+                shared_cols += 1
+                
+        # If the last row shares an ID with the previous row, check if its values are massive
+        if shared_cols >= 1:
+            for c in df.columns:
+                try:
+                    val_last = clean_money_val(last_row[c])
+                    if val_last > 100:  
+                        sum_rest = sum(clean_money_val(x) for x in df[c].iloc[:-1])
+                        # If the last row's value is roughly equal to the sum of all preceding rows,
+                        # it is undeniably a company-wide grand total.
+                        if sum_rest > 0 and abs(val_last - sum_rest) < sum_rest * 0.05:
+                            df = df.iloc[:-1]
+                            break
+                except:
+                    continue
+                    
     return df, header_top, target_sheet
 
 def calculate_totals(df, header_top, column_names):
     """Sum up values for columns that match any of the provided names, handling multi-row headers."""
     found_cols = []
     emp_tots = {}
+    emp_row_counts = {}
     
     # --- STRICT ROW FILTERING ---
     id_col = next((c for c in df.columns if any(x in str(c).lower() for x in ["associate id", "employee id", "file #"])), None)
@@ -166,9 +196,11 @@ def calculate_totals(df, header_top, column_names):
         key = (eid, pay_date)
         if key not in emp_tots:
             emp_tots[key] = 0.0
+            emp_row_counts[key] = 0
         emp_tots[key] += row_tot
+        emp_row_counts[key] += 1
             
-    return sum(emp_tots.values()), found_cols, emp_tots
+    return sum(emp_tots.values()), found_cols, emp_tots, emp_row_counts
 
 def run_comparison(adp_files, uzio_file, mappings):
     """Main logic to compare totals based on mappings."""
@@ -198,8 +230,9 @@ def run_comparison(adp_files, uzio_file, mappings):
         adp_total = 0.0
         adp_cols = []
         adp_emp_detail = {} # (eid) -> {date: amount}
+        adp_emp_counts = {} # (eid) -> {date: count}
         for df_a, adp_t, _ in adp_data_list:
-            tot, cols, emp_m = calculate_totals(df_a, adp_t, adp_names)
+            tot, cols, emp_m, emp_c = calculate_totals(df_a, adp_t, adp_names)
             adp_total += tot
             for c in cols:
                 if c not in adp_cols:
@@ -207,8 +240,11 @@ def run_comparison(adp_files, uzio_file, mappings):
             for (eid, p_date), v in emp_m.items():
                 if eid not in adp_emp_detail: adp_emp_detail[eid] = {}
                 adp_emp_detail[eid][p_date] = adp_emp_detail[eid].get(p_date, 0.0) + v
+            for (eid, p_date), c_val in emp_c.items():
+                if eid not in adp_emp_counts: adp_emp_counts[eid] = {}
+                adp_emp_counts[eid][p_date] = adp_emp_counts[eid].get(p_date, 0) + c_val
         
-        uzio_total, uzio_cols, uzio_emp_m = calculate_totals(df_uzio, uzio_top, [u_name])
+        uzio_total, uzio_cols, uzio_emp_m, _ = calculate_totals(df_uzio, uzio_top, [u_name])
         uzio_emp_detail = {}
         for (eid, p_date), v in uzio_emp_m.items():
             if eid not in uzio_emp_detail: uzio_emp_detail[eid] = {}
@@ -249,6 +285,7 @@ def run_comparison(adp_files, uzio_file, mappings):
                         date_diff = val_uzio - val_adp
                         
                         if abs(date_diff) > 0.02:
+                            multiple_entries = "Yes" if adp_emp_counts.get(eid, {}).get(p_date, 0) > 1 else "No"
                             employee_mismatches.append({
                                 "Associate ID": eid,
                                 "Pay Date": p_date,
@@ -256,7 +293,8 @@ def run_comparison(adp_files, uzio_file, mappings):
                                 "UZIO Item": u_name,
                                 "ADP Amount": round(val_adp, 2),
                                 "UZIO Amount": round(val_uzio, 2),
-                                "Difference": round(date_diff, 2)
+                                "Difference": round(date_diff, 2),
+                                "Multiple ADP Entries on Same Date": multiple_entries
                             })
 
     df_results = pd.DataFrame(results)

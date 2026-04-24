@@ -36,7 +36,30 @@ def load_mapping(file, cat_name, adp_col, uzio_col):
 
 def find_header_and_data(file):
     """Find the correct header row and read the data, skipping metadata sheets."""
-    with pd.ExcelFile(file) as xls:
+    file.seek(0)
+    if str(file.name).lower().endswith('.csv'):
+        # Peek at first 50 rows to find header
+        file.seek(0)
+        df_peek = pd.read_csv(file, header=None, nrows=50)
+        header_idx = 0
+        for i, row in df_peek.iterrows():
+            row_str = " ".join([str(x).lower() for x in row if pd.notna(x)])
+            if "employee id" in row_str or "employee name" in row_str:
+                header_idx = i
+                break
+                
+        # Read the full file starting from the header row
+        file.seek(0)
+        df = pd.read_csv(file, header=header_idx)
+        
+        # Also get the row ABOVE the header (for Uzio's multi-row headers)
+        header_top = None
+        if header_idx > 0:
+            header_top = df_peek.iloc[header_idx - 1].tolist()
+            
+        target_sheet = "Sheet1"
+    else:
+        xls = pd.ExcelFile(file)
         target_sheet = xls.sheet_names[0]
         
         # Skip "Report Criteria" or similar metadata sheets
@@ -59,8 +82,37 @@ def find_header_and_data(file):
         header_top = None
         if header_idx > 0:
             header_top = df_peek.iloc[header_idx - 1].tolist()
-            
-        return df, header_top, target_sheet
+
+    # --- GRAND TOTAL ROW DETECTION ---
+    # Sometimes ADP exports include a grand total at the very bottom but fail to clear 
+    # the last employee's ID from that row, messing up totals for that employee.
+    if len(df) > 1:
+        last_row = df.iloc[-1]
+        prev_row = df.iloc[-2]
+        
+        shared_cols = 0
+        for c in df.columns[:5]:
+            v_last = str(last_row[c]).strip()
+            v_prev = str(prev_row[c]).strip()
+            if v_last and v_last == v_prev and v_last.lower() != 'nan':
+                shared_cols += 1
+                
+        # If the last row shares an ID with the previous row, check if its values are massive
+        if shared_cols >= 1:
+            for c in df.columns:
+                try:
+                    val_last = clean_money_val(last_row[c])
+                    if val_last > 100:  
+                        sum_rest = sum(clean_money_val(x) for x in df[c].iloc[:-1])
+                        # If the last row's value is roughly equal to the sum of all preceding rows,
+                        # it is undeniably a company-wide grand total.
+                        if sum_rest > 0 and abs(val_last - sum_rest) < sum_rest * 0.05:
+                            df = df.iloc[:-1]
+                            break
+                except:
+                    continue
+                    
+    return df, header_top, target_sheet
 
 def calculate_totals(df, header_top, column_names):
     """Sum up values for columns that match any of the provided names, handling multi-row headers."""

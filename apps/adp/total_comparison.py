@@ -331,10 +331,31 @@ def auto_detect_files(uploaded_files):
         try:
             name = f.name.lower()
             if name.endswith('.csv'):
-                df_peek = pd.read_csv(f, nrows=2, dtype=str)
+                df_peek = pd.read_csv(f, nrows=3, dtype=str)
+                cols = [str(c).lower().strip() for c in df_peek.columns]
             else:
-                df_peek = pd.read_excel(f, nrows=2, dtype=str)
-            cols = [str(c).lower().strip() for c in df_peek.columns]
+                # Excel: check all sheets, skip 'criteria' metadata sheets
+                xls = pd.ExcelFile(f)
+                cols = []
+                for sheet in xls.sheet_names:
+                    if 'criteria' in sheet.lower():
+                        continue
+                    df_peek = pd.read_excel(xls, sheet_name=sheet, header=None, nrows=5, dtype=str)
+                    # Try to find the actual header row
+                    for i, row in df_peek.iterrows():
+                        row_vals = [str(v).lower().strip() for v in row if pd.notna(v) and str(v).strip()]
+                        if any(x in ' '.join(row_vals) for x in ['employee id', 'associate id', 'source earning', 'source deduction', 'source tax']):
+                            cols = row_vals
+                            break
+                    if cols:
+                        break
+                if not cols:
+                    # Fallback: just use column headers of first non-criteria sheet
+                    for sheet in xls.sheet_names:
+                        if 'criteria' not in sheet.lower():
+                            df_peek = pd.read_excel(xls, sheet_name=sheet, nrows=3, dtype=str)
+                            cols = [str(c).lower().strip() for c in df_peek.columns]
+                            break
             f.seek(0)
         except Exception:
             f.seek(0)
@@ -343,6 +364,7 @@ def auto_detect_files(uploaded_files):
 
         col_str = " | ".join(cols)
 
+        # --- Mapping files (most specific, check first) ---
         if 'source tax code name' in col_str:
             result['tax'] = f
         elif 'source earning code name' in col_str:
@@ -351,17 +373,26 @@ def auto_detect_files(uploaded_files):
             result['ded'] = f
         elif 'source contribution code name' in col_str:
             result['cont'] = f
-        elif 'employee id' in col_str and (
-            'regular wage' in col_str or
-            ('first name' in col_str and 'gross pay' in col_str)
-        ):
+
+        # --- Uzio Prior Payroll Register ---
+        # Has 'employee id' + payroll data columns like 'regular wage', 'gross pay', 'pay date'
+        elif 'employee id' in col_str and any(x in col_str for x in [
+            'regular wage', 'gross pay', 'overtime', 'pay date', 'first name'
+        ]) and 'associate id' not in col_str:
             result['uzio'] = f
-        elif 'associate id' in col_str or 'regular earnings' in col_str:
+
+        # --- ADP Prior Payroll file ---
+        # Must have ASSOCIATE ID *and* a payroll-specific column (not just a lookup/deduction file)
+        elif 'associate id' in col_str and any(x in col_str for x in [
+            'regular earnings', 'gross pay', 'regular hours', 'total earnings', 'net pay'
+        ]):
             result['adp'].append(f)
+
         else:
             result['unknown'].append(f)
 
     return result
+
 
 # ---------------------------------------------------------------------------
 # UI

@@ -144,7 +144,11 @@ def calculate_totals(df, header_top, column_names):
     
     # --- STRICT ROW FILTERING ---
     id_col = next((c for c in df.columns if any(x in str(c).lower() for x in ["associate id", "employee id", "file #"])), None)
-    date_col = next((c for c in df.columns if any(x in str(c).lower() for x in ["pay date", "period end", "check date"])), None)
+    # Prioritize 'pay date' / 'check date' before 'period end' to avoid using quarterly
+    # period end dates instead of actual pay dates when both columns exist in the file.
+    date_col = next((c for c in df.columns if any(x == str(c).lower().strip() for x in ["pay date", "check date"])), None)
+    if date_col is None:
+        date_col = next((c for c in df.columns if any(x in str(c).lower() for x in ["pay date", "period end", "check date"])), None)
     
     if id_col:
         df_clean = df[df[id_col].notna()].copy()

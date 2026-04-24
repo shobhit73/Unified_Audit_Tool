@@ -51,16 +51,13 @@ def normalize_id(id_val):
     """Strip hyphens, leading zeros, and whitespace from ID for matching."""
     if pd.isna(id_val):
         return "Unknown"
-    # Remove hyphens, spaces and convert to string
     s = str(id_val).replace('-', '').replace(' ', '').strip()
-    # Strip leading zeros
     return s.lstrip('0') if s else "Unknown"
 
 def find_header_and_data(file):
     """Find the correct header row and read the data, skipping metadata sheets."""
     file.seek(0)
     if str(file.name).lower().endswith('.csv'):
-        # Peek at first 50 rows to find header
         file.seek(0)
         df_peek = pd.read_csv(file, header=None, nrows=50)
         header_idx = 0
@@ -70,11 +67,9 @@ def find_header_and_data(file):
                 header_idx = i
                 break
                 
-        # Read the full file starting from the header row
         file.seek(0)
         df = pd.read_csv(file, header=header_idx)
         
-        # Also get the row ABOVE the header (for Uzio's multi-row headers)
         header_top = None
         if header_idx > 0:
             header_top = df_peek.iloc[header_idx - 1].tolist()
@@ -84,11 +79,9 @@ def find_header_and_data(file):
         xls = pd.ExcelFile(file)
         target_sheet = xls.sheet_names[0]
         
-        # Skip "Report Criteria" or similar metadata sheets
         if len(xls.sheet_names) > 1 and "criteria" in xls.sheet_names[0].lower():
             target_sheet = xls.sheet_names[1]
         
-        # Peek at first 50 rows to find header
         df_peek = pd.read_excel(xls, sheet_name=target_sheet, header=None, nrows=50)
         header_idx = 0
         for i, row in df_peek.iterrows():
@@ -97,16 +90,14 @@ def find_header_and_data(file):
                 header_idx = i
                 break
                 
-        # Read the full sheet starting from the header row
         df = pd.read_excel(xls, sheet_name=target_sheet, header=header_idx)
         
-        # Also get the row ABOVE the header (for Uzio's multi-row headers)
         header_top = None
         if header_idx > 0:
             header_top = df_peek.iloc[header_idx - 1].tolist()
 
     # --- GRAND TOTAL ROW DETECTION ---
-    # Sometimes ADP exports include a grand total at the very bottom but fail to clear 
+    # Sometimes ADP exports include a grand total at the very bottom but fail to clear
     # the last employee's ID from that row, messing up totals for that employee.
     if len(df) > 1:
         last_row = df.iloc[-1]
@@ -119,15 +110,12 @@ def find_header_and_data(file):
             if v_last and v_last == v_prev and v_last.lower() != 'nan':
                 shared_cols += 1
                 
-        # If the last row shares an ID with the previous row, check if its values are massive
         if shared_cols >= 1:
             for c in df.columns:
                 try:
                     val_last = clean_money_val(last_row[c])
-                    if val_last > 100:  
+                    if val_last > 100:
                         sum_rest = sum(clean_money_val(x) for x in df[c].iloc[:-1])
-                        # If the last row's value is roughly equal to the sum of all preceding rows,
-                        # it is undeniably a company-wide grand total.
                         if sum_rest > 0 and abs(val_last - sum_rest) < sum_rest * 0.05:
                             df = df.iloc[:-1]
                             break
@@ -196,7 +184,6 @@ def calculate_totals(df, header_top, column_names):
         
         row_tot = sum(clean_money_val(row[c]) for c in set(cols_to_sum))
         
-        # Store with normalized ID and date
         key = (eid, pay_date)
         if key not in emp_tots:
             emp_tots[key] = 0.0
@@ -233,8 +220,8 @@ def run_comparison(adp_files, uzio_file, mappings):
         
         adp_total = 0.0
         adp_cols = []
-        adp_emp_detail = {} # (eid) -> {date: amount}
-        adp_emp_counts = {} # (eid) -> {date: count}
+        adp_emp_detail = {}
+        adp_emp_counts = {}
         for df_a, adp_t, _ in adp_data_list:
             tot, cols, emp_m, emp_c = calculate_totals(df_a, adp_t, adp_names)
             adp_total += tot
@@ -273,12 +260,10 @@ def run_comparison(adp_files, uzio_file, mappings):
             for eid in all_emp_ids:
                 if eid == "Unknown": continue
                 
-                # Check overall employee mismatch
                 emp_adp_total = sum(adp_emp_detail.get(eid, {}).values())
                 emp_uzio_total = sum(uzio_emp_detail.get(eid, {}).values())
                 
                 if abs(emp_uzio_total - emp_adp_total) > 0.02:
-                    # Drill down into pay periods for this employee
                     adp_dates = adp_emp_detail.get(eid, {})
                     uzio_dates = uzio_emp_detail.get(eid, {})
                     all_dates = set(adp_dates.keys()).union(set(uzio_dates.keys()))
@@ -326,95 +311,232 @@ def run_comparison(adp_files, uzio_file, mappings):
 
     return df_results, out_buffer.getvalue()
 
+# ---------------------------------------------------------------------------
+# Auto-detect helper for bulk upload
+# ---------------------------------------------------------------------------
+def auto_detect_files(uploaded_files):
+    """
+    Given a list of uploaded files, auto-detect each file's role by inspecting
+    column headers. Returns a dict with keys:
+      'adp', 'uzio', 'earn', 'ded', 'cont', 'tax', 'unknown'
+    """
+    result = {
+        'adp': [], 'uzio': None,
+        'earn': None, 'ded': None, 'cont': None, 'tax': None,
+        'unknown': []
+    }
+
+    for f in uploaded_files:
+        f.seek(0)
+        try:
+            name = f.name.lower()
+            if name.endswith('.csv'):
+                df_peek = pd.read_csv(f, nrows=2, dtype=str)
+            else:
+                df_peek = pd.read_excel(f, nrows=2, dtype=str)
+            cols = [str(c).lower().strip() for c in df_peek.columns]
+            f.seek(0)
+        except Exception:
+            f.seek(0)
+            result['unknown'].append(f)
+            continue
+
+        col_str = " | ".join(cols)
+
+        if 'source tax code name' in col_str:
+            result['tax'] = f
+        elif 'source earning code name' in col_str:
+            result['earn'] = f
+        elif 'source deduction code name' in col_str:
+            result['ded'] = f
+        elif 'source contribution code name' in col_str:
+            result['cont'] = f
+        elif 'employee id' in col_str and (
+            'regular wage' in col_str or
+            ('first name' in col_str and 'gross pay' in col_str)
+        ):
+            result['uzio'] = f
+        elif 'associate id' in col_str or 'regular earnings' in col_str:
+            result['adp'].append(f)
+        else:
+            result['unknown'].append(f)
+
+    return result
+
+# ---------------------------------------------------------------------------
+# UI
+# ---------------------------------------------------------------------------
 def render_ui():
     st.title("ADP - Prior Payroll Audit Tool")
     st.markdown("""
-    This tool compares the totals of payroll elements (Earnings, Deductions, Contributions, Taxes) 
+    Compares the totals of payroll elements (Earnings, Deductions, Contributions, Taxes)
     between ADP and UZIO reports based on provided mapping files.
-    
-    **Required Files**:
-    1.  **ADP Prior Payroll File(s)** (Excel/CSV)
-    2.  **UZIO Prior Payroll Register File** (Excel/CSV)
-    3.  **4 Mapping Files** (Earnings, Deductions, Contributions, Taxes)
     """)
-    
-    with st.expander("📁 Upload Payroll Reports", expanded=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            adp_files = st.file_uploader("Upload ADP Prior Payroll File(s)", type=["xlsx", "xls", "csv"], accept_multiple_files=True, key="tc_adp")
-        with col2:
-            uzio_file = st.file_uploader("Upload UZIO Prior Payroll Register", type=["xlsx", "xls", "csv"], key="tc_uzio")
 
-    with st.expander("🗺️ Upload Mapping Files", expanded=True):
-        m_col1, m_col2 = st.columns(2)
-        with m_col1:
-            earn_file = st.file_uploader("Earnings Mapping File", type=["xlsx", "xls", "csv"], key="tc_m_earn")
-            cont_file = st.file_uploader("Contributions Mapping File", type=["xlsx", "xls", "csv"], key="tc_m_cont")
-        with m_col2:
-            ded_file = st.file_uploader("Deductions Mapping File", type=["xlsx", "xls", "csv"], key="tc_m_ded")
-            tax_file = st.file_uploader("Taxes Mapping File", type=["xlsx", "xls", "csv"], key="tc_m_tax")
+    # ── Upload mode toggle ──────────────────────────────────────────────────
+    upload_mode = st.radio(
+        "Upload Mode",
+        ["📦 Bulk Upload (select all files at once)", "🗂️ Manual Upload (file by file)"],
+        horizontal=True,
+        key="tc_upload_mode"
+    )
 
-    # Handle results persistence
+    adp_files = []
+    uzio_file = earn_file = cont_file = ded_file = tax_file = None
+
+    # ── BULK MODE ────────────────────────────────────────────────────────────
+    if upload_mode.startswith("📦"):
+        st.info(
+            "Select **all** your files at once — ADP payroll file(s), UZIO register, "
+            "and all 4 mapping files. The tool will automatically classify each file.",
+            icon="💡"
+        )
+        bulk_files = st.file_uploader(
+            "Drop all files here",
+            type=["xlsx", "xls", "csv"],
+            accept_multiple_files=True,
+            key="tc_bulk"
+        )
+        if bulk_files:
+            detected = auto_detect_files(bulk_files)
+            adp_files = detected['adp']
+            uzio_file = detected['uzio']
+            earn_file = detected['earn']
+            ded_file  = detected['ded']
+            cont_file = detected['cont']
+            tax_file  = detected['tax']
+
+            st.markdown("#### Auto-detected file roles")
+            summary_rows = []
+            for f in adp_files:
+                summary_rows.append({"File": f.name, "Detected As": "ADP Payroll"})
+            if uzio_file:
+                summary_rows.append({"File": uzio_file.name, "Detected As": "UZIO Register"})
+            if earn_file:
+                summary_rows.append({"File": earn_file.name, "Detected As": "Earnings Mapping"})
+            if ded_file:
+                summary_rows.append({"File": ded_file.name, "Detected As": "Deductions Mapping"})
+            if cont_file:
+                summary_rows.append({"File": cont_file.name, "Detected As": "Contributions Mapping"})
+            if tax_file:
+                summary_rows.append({"File": tax_file.name, "Detected As": "Taxes Mapping"})
+            for f in detected['unknown']:
+                summary_rows.append({"File": f.name, "Detected As": "Unknown - not used"})
+
+            if summary_rows:
+                role_df = pd.DataFrame(summary_rows)
+                # Colour the Detected As column
+                def _colour_role(val):
+                    if "ADP" in val or "UZIO" in val or "Mapping" in val:
+                        return "color: green"
+                    return "color: orange"
+                st.dataframe(
+                    role_df.style.map(_colour_role, subset=["Detected As"]),
+                    use_container_width=True, hide_index=True
+                )
+
+            missing = []
+            if not adp_files: missing.append("ADP Payroll file")
+            if not uzio_file: missing.append("UZIO Register")
+            if not earn_file: missing.append("Earnings Mapping")
+            if not ded_file:  missing.append("Deductions Mapping")
+            if not cont_file: missing.append("Contributions Mapping")
+            if not tax_file:  missing.append("Taxes Mapping")
+            if missing:
+                st.warning(f"Still missing: **{', '.join(missing)}**. Please add these files too.")
+
+    # ── MANUAL MODE ──────────────────────────────────────────────────────────
+    else:
+        with st.expander("📁 Upload Payroll Reports", expanded=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                adp_files = st.file_uploader(
+                    "Upload ADP Prior Payroll File(s)",
+                    type=["xlsx", "xls", "csv"],
+                    accept_multiple_files=True,
+                    key="tc_adp"
+                )
+            with col2:
+                uzio_file = st.file_uploader(
+                    "Upload UZIO Prior Payroll Register",
+                    type=["xlsx", "xls", "csv"],
+                    key="tc_uzio"
+                )
+
+        with st.expander("🗺️ Upload Mapping Files", expanded=True):
+            m_col1, m_col2 = st.columns(2)
+            with m_col1:
+                earn_file = st.file_uploader("Earnings Mapping File",      type=["xlsx", "xls", "csv"], key="tc_m_earn")
+                cont_file = st.file_uploader("Contributions Mapping File", type=["xlsx", "xls", "csv"], key="tc_m_cont")
+            with m_col2:
+                ded_file  = st.file_uploader("Deductions Mapping File",    type=["xlsx", "xls", "csv"], key="tc_m_ded")
+                tax_file  = st.file_uploader("Taxes Mapping File",         type=["xlsx", "xls", "csv"], key="tc_m_tax")
+
+    # ── RUN AUDIT ────────────────────────────────────────────────────────────
     if "audit_results" not in st.session_state:
         st.session_state.audit_results = None
     if "audit_report" not in st.session_state:
         st.session_state.audit_report = None
 
-    if adp_files and len(adp_files) > 0 and all([uzio_file, earn_file, cont_file, ded_file, tax_file]):
-        if st.button("Run Total Comparison", type="primary"):
+    all_ready = (
+        adp_files and len(adp_files) > 0 and
+        all([uzio_file, earn_file, cont_file, ded_file, tax_file])
+    )
+
+    if all_ready:
+        if st.button("Run Total Comparison", type="primary", use_container_width=True):
             with st.spinner("Processing files and calculating totals..."):
-                # Load mappings
                 all_mappings = []
-                all_mappings.extend(load_mapping(earn_file, "Earnings", "Source Earning Code Name", "Uzio Earning Code Name"))
-                all_mappings.extend(load_mapping(ded_file, "Deductions", "Source Deduction Code Name", "Uzio Deduction Code Name"))
+                all_mappings.extend(load_mapping(earn_file, "Earnings",      "Source Earning Code Name",      "Uzio Earning Code Name"))
+                all_mappings.extend(load_mapping(ded_file,  "Deductions",    "Source Deduction Code Name",    "Uzio Deduction Code Name"))
                 all_mappings.extend(load_mapping(cont_file, "Contributions", "Source Contribution Code Name", "Uzio Contribution Code Name"))
-                # Tax mapping has different headers
-                all_mappings.extend(load_mapping(tax_file, "Taxes", "Source Tax Code Name", "Uzio Tax Code Description"))
+                all_mappings.extend(load_mapping(tax_file,  "Taxes",         "Source Tax Code Name",          "Uzio Tax Code Description"))
 
                 if not all_mappings:
-                    st.error("No mappings could be loaded from the mapping files. Please check the column headers.")
+                    st.error("No mappings could be loaded. Please check the mapping file column headers.")
                     return
 
                 res_df, report_data = run_comparison(adp_files, uzio_file, all_mappings)
                 if res_df is not None:
                     st.session_state.audit_results = res_df
-                    st.session_state.audit_report = report_data
+                    st.session_state.audit_report  = report_data
                 else:
-                    st.error(f"Failed to generate results. Check if the file structures are correct. Error: {report_data}")
+                    st.error(f"Failed to generate results. Error: {report_data}")
 
-        if st.session_state.audit_results is not None:
-            results_df = st.session_state.audit_results
-            report_data = st.session_state.audit_report
-            
-            st.success("Comparison completed!")
-            
-            # Display metrics
-            matches = len(results_df[results_df["Status"] == "Match"])
-            mismatches = len(results_df[results_df["Status"] == "Mismatch"])
-            
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Total Items", len(results_df))
-            m2.metric("Matches", matches)
-            m3.metric("Mismatches", mismatches, delta=mismatches if mismatches > 0 else None, delta_color="inverse")
-            
-            # Display results table
-            st.subheader("Comparison Results")
-            
-            # Color coding for status
-            def color_status(val):
-                color = 'green' if val == 'Match' else 'red'
-                return f'color: {color}'
-            
-            st.dataframe(results_df.style.map(color_status, subset=['Status']), use_container_width=True)
-            
-            # Download button
-            st.download_button(
-                label="Download Full Comparison Report",
-                data=report_data,
-                file_name=f"Prior payroll audit report.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="tc_download_v2"
-            )
+    if st.session_state.audit_results is not None:
+        results_df  = st.session_state.audit_results
+        report_data = st.session_state.audit_report
+
+        st.success("Comparison completed!")
+
+        matches    = len(results_df[results_df["Status"] == "Match"])
+        mismatches = len(results_df[results_df["Status"] == "Mismatch"])
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Total Items", len(results_df))
+        m2.metric("Matches",    matches)
+        m3.metric("Mismatches", mismatches,
+                  delta=mismatches if mismatches > 0 else None,
+                  delta_color="inverse")
+
+        st.subheader("Comparison Results")
+
+        def color_status(val):
+            return 'color: green' if val == 'Match' else 'color: red'
+
+        st.dataframe(
+            results_df.style.map(color_status, subset=['Status']),
+            use_container_width=True
+        )
+
+        st.download_button(
+            label="Download Full Comparison Report",
+            data=report_data,
+            file_name="Prior payroll audit report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="tc_download_v2",
+            use_container_width=True
+        )
 
 if __name__ == "__main__":
     st.set_page_config(page_title="Total Comparison Tool", layout="wide")

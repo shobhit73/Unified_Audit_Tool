@@ -441,7 +441,7 @@ def render_census_sanity_check():
                     df_download.at[idx, c_dol] = "Full Time"
                     log_change(idx, "Employment Type", old_d, "Full Time", "Defaulted blank value to 'Full Time' for active employee.")
 
-        if fix_options.get('fix_position'):
+        if fix_options.get('fix_job_title'):
             c_job = resolved_field_map.get('Job Title')
             c_dep = resolved_field_map.get('Department')
             if c_job and c_dep and c_job in df_download.columns and c_dep in df_download.columns:

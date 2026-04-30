@@ -22,43 +22,94 @@ def norm_id(x):
     s = norm_str(x)
     return s.lstrip("0")
 
-def read_uzio_deduction(file):
+def read_df_flexible(file, required_columns, fallback_columns=None):
     """
-    Read Uzio Deduction Export.
-    Search all sheets for header row containing 'Employee Id' and 'Deduction Name'.
+    Read a file (CSV or Excel) and find the header row containing required_columns.
+    Returns a DataFrame or raises ValueError.
     """
-    xls = pd.ExcelFile(io.BytesIO(file.getvalue()), engine='openpyxl')
+    file.seek(0)
+    file_bytes = file.getvalue()
     
-    for sheet in xls.sheet_names:
-        # Read first 20 rows
-        df_raw = pd.read_excel(xls, sheet_name=sheet, header=None, nrows=20)
+    # Try Excel
+    try:
+        # We use pd.ExcelFile to avoid re-reading the file multiple times for multiple sheets
+        xls = pd.ExcelFile(io.BytesIO(file_bytes))
+        for sheet in xls.sheet_names:
+            # Read first 50 rows to find header
+            df_raw = pd.read_excel(xls, sheet_name=sheet, header=None, nrows=50)
+            
+            header_row_idx = None
+            for idx, row in df_raw.iterrows():
+                row_vals = [str(v).strip().lower() for v in row.values if pd.notna(v)]
+                if all(any(col.lower() in v for v in row_vals) for col in required_columns):
+                    header_row_idx = idx
+                    break
+            
+            if header_row_idx is not None:
+                df = pd.read_excel(xls, sheet_name=sheet, header=header_row_idx, dtype=str)
+                df.columns = [norm_col(c) for c in df.columns]
+                return df
+                
+        # Fallback columns if provided
+        if fallback_columns:
+            for sheet in xls.sheet_names:
+                df_raw = pd.read_excel(xls, sheet_name=sheet, header=None, nrows=50)
+                for idx, row in df_raw.iterrows():
+                    row_vals = [str(v).strip().lower() for v in row.values if pd.notna(v)]
+                    if all(any(col.lower() in v for v in row_vals) for col in fallback_columns):
+                        df = pd.read_excel(xls, sheet_name=sheet, header=idx, dtype=str)
+                        df.columns = [norm_col(c) for c in df.columns]
+                        return df
+    except Exception:
+        pass
         
+    # Try CSV
+    try:
         header_row_idx = None
-        for idx, row in df_raw.iterrows():
-            row_vals = [str(v).strip().lower() for v in row.values if pd.notna(v)]
-            # Strict check: Must have Employee Id AND Deduction Name
-            if any("employee id" in v for v in row_vals) and any("deduction name" in v for v in row_vals):
-                header_row_idx = idx
+        file.seek(0)
+        wrapper = io.TextIOWrapper(io.BytesIO(file_bytes), encoding='utf-8', errors='replace')
+        for i, line in enumerate(wrapper):
+            line_lower = line.lower()
+            if all(col.lower() in line_lower for col in required_columns):
+                header_row_idx = i
                 break
-        
+            if i > 100: break
+            
         if header_row_idx is not None:
-             # Found it!
-             df = pd.read_excel(xls, sheet_name=sheet, header=header_row_idx, dtype=str)
-             # Normalize columns
-             df.columns = [norm_col(c) for c in df.columns]
-             return df
+            file.seek(0)
+            df = pd.read_csv(io.BytesIO(file_bytes), header=header_row_idx, dtype=str)
+            df.columns = [norm_col(c) for c in df.columns]
+            return df
+            
+        # Fallback for CSV
+        if fallback_columns:
+            file.seek(0)
+            wrapper = io.TextIOWrapper(io.BytesIO(file_bytes), encoding='utf-8', errors='replace')
+            for i, line in enumerate(wrapper):
+                line_lower = line.lower()
+                if all(col.lower() in line_lower for col in fallback_columns):
+                    header_row_idx = i
+                    break
+                if i > 100: break
+            
+            if header_row_idx is not None:
+                file.seek(0)
+                df = pd.read_csv(io.BytesIO(file_bytes), header=header_row_idx, dtype=str)
+                df.columns = [norm_col(c) for c in df.columns]
+                return df
+    except Exception:
+        pass
 
-    # Fallback if strict check fails: Try just Employee Id
-    for sheet in xls.sheet_names:
-        df_raw = pd.read_excel(xls, sheet_name=sheet, header=None, nrows=20)
-        for idx, row in df_raw.iterrows():
-             row_vals = [str(v).strip().lower() for v in row.values if pd.notna(v)]
-             if any("employee id" in v for v in row_vals):
-                  df = pd.read_excel(xls, sheet_name=sheet, header=idx, dtype=str)
-                  df.columns = [norm_col(c) for c in df.columns]
-                  return df
-                  
-    raise ValueError("Could not find 'Employee Id' column in any sheet.")
+    raise ValueError(f"Could not find header containing {required_columns} in Excel or CSV.")
+
+def read_uzio_deduction(file):
+    """Read Uzio Deduction Export (Excel or CSV)."""
+    return read_df_flexible(file, ["employee id", "deduction name"], fallback_columns=["employee id"])
+
+def read_paycom_deduction(file):
+    """Read Paycom Deduction Export (Excel or CSV)."""
+    return read_df_flexible(file, ["code", "amount"])
+
 
 def run_audit(file_uzio, file_paycom, UI_MAPPING):
     # 1. Load Data
@@ -69,30 +120,12 @@ def run_audit(file_uzio, file_paycom, UI_MAPPING):
     except Exception as e:
         return None, f"Error reading Uzio file: {e}", []
 
-    # Paycom (CSV)
+    # Paycom
     try:
-        # Scan for header row
-        p_header_idx = 0
-        with io.BytesIO(file_paycom.getvalue()) as f:
-            # Wrap in text wrapper
-            import csv
-            wrapper = io.TextIOWrapper(f, encoding='utf-8', errors='replace')
-            # Read first 100 lines
-            for i in range(100):
-                line = wrapper.readline()
-                if "Code" in line and "Amount" in line:
-                    p_header_idx = i
-                    break
-            wrapper.detach() # Detach before closing if necessary, or just let context manager handle
-            
-        # Re-read with found header
-        # Using open_workbook or specialized reader might be better but read_csv is flexible
-        # Reset pointer
-        file_paycom.seek(0)
-        df_paycom = pd.read_csv(file_paycom, header=p_header_idx)
-        df_paycom.columns = [norm_col(c) for c in df_paycom.columns]
+        df_paycom = read_paycom_deduction(file_paycom)
     except Exception as e:
         return None, f"Error reading Paycom file: {e}", []
+
 
     # 2. Process Mapping
     mapping = {k.lower(): v for k, v in UI_MAPPING.items()}
@@ -270,23 +303,10 @@ def get_unique_uzio_deductions(file):
 
 def get_unique_paycom_deductions(file):
     try:
-        p_header_idx = 0
-        file.seek(0)
-        with io.BytesIO(file.getvalue()) as f:
-            import csv
-            wrapper = io.TextIOWrapper(f, encoding='utf-8', errors='replace')
-            for i in range(100):
-                line = wrapper.readline()
-                if "Code" in line and "Amount" in line:
-                    p_header_idx = i
-                    break
-            wrapper.detach() 
-
-        file.seek(0)
-        df_paycom = pd.read_csv(file, header=p_header_idx)
-        df_paycom.columns = [norm_col(c) for c in df_paycom.columns]
+        df_paycom = read_paycom_deduction(file)
         
         p_desc_col = next((c for c in df_paycom.columns if "deduction desc" in c.lower()), next((c for c in df_paycom.columns if "description" in c.lower()), None))
+
         
         if not p_desc_col:
              p_desc_col = next((c for c in df_paycom.columns if "deduction code" in c.lower()), next((c for c in df_paycom.columns if "code" in c.lower() and "employee" not in c.lower() and "ee" not in c.lower()), None))
@@ -313,16 +333,18 @@ def render_ui():
     st.title(APP_TITLE)
     st.markdown("""
     **Instructions**:
-    1. Upload **Uzio Deduction Export** (Excel).
-    2. Upload **Paycom Deduction Export** (CSV).
+    1. Upload **Uzio Deduction Export** (Excel or CSV).
+    2. Upload **Paycom Deduction Export** (Excel or CSV).
     3. Map the extracted Paycom deductions to Uzio deductions, then click **Run Comparison**.
     """)
+
     
     col1, col2 = st.columns(2)
     with col1:
-        u_file = st.file_uploader("Uzio Deduction File", type=["xlsx", "xls"], key="pd_u")
+        u_file = st.file_uploader("Uzio Deduction File", type=["xlsx", "xls", "csv"], key="pd_u")
     with col2:
-        p_file = st.file_uploader("Paycom Deduction File", type=["csv"], key="pd_p")
+        p_file = st.file_uploader("Paycom Deduction File", type=["xlsx", "xls", "csv"], key="pd_p")
+
         
     client_name = st.text_input("Client Name", value="Client", key="paycom_deduction_client")
     

@@ -25,7 +25,16 @@ Each router branch does `importlib.reload(module)` before calling the render fun
 
 [apps/adp/](apps/adp/) and [apps/paycom/](apps/paycom/) mirror each other by design. Each has its own `census_audit`, `census_generator`, `deduction_audit`, `payment_audit`, `withholding_audit`, `emergency_audit`, `timeoff_audit`, `prior_payroll_generator`, and `total_comparison` module. When fixing a bug that applies to both vendors, check both trees — they diverge in field maps and vendor-specific quirks but share logic shape.
 
+**Asymmetric modules (ADP-only, no Paycom equivalent):**
+- [apps/adp/prior_payroll_sanity.py](apps/adp/prior_payroll_sanity.py) — cleans an ADP Prior Payroll export (drops `Totals For Associate ID` summary rows, removes the bottom-of-file grand-total row, aggregates per-pay-period exports back to one row per associate, optional NET PAY ⇄ TAKE HOME value swap). ADP money cells store `=ROUND(x, 2.0)` Excel formulas — pandas reads those as null, so this module reads via openpyxl + a small formula evaluator. Has an "Aggregation Strategy" radio: `Full Quarter (Default)` (collapse to one row per associate) vs `Preserve Pay Periods` (keep distinct pay periods, only fold same-day duplicates).
+
 Vendor-agnostic tools live in [apps/common/](apps/common/) (`employee_extractor`, `paycom_combined_audit`).
+
+### Prior Payroll Audit Tool routing gotcha
+
+The sidebar entry `"ADP - Prior Payroll Audit Tool"` in [app.py](app.py) routes to [apps/adp/total_comparison.py](apps/adp/total_comparison.py) — **not** to a `prior_payroll_audit.py` file. There used to be a stale parallel fork (`apps/adp/prior_payroll_audit.py`) that was unreachable from the sidebar; it was deleted in commit `301cddf`. The same convention is on the Paycom side: `"Paycom - Prior Payroll Audit Tool"` → [apps/paycom/total_comparison.py](apps/paycom/total_comparison.py). When asked to add features to the prior-payroll audit, edit `total_comparison.py`, not anything else.
+
+The `total_comparison.py` audit reports for both vendors now include three additional sheets beyond the original Full Comparison / Mismatches Only / Employee Mismatches: **Duplicate Pay Periods** (UZIO-side skeleton-vs-detail row pairs), **Pay Stub Counts** (per-employee distinct Pay Date count, ADP combined vs UZIO), and **Tax Rate Verification** (SS / Medicare / FUTA + per-state SUTA, effective rate vs standard at 0.05% tolerance). Paycom's tax rate sheet uses long-format Description-row matching for the Paycom side; ADP's uses tax-mapping plus sibling-column heuristics for wages. UZIO-side wages always come from the section-header structure.
 
 ### Census generator is three tools in one module
 

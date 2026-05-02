@@ -1,20 +1,31 @@
 """ADP - Prior Payroll Sanity Check Tool.
 
-Cleans an ADP Prior Payroll file by fixing the two specific issues that
-break downstream API ingestion:
+Cleans an ADP Prior Payroll file before it's ingested by downstream APIs.
+Three independent cleanups are applied as needed:
 
-  1. Duplicate rows for the same employee + pay period are folded into a
-     single row using a non-destructive smart merge (no double-counting).
-  2. The grand-total row at the very bottom of the file -- where the
-     last employee's ID got bled into the totals row -- is removed.
+  1. Per-pay-period aggregation: when the file is exported with one row per
+     pay period per employee (the most common implementor mistake), all
+     rows for an Associate ID are aggregated into a single row -- money
+     and hours columns are SUMmed, period dates are MIN/MAX'd, identity
+     columns kept as-is.
+  2. Duplicate row merge: when two rows share the same Employee + Pay Date
+     (typically a skeleton + detail pair within one pay period), they are
+     smart-merged into one row without double-counting.
+  3. Grand-total row removal: the last row of the file, where the last
+     employee's ID got bled into the totals row, is detected and dropped.
 
-Output is always CSV with the input's exact column headers preserved.
-Input accepts .xlsx / .xls / .csv.
+Optional Carvan-specific NET PAY <-> TAKE HOME value swap is exposed as
+a checkbox in the UI (default ON) because the API expects them reversed.
+
+Output is always CSV with the input's exact column headers and column
+order preserved. Input accepts .xlsx / .xls / .csv.
 """
 
+import re
+import io
 import streamlit as st
 import pandas as pd
-import io
+import openpyxl
 from utils.audit_utils import clean_money_val
 
 
@@ -31,11 +42,71 @@ def _find_col(df, candidates):
     return None
 
 
+_ROUND_FORMULA_RE = re.compile(r"^=ROUND\(\s*(-?[\d.]+)\s*,\s*[\d.]+\s*\)\s*$", re.IGNORECASE)
+
+
+def _evaluate_cell(value):
+    """Resolve =ROUND(x,n) formulas (the only formula style ADP exports use for money cells).
+
+    Returns the literal numeric value when the cell holds such a formula, otherwise
+    returns the cell value unchanged. Pandas read_excel sees these formula cells as
+    None, so we read with openpyxl and feed each cell through this evaluator.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return value
+    s = value.strip()
+    if not s.startswith("="):
+        return value
+    m = _ROUND_FORMULA_RE.match(s)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def _read_excel_with_formula_eval(file):
+    """Read .xlsx/.xls via openpyxl, evaluating =ROUND() formulas to their literal values.
+
+    Returns (df, header_idx, sheet_name). Picks the first non-criteria sheet, finds
+    the header row by searching for an ID column header, and parses every data cell.
+    """
+    file.seek(0)
+    wb = openpyxl.load_workbook(file, data_only=False)
+    target_sheet = wb.sheetnames[0]
+    if len(wb.sheetnames) > 1 and "criteria" in wb.sheetnames[0].lower():
+        target_sheet = wb.sheetnames[1]
+    ws = wb[target_sheet]
+
+    header_idx = 0
+    for r in range(1, min(ws.max_row, 50) + 1):
+        row_text = " ".join(
+            str(ws.cell(r, c).value).lower()
+            for c in range(1, ws.max_column + 1)
+            if ws.cell(r, c).value is not None
+        )
+        if any(k in row_text for k in ["associate id", "employee id", "file #"]):
+            header_idx = r - 1
+            break
+
+    headers = [ws.cell(header_idx + 1, c).value for c in range(1, ws.max_column + 1)]
+    rows = []
+    for r in range(header_idx + 2, ws.max_row + 1):
+        row = [_evaluate_cell(ws.cell(r, c).value) for c in range(1, ws.max_column + 1)]
+        rows.append(row)
+    df = pd.DataFrame(rows, columns=headers)
+    return df, header_idx, target_sheet
+
+
 def read_input_file(file):
     """Read the ADP file (xlsx/xls/csv), find the header row, and return the dataframe.
 
     Preserves original column names and order exactly. Does NOT strip the grand-total
-    row -- the sanity-check pipeline does that explicitly so it can be reported.
+    row or summary rows -- the sanity-check pipeline does that explicitly so each
+    cleanup step can be reported.
     """
     file.seek(0)
     name = (file.name or "").lower()
@@ -53,19 +124,201 @@ def read_input_file(file):
         df = pd.read_csv(file, header=header_idx, dtype=str)
         return df, header_idx, "Sheet1"
 
-    xls = pd.ExcelFile(file)
-    target_sheet = xls.sheet_names[0]
-    if len(xls.sheet_names) > 1 and "criteria" in xls.sheet_names[0].lower():
-        target_sheet = xls.sheet_names[1]
-    df_peek = pd.read_excel(xls, sheet_name=target_sheet, header=None, nrows=50)
-    header_idx = 0
-    for i, row in df_peek.iterrows():
-        row_str = " ".join(str(x).lower() for x in row if pd.notna(x))
-        if any(k in row_str for k in ["associate id", "employee id", "file #"]):
-            header_idx = i
-            break
-    df = pd.read_excel(xls, sheet_name=target_sheet, header=header_idx, dtype=str)
-    return df, header_idx, target_sheet
+    return _read_excel_with_formula_eval(file)
+
+
+def drop_summary_rows(df):
+    """Drop the per-employee 'Totals For Associate ID XYZ:' rows the ADP report
+    interleaves between pay-period rows. They have a null Associate ID and all
+    money columns blank, so they're useless once we re-aggregate ourselves.
+
+    Returns (cleaned_df, removed_count).
+    """
+    eid_col = _find_col(df, ["Associate ID", "Employee ID", "File #"])
+    if not eid_col:
+        return df.reset_index(drop=True), 0
+    mask = df[eid_col].notna() & (df[eid_col].astype(str).str.strip() != "")
+    removed = (~mask).sum()
+    return df[mask].reset_index(drop=True), int(removed)
+
+
+def detect_per_pay_period_structure(df):
+    """Decide whether the file needs per-associate aggregation.
+
+      - 'aggregate' : at least one associate has more than one row -- this is the
+        per-pay-period export the implementor often produces. Roll up to one row
+        per associate (sums money/hours, min/max for dates, identity columns kept).
+        Same-pay-date duplicates -- common in ADP when an employee gets two checks
+        on the same day, each row carrying real values -- are also folded together
+        by the SUM aggregation, which is the correct behavior for ADP.
+      - 'none'      : already clean -- one row per associate.
+
+    Returns (mode, summary_dict).
+    """
+    eid_col = _find_col(df, ["Associate ID", "Employee ID", "File #"])
+    pay_col = _find_col(df, ["Pay Date", "Check Date"])
+    if not eid_col:
+        return "none", None
+
+    work = df[df[eid_col].notna()].copy()
+    work[eid_col] = work[eid_col].astype(str).str.strip()
+    work = work[work[eid_col] != ""]
+    if work.empty:
+        return "none", None
+
+    rows_per_eid = work.groupby(eid_col).size()
+    total_associates = int(len(rows_per_eid))
+    multi_row = int((rows_per_eid > 1).sum())
+
+    summary = {
+        "associates": total_associates,
+        "with_multiple_rows": multi_row,
+        "max_rows_for_single_associate": int(rows_per_eid.max()),
+    }
+    if pay_col:
+        pay_dates_per_eid = work.groupby(eid_col)[pay_col].nunique()
+        summary["max_pay_dates_for_single_associate"] = int(pay_dates_per_eid.max())
+
+    return ("aggregate" if multi_row > 0 else "none"), summary
+
+
+def _to_float(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip()
+    if s in ("", "-", "nan", "NaT"):
+        return None
+    try:
+        return float(s.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _format_date(dt):
+    if pd.isna(dt):
+        return None
+    try:
+        return dt.strftime("%m/%d/%Y")
+    except Exception:
+        return None
+
+
+def aggregate_by_associate(df):
+    """Collapse a per-pay-period file into one row per Associate ID.
+
+    Aggregation rules:
+      - Money / hours / earning / tax columns: SUM
+      - PERIOD BEGINNING DATE: MIN
+      - PERIOD ENDING DATE / PAY DATE / TERMINATION DATE: MAX
+      - Identity columns (NAME, FILE NUMBER, POSITION ID, STATUS, TAX ID,
+        DIST #, WORKED IN STATE): first non-null value
+      - CHECK/VOUCHER NUMBER: blanked (pay-period specific)
+      - Anything else: SUM if numeric, else first non-null
+
+    Returns (aggregated_df, summary_dict).
+    """
+    eid_col = _find_col(df, ["Associate ID", "Employee ID", "File #"])
+    pay_col = _find_col(df, ["Pay Date", "Check Date"])
+    period_begin_col = _find_col(df, ["Period Beginning Date", "Period Begin Date", "Start Date"])
+    period_end_col = _find_col(df, ["Period Ending Date", "Period End Date", "End Date"])
+    term_col = _find_col(df, ["Termination Date"])
+    check_col = _find_col(df, ["Check/Voucher Number", "Check Number", "Voucher Number"])
+
+    min_date_cols = {period_begin_col} - {None}
+    max_date_cols = {period_end_col, pay_col, term_col} - {None}
+
+    # Identity columns are constant per employee -- never summed even though some
+    # (FILE NUMBER, DIST #) parse as numeric strings. Use the first non-null value.
+    identity_col_names = ["Name", "File Number", "Position ID", "Status", "Tax ID",
+                          "Dist #", "Worked In State"]
+    identity_cols = {_find_col(df, [n]) for n in identity_col_names} - {None}
+
+    if not eid_col:
+        return df, None
+
+    EMPTY_PLACEHOLDER = "-"
+
+    aggregated_rows = []
+    for eid_val, group in df.groupby(eid_col, sort=False):
+        out_row = {}
+        for col in df.columns:
+            vals = group[col].tolist()
+
+            if col == eid_col:
+                out_row[col] = eid_val
+                continue
+            if col == check_col:
+                out_row[col] = ""
+                continue
+
+            if col in min_date_cols or col in max_date_cols:
+                dts = pd.to_datetime(vals, errors="coerce")
+                dts = dts.dropna() if hasattr(dts, "dropna") else pd.Series(dts).dropna()
+                if len(dts) == 0:
+                    out_row[col] = EMPTY_PLACEHOLDER
+                else:
+                    target = dts.min() if col in min_date_cols else dts.max()
+                    out_row[col] = _format_date(target) or EMPTY_PLACEHOLDER
+                continue
+
+            if col in identity_cols:
+                # Take the first non-null value (constant per employee)
+                first = next(
+                    (v for v in vals
+                     if v is not None
+                     and not (isinstance(v, float) and pd.isna(v))
+                     and str(v).strip() not in ("", "nan", "NaT")),
+                    None,
+                )
+                out_row[col] = first if first is not None else EMPTY_PLACEHOLDER
+                continue
+
+            numeric_vals = []
+            categorical_vals = []
+            for v in vals:
+                f = _to_float(v)
+                if f is not None:
+                    numeric_vals.append(f)
+                elif v is not None and not (isinstance(v, float) and pd.isna(v)):
+                    s = str(v).strip()
+                    if s and s.lower() not in ("nan", "nat"):
+                        categorical_vals.append(v)
+
+            if numeric_vals and not categorical_vals:
+                if all(v == 0 for v in numeric_vals):
+                    out_row[col] = EMPTY_PLACEHOLDER
+                else:
+                    out_row[col] = round(sum(numeric_vals), 2)
+            elif categorical_vals:
+                out_row[col] = categorical_vals[0]
+            else:
+                out_row[col] = EMPTY_PLACEHOLDER
+
+        aggregated_rows.append(out_row)
+
+    out_df = pd.DataFrame(aggregated_rows, columns=df.columns)
+    return out_df, {
+        "input_rows": int(len(df)),
+        "output_rows": int(len(out_df)),
+        "associates": int(len(out_df)),
+    }
+
+
+def apply_net_take_swap(df):
+    """Swap NET PAY <-> TAKE HOME column values. The Carvan-style API maps these
+    reversed, so when the swap is enabled the data ends up under the API's expected
+    semantics. Column headers are NOT changed -- only the values are exchanged.
+    """
+    net_col = _find_col(df, ["Net Pay"])
+    take_col = _find_col(df, ["Take Home"])
+    if not net_col or not take_col or net_col == take_col:
+        return df, False
+    net_vals = df[net_col].copy()
+    df[net_col] = df[take_col].copy()
+    df[take_col] = net_vals
+    return df, True
 
 
 def detect_grand_total_row(df):
@@ -232,12 +485,18 @@ def render_ui():
     st.markdown(
         """
         Cleans an ADP Prior Payroll file so it can be ingested cleanly by downstream APIs.
-        The cleaner does **two things and only two things**:
+        Three independent fix-ups are applied as needed:
 
-        1. **Merges duplicate pay-period rows** for the same employee (smart merge -- no double-counting).
-        2. **Removes the grand-total row** at the bottom of the file, where the last employee's ID got bled into the totals row.
+        1. **Per-pay-period aggregation** -- when the implementor exported one row per
+           pay period per employee, all rows for an Associate ID are folded into one
+           (money/hours **summed**, period dates **min/max**'d, identity columns kept).
+        2. **Duplicate row merge** -- two rows sharing the same Employee + Pay Date are
+           smart-merged into one without double-counting.
+        3. **Grand-total row removal** -- the bottom-of-file totals row where the
+           previous employee's ID leaked is dropped.
 
-        Upload an `.xlsx` / `.xls` / `.csv`. The cleaned output is **always a `.csv`** with the **same column headers** as the input.
+        Upload an `.xlsx` / `.xls` / `.csv`. The cleaned output is **always a `.csv`** with
+        the **exact same column headers and order** as the input.
         """
     )
 
@@ -246,6 +505,17 @@ def render_ui():
         type=["xlsx", "xls", "csv"],
         accept_multiple_files=False,
         key="pps_input",
+    )
+
+    swap_net_take = st.checkbox(
+        "Swap NET PAY and TAKE HOME values (the API expects them reversed)",
+        value=True,
+        key="pps_swap",
+        help=(
+            "When ON, the values in NET PAY and TAKE HOME are exchanged before download. "
+            "Column headers stay the same -- only the data is swapped. "
+            "Required for Carvan's API; uncheck if a client's API does not need it."
+        ),
     )
 
     if not file:
@@ -258,47 +528,76 @@ def render_ui():
         with st.spinner("Reading and cleaning..."):
             df_in, header_idx, sheet = read_input_file(file)
             original_count = len(df_in)
-            df_a, gt_info = detect_grand_total_row(df_in)
-            df_b, merge_events = merge_duplicate_pay_periods(df_a)
-            final_count = len(df_b)
+
+            # 1. Drop interleaved 'Totals For Associate ID' summary rows
+            df_a, summary_removed = drop_summary_rows(df_in)
+
+            # 2. Detect bottom-of-file grand-total leak (after summary rows are gone)
+            df_b, gt_info = detect_grand_total_row(df_a)
+
+            # 3. If multiple rows per associate, aggregate to one row per associate
+            mode, period_info = detect_per_pay_period_structure(df_b)
+            agg_info = None
+            if mode == "aggregate":
+                df_c, agg_info = aggregate_by_associate(df_b)
+            else:
+                df_c = df_b
+
+            # 4. Optional NET PAY <-> TAKE HOME value swap
+            swapped = False
+            if swap_net_take:
+                df_c, swapped = apply_net_take_swap(df_c)
+
+            final_count = len(df_c)
     except Exception as e:
         st.error(f"Failed to process the file: {e}")
         return
-
-    rows_removed = original_count - final_count
 
     st.success("Sanity check complete!")
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Original Rows", original_count)
     m2.metric("Cleaned Rows", final_count)
-    m3.metric("Grand Total Removed", "Yes" if gt_info else "No")
-    m4.metric("Duplicate Groups Merged", len(merge_events))
-
-    if gt_info:
-        st.warning(
-            "**Grand total row removed.** "
-            f"It carried Employee ID `{gt_info['removed_employee_id']}` "
-            f"({gt_info['removed_employee_name'] or 'name unknown'}). "
-            f"Detected because column `{gt_info['matched_on_column']}` had value "
-            f"`{gt_info['matched_value']:,.2f}` -- approximately the sum of all preceding rows "
-            f"(`{gt_info['expected_sum']:,.2f}`)."
-        )
-
-    if merge_events:
-        with st.expander(f"Merged duplicate pay-period rows ({len(merge_events)} groups)", expanded=False):
-            st.dataframe(pd.DataFrame(merge_events), use_container_width=True, hide_index=True)
+    if mode == "aggregate":
+        m3.metric("Mode", "Per-associate aggregation")
+        m4.metric("Associates", agg_info["associates"] if agg_info else 0)
     else:
-        st.info("No duplicate pay-period rows were found.")
+        m3.metric("Mode", "Already aggregated")
+        m4.metric("Associates", period_info["associates"] if period_info else 0)
 
-    if not gt_info and not merge_events:
-        st.info("No issues detected -- the file is already clean. Cleaned output is identical to input.")
+    note_lines = []
+    if summary_removed:
+        note_lines.append(f"Dropped {summary_removed} interleaved 'Totals For Associate ID' summary rows from the raw file.")
+    if gt_info:
+        note_lines.append(
+            f"Removed grand-total row carrying Employee ID `{gt_info['removed_employee_id']}` "
+            f"({gt_info['removed_employee_name'] or 'name unknown'}). "
+            f"Column `{gt_info['matched_on_column']}` held `{gt_info['matched_value']:,.2f}`, "
+            f"about equal to the sum of preceding rows (`{gt_info['expected_sum']:,.2f}`)."
+        )
+    if mode == "aggregate" and period_info:
+        max_pds = period_info.get("max_pay_dates_for_single_associate")
+        max_msg = f", max {max_pds} pay dates for a single associate" if max_pds else ""
+        note_lines.append(
+            f"Detected per-pay-period file: {period_info['associates']} associates, "
+            f"{period_info['with_multiple_rows']} with multiple rows{max_msg}. "
+            f"Aggregated to one row per associate."
+        )
+    if swapped:
+        note_lines.append("Swapped NET PAY and TAKE HOME values.")
+    elif swap_net_take and not swapped:
+        note_lines.append("Swap requested, but NET PAY and TAKE HOME columns were not found in the file.")
+    if note_lines:
+        st.warning("\n".join("- " + line for line in note_lines))
+
+    if mode == "none" and not summary_removed and not gt_info:
+        st.info("No issues detected -- the cleaned output is identical to the input (minus formula evaluation).")
 
     with st.expander(f"Preview cleaned data ({final_count} rows)", expanded=False):
-        st.dataframe(df_b.head(50), use_container_width=True)
+        st.dataframe(df_c.head(50), use_container_width=True)
 
     csv_buf = io.StringIO()
-    df_b.to_csv(csv_buf, index=False)
+    df_c.to_csv(csv_buf, index=False)
 
     base_name = file.name.rsplit(".", 1)[0]
     st.download_button(

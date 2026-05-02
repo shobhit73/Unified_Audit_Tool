@@ -79,7 +79,7 @@ def find_header_and_data(file):
         df = pd.read_excel(xls, sheet_name=target_sheet, header=header_idx)
         
         # Also get the row ABOVE the header (for Uzio's multi-row headers)
-        header_top = None
+        header_top = None  
         if header_idx > 0:
             header_top = df_peek.iloc[header_idx - 1].tolist()
 
@@ -180,6 +180,81 @@ def calculate_totals(df, header_top, column_names):
             
     return total, found_cols
 
+def detect_duplicate_pay_periods(df):
+    """Find employees with more than one row for the same Start Date / End Date / Pay Date.
+    Returns a DataFrame of every row that participates in a duplicate group, sorted so
+    duplicates appear together. Empty DataFrame when no duplicates found.
+    """
+    def find_col(candidates):
+        for cand in candidates:
+            for c in df.columns:
+                if str(c).strip().lower() == cand.lower():
+                    return c
+        return None
+
+    eid_col   = find_col(["Employee ID", "Associate ID", "File #"])
+    first_col = find_col(["First Name"])
+    last_col  = find_col(["Last Name"])
+    start_col = find_col(["Start Date", "Period Start"])
+    end_col   = find_col(["End Date", "Period End"])
+    pay_col   = find_col(["Pay Date", "Check Date"])
+    gross_col = find_col(["Gross Pay", "Gross"])
+    net_col   = find_col(["Net Pay", "Net"])
+
+    if not all([eid_col, start_col, end_col, pay_col]):
+        return pd.DataFrame()
+
+    work = df[df[eid_col].notna()].copy()
+    work[eid_col] = work[eid_col].astype(str).str.strip()
+    work = work[(work[eid_col] != "") & (~work[eid_col].str.lower().str.contains("total|grand", na=False))]
+
+    group_keys = [eid_col, start_col, end_col, pay_col]
+    counts = work.groupby(group_keys).size().reset_index(name="_n")
+    dup_keys = counts[counts["_n"] > 1]
+    if dup_keys.empty:
+        return pd.DataFrame()
+
+    dup_rows = work.merge(dup_keys, on=group_keys, how="inner")
+
+    def classify_row(row):
+        if gross_col and clean_money_val(row.get(gross_col)) != 0:
+            return "Detail (real values)"
+        dash_count = sum(1 for v in row.values if str(v).strip() == "-")
+        if dash_count >= 5:
+            return "Skeleton (dashes / zeros)"
+        return "Zero detail"
+
+    dup_rows["Row Type"] = dup_rows.apply(classify_row, axis=1)
+
+    name_parts = []
+    if first_col:
+        name_parts.append(dup_rows[first_col].fillna("").astype(str).str.strip())
+    if last_col:
+        name_parts.append(dup_rows[last_col].fillna("").astype(str).str.strip())
+    if name_parts:
+        dup_rows["Employee Name"] = name_parts[0]
+        for p in name_parts[1:]:
+            dup_rows["Employee Name"] = (dup_rows["Employee Name"] + " " + p).str.strip()
+    else:
+        dup_rows["Employee Name"] = ""
+
+    out_cols = {
+        eid_col: "Employee ID",
+        "Employee Name": "Employee Name",
+        start_col: "Start Date",
+        end_col: "End Date",
+        pay_col: "Pay Date",
+        "Row Type": "Row Type",
+    }
+    if gross_col: out_cols[gross_col] = "Gross Pay"
+    if net_col:   out_cols[net_col]   = "Net Pay"
+    out_cols["_n"] = "Rows in Group"
+
+    out = dup_rows[list(out_cols.keys())].rename(columns=out_cols)
+    out = out.sort_values(["Employee ID", "Pay Date", "Row Type"]).reset_index(drop=True)
+    return out
+
+
 def run_comparison(adp_files, uzio_file, mappings):
     """Main logic to compare totals based on mappings."""
     try:
@@ -236,22 +311,38 @@ def run_comparison(adp_files, uzio_file, mappings):
         })
 
     df_results = pd.DataFrame(results)
-    
+
+    # Detect duplicate pay-period rows in the UZIO register
+    df_dups = detect_duplicate_pay_periods(df_uzio)
+
     # Generate Excel Report
     out_buffer = io.BytesIO()
     with pd.ExcelWriter(out_buffer, engine='xlsxwriter') as writer:
         df_results.to_excel(writer, sheet_name="Full Comparison", index=False)
         df_mismatches = df_results[df_results["Status"] == "Mismatch"][["Category", "UZIO Item", "ADP Columns Found", "UZIO Columns Found", "ADP Total", "UZIO Total", "Difference"]]
         df_mismatches.to_excel(writer, sheet_name="Mismatches Only", index=False)
-        
-        for sheet_name in ["Full Comparison", "Mismatches Only"]:
+
+        if df_dups.empty:
+            pd.DataFrame({"Result": ["No duplicate pay-period entries were detected in the UZIO file."]}).to_excel(
+                writer, sheet_name="Duplicate Pay Periods", index=False
+            )
+        else:
+            df_dups.to_excel(writer, sheet_name="Duplicate Pay Periods", index=False)
+
+        sheet_to_df = {
+            "Full Comparison": df_results,
+            "Mismatches Only": df_mismatches,
+            "Duplicate Pay Periods": df_dups if not df_dups.empty else pd.DataFrame({"Result": ["No duplicate pay-period entries were detected in the UZIO file."]}),
+        }
+        for sheet_name, curr_df in sheet_to_df.items():
             sheet = writer.sheets[sheet_name]
-            curr_df = df_results if sheet_name == "Full Comparison" else df_mismatches
+            if curr_df.empty:
+                continue
             for i, col in enumerate(curr_df.columns):
                 column_len = max(curr_df[col].astype(str).map(len).max(), len(col)) + 2
                 sheet.set_column(i, i, min(column_len, 50))
 
-    return df_results, out_buffer.getvalue()
+    return df_results, out_buffer.getvalue(), df_dups
 
 def render_ui():
     st.title("ADP - Prior Payroll Audit Tool")
@@ -286,6 +377,8 @@ def render_ui():
         st.session_state.audit_results = None
     if "audit_report" not in st.session_state:
         st.session_state.audit_report = None
+    if "audit_dups" not in st.session_state:
+        st.session_state.audit_dups = None
 
     if adp_files and len(adp_files) > 0 and all([uzio_file, earn_file, cont_file, ded_file, tax_file]):
         if st.button("Run Total Comparison", type="primary"):
@@ -302,9 +395,10 @@ def render_ui():
                     st.error("No mappings could be loaded from the mapping files. Please check the column headers.")
                     return
 
-                res_df, report_data = run_comparison(adp_files, uzio_file, all_mappings)
+                res_df, report_data, dup_df = run_comparison(adp_files, uzio_file, all_mappings)
                 st.session_state.audit_results = res_df
                 st.session_state.audit_report = report_data
+                st.session_state.audit_dups = dup_df
 
         if st.session_state.audit_results is not None:
             results_df = st.session_state.audit_results
@@ -330,7 +424,19 @@ def render_ui():
                 return f'color: {color}'
             
             st.dataframe(results_df.style.map(color_status, subset=['Status']), use_container_width=True)
-            
+
+            # Duplicate pay-period entries (UZIO file)
+            dup_df = st.session_state.audit_dups
+            if dup_df is not None and not dup_df.empty:
+                affected_emps = dup_df["Employee ID"].nunique()
+                affected_groups = dup_df.groupby(["Employee ID", "Start Date", "End Date", "Pay Date"]).ngroups
+                st.warning(
+                    f"Detected {affected_groups} duplicated pay-period group(s) across {affected_emps} employee(s) "
+                    "in the UZIO Prior Payroll Register. See the **'Duplicate Pay Periods'** tab in the report."
+                )
+                with st.expander(f"View duplicate pay-period entries ({len(dup_df)} rows)", expanded=False):
+                    st.dataframe(dup_df, use_container_width=True)
+
             # Download button
             st.download_button(
                 label="Download Full Comparison Report",

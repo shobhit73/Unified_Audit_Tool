@@ -261,6 +261,137 @@ def calculate_totals_paycom(df, mapping_source_names, filename, uzio_item_name="
             
     return sum(emp_tots.values()), list(found_items), emp_tots
 
+# Standard federal tax rates used for verification (in percent)
+STANDARD_TAX_RATES = {
+    "Social Security EE": 6.20,
+    "Social Security ER": 6.20,
+    "Medicare EE":        1.45,
+    "Medicare ER":        1.45,
+    "FUTA ER":            0.60,
+}
+RATE_TOLERANCE_PCT = 0.05
+
+
+def _filter_data_rows(df, eid_col):
+    if not eid_col:
+        return df
+    work = df[df[eid_col].notna()].copy()
+    work[eid_col] = work[eid_col].astype(str).str.strip()
+    return work[(work[eid_col] != "") & (~work[eid_col].str.lower().str.contains("total|grand", na=False))]
+
+
+def _sum_uzio_section(df, header_top, section_name, side):
+    """Sum Taxable Wages and EE/ER Amount within a UZIO section header."""
+    if not header_top:
+        return 0.0, 0.0
+    eid_col = next((c for c in df.columns if any(x in str(c).lower() for x in ["employee id", "associate id"])), None)
+    work = _filter_data_rows(df, eid_col)
+    target = norm_colname(section_name).lower()
+    wages = amount = 0.0
+    for i, h in enumerate(header_top):
+        if pd.notna(h) and norm_colname(str(h)).lower() == target:
+            end_i = len(df.columns)
+            for j in range(i + 1, len(header_top)):
+                if pd.notna(header_top[j]) and str(header_top[j]).strip() != "":
+                    end_i = j
+                    break
+            for k in range(i, end_i):
+                col = str(df.columns[k]).strip().lower()
+                if "taxable wages" in col:
+                    wages += work.iloc[:, k].apply(clean_money_val).sum()
+                elif side == "EE" and (col == "ee amount" or col.startswith("ee amount.")):
+                    amount += work.iloc[:, k].apply(clean_money_val).sum()
+                elif side == "ER" and (col == "er amount" or col.startswith("er amount.")):
+                    amount += work.iloc[:, k].apply(clean_money_val).sum()
+            break
+    return wages, amount
+
+
+def _sum_paycom_for_uzio_name(paycom_data_list, source_names):
+    """Best-effort sum of (taxable wages, amount) on Paycom long-format rows.
+    Wages are inferred from rows whose Description matches the tax description with 'tax'->'wages',
+    or contains 'taxable wages' / 'wages' for the same tax."""
+    if not source_names:
+        return 0.0, 0.0
+    desc_aliases = ["type description", "description", "earning/deduction/tax", "code description", "row labels"]
+    norm_targets = [n.lower().strip() for n in source_names]
+    # Build wage-side description candidates
+    wage_targets = set()
+    for n in norm_targets:
+        wage_targets.add(re.sub(r"\btax\b", "wages", n, flags=re.I))
+        wage_targets.add(n + " wages")
+        wage_targets.add(n + " taxable wages")
+
+    total_w = total_a = 0.0
+    for df_p, _ in paycom_data_list:
+        desc_col = next((c for c in df_p.columns if any(x in str(c).lower() for x in desc_aliases)), None)
+        amt_col  = next((c for c in df_p.columns if "current amount" in str(c).lower()), None)
+        if not amt_col:
+            amt_col = next((c for c in df_p.columns if any(x in str(c).lower() for x in ["amount", "total amount", "value", "sum of amount"])), None)
+        if not desc_col or not amt_col:
+            continue
+        for _, row in df_p.iterrows():
+            d = str(row[desc_col]).strip().lower()
+            if d in norm_targets:
+                total_a += clean_money_val(row[amt_col])
+            elif d in wage_targets:
+                total_w += clean_money_val(row[amt_col])
+    return total_w, total_a
+
+
+def compute_tax_rate_verification(df_uzio, uzio_top, paycom_data_list, mappings):
+    """Build the tax-rate verification table (SS, Medicare, FUTA, SUTA per state) for Paycom."""
+    uzio_to_source = {}
+    for m in mappings:
+        if m.get("Category") == "Taxes":
+            uzio_to_source.setdefault(m["UZIO_Name"], []).append(m["Source_Name"])
+
+    targets = [
+        ("Social Security", "EE", "Social Security Tax",          STANDARD_TAX_RATES["Social Security EE"]),
+        ("Social Security", "ER", "Employer Social Security Tax", STANDARD_TAX_RATES["Social Security ER"]),
+        ("Medicare",        "EE", "Medicare Tax",                 STANDARD_TAX_RATES["Medicare EE"]),
+        ("Medicare",        "ER", "Employer Medicare Tax",        STANDARD_TAX_RATES["Medicare ER"]),
+        ("FUTA",            "ER", "Federal Unemployment Tax",     STANDARD_TAX_RATES["FUTA ER"]),
+    ]
+    if uzio_top:
+        suta_re = re.compile(r"^\s*([A-Z]{2})\s+STATE\s+UNEMPLOYMENT\s+TAX\s*$", re.I)
+        for h in uzio_top:
+            if pd.notna(h):
+                m = suta_re.match(str(h))
+                if m:
+                    targets.append((f"SUTA - {m.group(1).upper()}", "ER", str(h).strip(), None))
+
+    rows = []
+    for tax, side, uzio_name, std in targets:
+        u_w, u_a = _sum_uzio_section(df_uzio, uzio_top, uzio_name, side)
+        p_w, p_a = _sum_paycom_for_uzio_name(paycom_data_list, uzio_to_source.get(uzio_name, []))
+        u_rate = (u_a / u_w * 100) if u_w > 0 else None
+        p_rate = (p_a / p_w * 100) if p_w > 0 else None
+
+        if std is None:
+            status = "Info (Employer-set)"
+            std_disp = "Employer-set"
+        else:
+            off_u = (u_rate is not None) and abs(u_rate - std) > RATE_TOLERANCE_PCT
+            off_p = (p_rate is not None) and abs(p_rate - std) > RATE_TOLERANCE_PCT
+            status = "Mismatch" if (off_u or off_p) else "Match"
+            std_disp = f"{std:.2f}%"
+
+        rows.append({
+            "Tax": tax,
+            "Side": side,
+            "Paycom Taxable Wages":  round(p_w, 2),
+            "Paycom Amount":         round(p_a, 2),
+            "Paycom Effective Rate": (f"{p_rate:.4f}%" if p_rate is not None else "-"),
+            "UZIO Taxable Wages":    round(u_w, 2),
+            "UZIO Amount":           round(u_a, 2),
+            "UZIO Effective Rate":   (f"{u_rate:.4f}%" if u_rate is not None else "-"),
+            "Standard Rate":         std_disp,
+            "Status":                status,
+        })
+    return pd.DataFrame(rows)
+
+
 def run_comparison(paycom_files, uzio_file, mappings):
     """Main logic to compare totals based on mappings."""
     try:
@@ -270,7 +401,7 @@ def run_comparison(paycom_files, uzio_file, mappings):
             df_p, _, _ = find_header_and_data_paycom(p_file)
             paycom_data_list.append((df_p, p_file.name))
     except Exception as e:
-        return None, None, f"Error reading payroll files: {e}"
+        return None, None, f"Error reading payroll files: {e}", None
 
     results = []
     employee_mismatches = []
@@ -350,28 +481,56 @@ def run_comparison(paycom_files, uzio_file, mappings):
 
     df_results = pd.DataFrame(results)
     df_emp_mismatches = pd.DataFrame(employee_mismatches)
-    
+
+    # Tax-rate verification (SS / Medicare / FUTA / SUTA per state)
+    df_tax_rates = compute_tax_rate_verification(df_uzio, uzio_top, paycom_data_list, mappings)
+
     out_buffer = io.BytesIO()
     with pd.ExcelWriter(out_buffer, engine='xlsxwriter') as writer:
+        wb = writer.book
+        red_fill   = wb.add_format({"bg_color": "#FFE5E5", "font_color": "#9C0006"})
+        green_fill = wb.add_format({"bg_color": "#E5F5E5", "font_color": "#006100"})
+
         df_results.to_excel(writer, sheet_name="Full Comparison", index=False)
         df_mismatches = df_results[df_results["Status"] == "Mismatch"][["Category", "UZIO Item", "Paycom Items Found", "UZIO Columns Found", "Paycom Total", "UZIO Total", "Difference"]]
         df_mismatches.to_excel(writer, sheet_name="Mismatches Only", index=False)
-        
+
+        sheet_names = ["Full Comparison", "Mismatches Only"]
+        dfs_to_format = [df_results, df_mismatches]
         if not df_emp_mismatches.empty:
             df_emp_mismatches.to_excel(writer, sheet_name="Employee Mismatches", index=False)
-            sheet_names = ["Full Comparison", "Mismatches Only", "Employee Mismatches"]
-            dfs_to_format = [df_results, df_mismatches, df_emp_mismatches]
+            sheet_names.append("Employee Mismatches")
+            dfs_to_format.append(df_emp_mismatches)
+
+        if df_tax_rates.empty:
+            pd.DataFrame({"Result": ["Could not build tax rate verification (no tax sections detected)."]}).to_excel(
+                writer, sheet_name="Tax Rate Verification", index=False
+            )
         else:
-            sheet_names = ["Full Comparison", "Mismatches Only"]
-            dfs_to_format = [df_results, df_mismatches]
-            
+            df_tax_rates.to_excel(writer, sheet_name="Tax Rate Verification", index=False)
+            sh = writer.sheets["Tax Rate Verification"]
+            n_rows = len(df_tax_rates)
+            status_col = list(df_tax_rates.columns).index("Status")
+            sh.conditional_format(1, 0, n_rows, len(df_tax_rates.columns) - 1, {
+                "type": "formula",
+                "criteria": f'=INDIRECT(ADDRESS(ROW(),{status_col + 1}))="Mismatch"',
+                "format": red_fill,
+            })
+            sh.conditional_format(1, 0, n_rows, len(df_tax_rates.columns) - 1, {
+                "type": "formula",
+                "criteria": f'=INDIRECT(ADDRESS(ROW(),{status_col + 1}))="Match"',
+                "format": green_fill,
+            })
+        sheet_names.append("Tax Rate Verification")
+        dfs_to_format.append(df_tax_rates if not df_tax_rates.empty else pd.DataFrame({"Result": ["Could not build tax rate verification."]}))
+
         for sheet_name, curr_df in zip(sheet_names, dfs_to_format):
             sheet = writer.sheets[sheet_name]
             for i, col in enumerate(curr_df.columns):
                 column_len = max(curr_df[col].astype(str).map(len).max() if not curr_df.empty else 10, len(col)) + 2
                 sheet.set_column(i, i, min(column_len, 50))
 
-    return df_results, df_emp_mismatches, out_buffer.getvalue()
+    return df_results, df_emp_mismatches, out_buffer.getvalue(), df_tax_rates
 
 def render_ui():
     st.title("Paycom - Prior Payroll Audit Tool")
@@ -415,6 +574,8 @@ def render_ui():
         st.session_state.pc_audit_emp_mismatches = None
     if "pc_audit_report" not in st.session_state:
         st.session_state.pc_audit_report = None
+    if "pc_audit_tax_rates" not in st.session_state:
+        st.session_state.pc_audit_tax_rates = None
 
     if paycom_files and len(paycom_files) > 0 and all([uzio_file, earn_file, cont_file, ded_file, tax_file]):
         if st.button("Run Total Comparison", type="primary"):
@@ -429,13 +590,15 @@ def render_ui():
                     st.error("No mappings could be loaded from the mapping files. Please check the column headers.")
                     return
 
-                res_df, emp_mismatch_df, report_data = run_comparison(paycom_files, uzio_file, all_mappings)
-                if res_df is not None:
+                result = run_comparison(paycom_files, uzio_file, all_mappings)
+                if result[0] is not None:
+                    res_df, emp_mismatch_df, report_data, tax_df = result
                     st.session_state.pc_audit_results = res_df
                     st.session_state.pc_audit_emp_mismatches = emp_mismatch_df
                     st.session_state.pc_audit_report = report_data
+                    st.session_state.pc_audit_tax_rates = tax_df
                 else:
-                    st.error(f"Failed to generate results. Error: {report_data}")
+                    st.error(f"Failed to generate results. Error: {result[2] if len(result) > 2 else result[1]}")
 
         if st.session_state.pc_audit_results is not None:
             results_df = st.session_state.pc_audit_results
@@ -477,7 +640,26 @@ def render_ui():
                     )
             else:
                 st.info("✅ No employee-level discrepancies found across all pay periods.")
-            
+
+            # Tax-rate verification
+            tax_df = st.session_state.pc_audit_tax_rates
+            if tax_df is not None and not tax_df.empty:
+                mismatched = tax_df[tax_df["Status"] == "Mismatch"]
+                if not mismatched.empty:
+                    st.warning(
+                        f"Found {len(mismatched)} tax line(s) where the effective rate differs from the standard rate "
+                        "by more than 0.05%. See the **'Tax Rate Verification'** tab in the report."
+                    )
+                with st.expander("View tax rate verification (SS / Medicare / FUTA / SUTA)", expanded=False):
+                    def color_tax(val):
+                        if val == "Mismatch": return 'background-color: #FFE5E5'
+                        if val == "Match":    return 'background-color: #E5F5E5'
+                        return ''
+                    st.dataframe(
+                        tax_df.style.map(color_tax, subset=["Status"]),
+                        use_container_width=True,
+                    )
+
             st.download_button(
                 label="Download Full Comparison Report",
                 data=report_data,

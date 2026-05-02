@@ -255,6 +255,282 @@ def detect_duplicate_pay_periods(df):
     return out
 
 
+def _format_pay_date(val):
+    if pd.isna(val) or str(val).strip() in ("", "nan", "NaT", "-"):
+        return None
+    try:
+        return pd.to_datetime(val).strftime("%Y-%m-%d")
+    except Exception:
+        return str(val).strip()
+
+
+def _normalize_eid(val):
+    if pd.isna(val):
+        return ""
+    s = str(val).strip().replace("-", "").replace(" ", "")
+    return s.lstrip("0") if s else ""
+
+
+def compute_pay_stub_count_diff(adp_data_list, df_uzio):
+    """Per employee, compare distinct Pay Date count between combined ADP files and UZIO file."""
+
+    def find_col(df, candidates):
+        for cand in candidates:
+            for c in df.columns:
+                if str(c).strip().lower() == cand.lower():
+                    return c
+        for cand in candidates:
+            for c in df.columns:
+                if cand.lower() in str(c).strip().lower():
+                    return c
+        return None
+
+    adp_stubs, adp_names = {}, {}
+    for df_adp, _, _ in adp_data_list:
+        eid_col   = find_col(df_adp, ["Associate ID", "Employee ID", "File #"])
+        pay_col   = find_col(df_adp, ["Check Date", "Pay Date", "Pay Period End", "Period End Date"])
+        first_col = find_col(df_adp, ["First Name", "Employee First Name"])
+        last_col  = find_col(df_adp, ["Last Name", "Employee Last Name"])
+        full_col  = find_col(df_adp, ["Employee Name", "Name"])
+        if not eid_col or not pay_col:
+            continue
+        for _, row in df_adp.iterrows():
+            raw_eid = str(row[eid_col]).strip()
+            if not raw_eid or raw_eid.lower() in ("nan", "total", "grand"):
+                continue
+            pay = _format_pay_date(row[pay_col])
+            if not pay:
+                continue
+            key = _normalize_eid(raw_eid) or raw_eid
+            adp_stubs.setdefault(key, set()).add(pay)
+            if key not in adp_names:
+                if first_col or last_col:
+                    fn = str(row[first_col]).strip() if first_col and pd.notna(row[first_col]) else ""
+                    ln = str(row[last_col]).strip() if last_col and pd.notna(row[last_col]) else ""
+                    nm = (fn + " " + ln).strip()
+                elif full_col and pd.notna(row[full_col]):
+                    nm = str(row[full_col]).strip()
+                else:
+                    nm = ""
+                if nm:
+                    adp_names[key] = nm
+
+    eid_col   = find_col(df_uzio, ["Employee ID"])
+    pay_col   = find_col(df_uzio, ["Pay Date"])
+    first_col = find_col(df_uzio, ["First Name"])
+    last_col  = find_col(df_uzio, ["Last Name"])
+
+    uzio_stubs, uzio_names = {}, {}
+    if eid_col and pay_col:
+        for _, row in df_uzio.iterrows():
+            raw_eid = str(row[eid_col]).strip()
+            if not raw_eid or raw_eid.lower() in ("nan", "total", "grand"):
+                continue
+            pay = _format_pay_date(row[pay_col])
+            if not pay:
+                continue
+            key = _normalize_eid(raw_eid) or raw_eid
+            uzio_stubs.setdefault(key, set()).add(pay)
+            if key not in uzio_names:
+                fn = str(row[first_col]).strip() if first_col and pd.notna(row[first_col]) else ""
+                ln = str(row[last_col]).strip() if last_col and pd.notna(row[last_col]) else ""
+                nm = (fn + " " + ln).strip()
+                if nm:
+                    uzio_names[key] = nm
+
+    rows = []
+    all_keys = set(adp_stubs.keys()) | set(uzio_stubs.keys())
+    for k in all_keys:
+        a_dates = adp_stubs.get(k, set())
+        u_dates = uzio_stubs.get(k, set())
+        a_n, u_n = len(a_dates), len(u_dates)
+        diff = u_n - a_n
+        if diff == 0:
+            status = "Match"
+        elif diff > 0:
+            status = "Extra in UZIO"
+        else:
+            status = "Missing in UZIO"
+        missing_in_uzio = sorted(a_dates - u_dates)
+        missing_in_adp  = sorted(u_dates - a_dates)
+        rows.append({
+            "Employee ID": k,
+            "Employee Name": uzio_names.get(k) or adp_names.get(k, ""),
+            "ADP Pay Stubs": a_n,
+            "UZIO Pay Stubs": u_n,
+            "Difference": diff,
+            "Status": status,
+            "Pay Dates Missing in UZIO": ", ".join(missing_in_uzio) if missing_in_uzio else "",
+            "Pay Dates Missing in ADP":  ", ".join(missing_in_adp)  if missing_in_adp  else "",
+        })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    df["_sort"] = df["Status"].apply(lambda s: 0 if s != "Match" else 1)
+    df = df.sort_values(["_sort", "Employee ID"]).drop(columns=["_sort"]).reset_index(drop=True)
+    return df
+
+
+# Standard federal tax rates used for verification (in percent)
+STANDARD_TAX_RATES = {
+    "Social Security EE": 6.20,
+    "Social Security ER": 6.20,
+    "Medicare EE":        1.45,
+    "Medicare ER":        1.45,
+    "FUTA ER":            0.60,
+}
+RATE_TOLERANCE_PCT = 0.05
+
+
+def _filter_data_rows(df, eid_col):
+    """Drop blank/total rows so sums aren't doubled by grand-total rows."""
+    if not eid_col:
+        return df
+    work = df[df[eid_col].notna()].copy()
+    work[eid_col] = work[eid_col].astype(str).str.strip()
+    return work[(work[eid_col] != "") & (~work[eid_col].str.lower().str.contains("total|grand", na=False))]
+
+
+def _sum_uzio_section(df, header_top, section_name, side):
+    """Sum Taxable Wages and EE/ER Amount within a UZIO section header. side is 'EE' or 'ER'."""
+    if not header_top:
+        return 0.0, 0.0
+    eid_col = next((c for c in df.columns if any(x in str(c).lower() for x in ["employee id", "associate id"])), None)
+    work = _filter_data_rows(df, eid_col)
+    target = norm_colname(section_name).lower()
+    wages = amount = 0.0
+    for i, h in enumerate(header_top):
+        if pd.notna(h) and norm_colname(str(h)).lower() == target:
+            end_i = len(df.columns)
+            for j in range(i + 1, len(header_top)):
+                if pd.notna(header_top[j]) and str(header_top[j]).strip() != "":
+                    end_i = j
+                    break
+            for k in range(i, end_i):
+                col = str(df.columns[k]).strip().lower()
+                if "taxable wages" in col:
+                    wages += work.iloc[:, k].apply(clean_money_val).sum()
+                elif side == "EE" and (col == "ee amount" or col.startswith("ee amount.")):
+                    amount += work.iloc[:, k].apply(clean_money_val).sum()
+                elif side == "ER" and (col == "er amount" or col.startswith("er amount.")):
+                    amount += work.iloc[:, k].apply(clean_money_val).sum()
+            break
+    return wages, amount
+
+
+def _sum_adp_for_uzio_name(adp_data_list, adp_names, side):
+    """Best-effort sum of (taxable wages, amount) across ADP files for the given source codes.
+    Wages are filled in only if the ADP file uses the same section-header layout (header_top match)."""
+    if not adp_names:
+        return 0.0, 0.0
+    total_w = total_a = 0.0
+    for df_adp, adp_top, _ in adp_data_list:
+        eid_col = next((c for c in df_adp.columns if any(x in str(c).lower() for x in ["associate id", "employee id", "file #"])), None)
+        work = _filter_data_rows(df_adp, eid_col)
+        norm_main = {norm_colname(c).lower(): i for i, c in enumerate(df_adp.columns)}
+        norm_top  = {norm_colname(str(c)).lower(): i for i, c in enumerate(adp_top or []) if pd.notna(c) and str(c).strip() != ""}
+        for name in adp_names:
+            n = norm_colname(name).lower()
+            if n in norm_main:
+                idx = norm_main[n]
+                total_a += work.iloc[:, idx].apply(clean_money_val).sum()
+                # Try sibling wages: same name with "Tax"->"Wages", or adjacent col containing "wages"
+                tax_col = str(df_adp.columns[idx])
+                cand_names = []
+                if re.search(r"\btax\b", tax_col, re.I):
+                    cand_names.append(re.sub(r"\btax\b", "Wages", tax_col, flags=re.I))
+                cand_names.extend([tax_col + " Wages", tax_col + " Taxable Wages"])
+                found_wages = False
+                for cn in cand_names:
+                    nn = norm_colname(cn).lower()
+                    if nn in norm_main:
+                        total_w += work.iloc[:, norm_main[nn]].apply(clean_money_val).sum()
+                        found_wages = True
+                        break
+                if not found_wages:
+                    for off in (-1, 1, -2, 2):
+                        j = idx + off
+                        if 0 <= j < len(df_adp.columns):
+                            ch = str(df_adp.columns[j]).lower()
+                            if "wages" in ch and "tax" not in ch:
+                                total_w += work.iloc[:, j].apply(clean_money_val).sum()
+                                break
+            elif n in norm_top:
+                start_idx = norm_top[n]
+                end_i = len(df_adp.columns)
+                for j in range(start_idx + 1, len(adp_top)):
+                    if pd.notna(adp_top[j]) and str(adp_top[j]).strip() != "":
+                        end_i = j
+                        break
+                for k in range(start_idx, end_i):
+                    ch = str(df_adp.columns[k]).strip().lower()
+                    if "taxable wages" in ch:
+                        total_w += work.iloc[:, k].apply(clean_money_val).sum()
+                    elif side == "EE" and (ch == "ee amount" or ch.startswith("ee amount.")):
+                        total_a += work.iloc[:, k].apply(clean_money_val).sum()
+                    elif side == "ER" and (ch == "er amount" or ch.startswith("er amount.")):
+                        total_a += work.iloc[:, k].apply(clean_money_val).sum()
+    return total_w, total_a
+
+
+def compute_tax_rate_verification(df_uzio, uzio_top, adp_data_list, mappings):
+    """Build the tax-rate verification table (SS, Medicare, FUTA, SUTA per state)."""
+    # Build UZIO_Name -> [ADP source names] for tax mappings only
+    uzio_to_adp = {}
+    for m in mappings:
+        if m.get("Category") == "Taxes":
+            uzio_to_adp.setdefault(m["UZIO_Name"], []).append(m["ADP_Name"])
+
+    # Static targets
+    targets = [
+        ("Social Security", "EE", "Social Security Tax",          STANDARD_TAX_RATES["Social Security EE"]),
+        ("Social Security", "ER", "Employer Social Security Tax", STANDARD_TAX_RATES["Social Security ER"]),
+        ("Medicare",        "EE", "Medicare Tax",                 STANDARD_TAX_RATES["Medicare EE"]),
+        ("Medicare",        "ER", "Employer Medicare Tax",        STANDARD_TAX_RATES["Medicare ER"]),
+        ("FUTA",            "ER", "Federal Unemployment Tax",     STANDARD_TAX_RATES["FUTA ER"]),
+    ]
+    # Dynamic per-state SUTA targets
+    if uzio_top:
+        suta_re = re.compile(r"^\s*([A-Z]{2})\s+STATE\s+UNEMPLOYMENT\s+TAX\s*$", re.I)
+        for h in uzio_top:
+            if pd.notna(h):
+                m = suta_re.match(str(h))
+                if m:
+                    state = m.group(1).upper()
+                    targets.append((f"SUTA - {state}", "ER", str(h).strip(), None))
+
+    rows = []
+    for tax, side, uzio_name, std in targets:
+        u_w, u_a = _sum_uzio_section(df_uzio, uzio_top, uzio_name, side)
+        a_w, a_a = _sum_adp_for_uzio_name(adp_data_list, uzio_to_adp.get(uzio_name, []), side)
+        u_rate = (u_a / u_w * 100) if u_w > 0 else None
+        a_rate = (a_a / a_w * 100) if a_w > 0 else None
+
+        if std is None:
+            status = "Info (Employer-set)"
+            std_disp = "Employer-set"
+        else:
+            off_u = (u_rate is not None) and abs(u_rate - std) > RATE_TOLERANCE_PCT
+            off_a = (a_rate is not None) and abs(a_rate - std) > RATE_TOLERANCE_PCT
+            status = "Mismatch" if (off_u or off_a) else "Match"
+            std_disp = f"{std:.2f}%"
+
+        rows.append({
+            "Tax": tax,
+            "Side": side,
+            "ADP Taxable Wages":  round(a_w, 2),
+            "ADP Amount":         round(a_a, 2),
+            "ADP Effective Rate": (f"{a_rate:.4f}%" if a_rate is not None else "-"),
+            "UZIO Taxable Wages": round(u_w, 2),
+            "UZIO Amount":        round(u_a, 2),
+            "UZIO Effective Rate":(f"{u_rate:.4f}%" if u_rate is not None else "-"),
+            "Standard Rate":      std_disp,
+            "Status":             status,
+        })
+    return pd.DataFrame(rows)
+
+
 def run_comparison(adp_files, uzio_file, mappings):
     """Main logic to compare totals based on mappings."""
     try:
@@ -315,9 +591,19 @@ def run_comparison(adp_files, uzio_file, mappings):
     # Detect duplicate pay-period rows in the UZIO register
     df_dups = detect_duplicate_pay_periods(df_uzio)
 
+    # Pay-stub count comparison: ADP (combined across files) vs UZIO
+    df_stub_counts = compute_pay_stub_count_diff(adp_data_list, df_uzio)
+
+    # Tax-rate verification (SS / Medicare / FUTA / SUTA per state)
+    df_tax_rates = compute_tax_rate_verification(df_uzio, uzio_top, adp_data_list, mappings)
+
     # Generate Excel Report
     out_buffer = io.BytesIO()
     with pd.ExcelWriter(out_buffer, engine='xlsxwriter') as writer:
+        wb = writer.book
+        red_fill   = wb.add_format({"bg_color": "#FFE5E5", "font_color": "#9C0006"})
+        green_fill = wb.add_format({"bg_color": "#E5F5E5", "font_color": "#006100"})
+
         df_results.to_excel(writer, sheet_name="Full Comparison", index=False)
         df_mismatches = df_results[df_results["Status"] == "Mismatch"][["Category", "UZIO Item", "ADP Columns Found", "UZIO Columns Found", "ADP Total", "UZIO Total", "Difference"]]
         df_mismatches.to_excel(writer, sheet_name="Mismatches Only", index=False)
@@ -329,10 +615,47 @@ def run_comparison(adp_files, uzio_file, mappings):
         else:
             df_dups.to_excel(writer, sheet_name="Duplicate Pay Periods", index=False)
 
+        if df_stub_counts.empty:
+            pd.DataFrame({"Result": ["Could not compute pay-stub counts (missing ID or Pay Date column)."]}).to_excel(
+                writer, sheet_name="Pay Stub Counts", index=False
+            )
+        else:
+            df_stub_counts.to_excel(writer, sheet_name="Pay Stub Counts", index=False)
+            sh = writer.sheets["Pay Stub Counts"]
+            n_rows = len(df_stub_counts)
+            status_col = list(df_stub_counts.columns).index("Status")
+            sh.conditional_format(1, 0, n_rows, len(df_stub_counts.columns) - 1, {
+                "type": "formula",
+                "criteria": f'=INDIRECT(ADDRESS(ROW(),{status_col + 1}))<>"Match"',
+                "format": red_fill,
+            })
+
+        if df_tax_rates.empty:
+            pd.DataFrame({"Result": ["Could not build tax rate verification (no tax sections detected)."]}).to_excel(
+                writer, sheet_name="Tax Rate Verification", index=False
+            )
+        else:
+            df_tax_rates.to_excel(writer, sheet_name="Tax Rate Verification", index=False)
+            sh = writer.sheets["Tax Rate Verification"]
+            n_rows = len(df_tax_rates)
+            status_col = list(df_tax_rates.columns).index("Status")
+            sh.conditional_format(1, 0, n_rows, len(df_tax_rates.columns) - 1, {
+                "type": "formula",
+                "criteria": f'=INDIRECT(ADDRESS(ROW(),{status_col + 1}))="Mismatch"',
+                "format": red_fill,
+            })
+            sh.conditional_format(1, 0, n_rows, len(df_tax_rates.columns) - 1, {
+                "type": "formula",
+                "criteria": f'=INDIRECT(ADDRESS(ROW(),{status_col + 1}))="Match"',
+                "format": green_fill,
+            })
+
         sheet_to_df = {
             "Full Comparison": df_results,
             "Mismatches Only": df_mismatches,
             "Duplicate Pay Periods": df_dups if not df_dups.empty else pd.DataFrame({"Result": ["No duplicate pay-period entries were detected in the UZIO file."]}),
+            "Pay Stub Counts": df_stub_counts if not df_stub_counts.empty else pd.DataFrame({"Result": ["Could not compute pay-stub counts."]}),
+            "Tax Rate Verification": df_tax_rates if not df_tax_rates.empty else pd.DataFrame({"Result": ["Could not build tax rate verification."]}),
         }
         for sheet_name, curr_df in sheet_to_df.items():
             sheet = writer.sheets[sheet_name]
@@ -342,7 +665,7 @@ def run_comparison(adp_files, uzio_file, mappings):
                 column_len = max(curr_df[col].astype(str).map(len).max(), len(col)) + 2
                 sheet.set_column(i, i, min(column_len, 50))
 
-    return df_results, out_buffer.getvalue(), df_dups
+    return df_results, out_buffer.getvalue(), df_dups, df_stub_counts, df_tax_rates
 
 def render_ui():
     st.title("ADP - Prior Payroll Audit Tool")
@@ -379,6 +702,10 @@ def render_ui():
         st.session_state.audit_report = None
     if "audit_dups" not in st.session_state:
         st.session_state.audit_dups = None
+    if "audit_stub_counts" not in st.session_state:
+        st.session_state.audit_stub_counts = None
+    if "audit_tax_rates" not in st.session_state:
+        st.session_state.audit_tax_rates = None
 
     if adp_files and len(adp_files) > 0 and all([uzio_file, earn_file, cont_file, ded_file, tax_file]):
         if st.button("Run Total Comparison", type="primary"):
@@ -395,10 +722,12 @@ def render_ui():
                     st.error("No mappings could be loaded from the mapping files. Please check the column headers.")
                     return
 
-                res_df, report_data, dup_df = run_comparison(adp_files, uzio_file, all_mappings)
+                res_df, report_data, dup_df, stub_df, tax_df = run_comparison(adp_files, uzio_file, all_mappings)
                 st.session_state.audit_results = res_df
                 st.session_state.audit_report = report_data
                 st.session_state.audit_dups = dup_df
+                st.session_state.audit_stub_counts = stub_df
+                st.session_state.audit_tax_rates = tax_df
 
         if st.session_state.audit_results is not None:
             results_df = st.session_state.audit_results
@@ -436,6 +765,42 @@ def render_ui():
                 )
                 with st.expander(f"View duplicate pay-period entries ({len(dup_df)} rows)", expanded=False):
                     st.dataframe(dup_df, use_container_width=True)
+
+            # Pay-stub count comparison
+            stub_df = st.session_state.audit_stub_counts
+            if stub_df is not None and not stub_df.empty:
+                mismatched = stub_df[stub_df["Status"] != "Match"]
+                if not mismatched.empty:
+                    st.warning(
+                        f"Found {len(mismatched)} employee(s) with a pay-stub-count mismatch between ADP and UZIO. "
+                        "See the **'Pay Stub Counts'** tab in the report."
+                    )
+                with st.expander(f"View pay-stub count comparison ({len(stub_df)} employees)", expanded=False):
+                    def color_stub(val):
+                        return 'background-color: #FFE5E5' if val != "Match" else ''
+                    st.dataframe(
+                        stub_df.style.map(color_stub, subset=["Status"]),
+                        use_container_width=True,
+                    )
+
+            # Tax-rate verification
+            tax_df = st.session_state.audit_tax_rates
+            if tax_df is not None and not tax_df.empty:
+                mismatched = tax_df[tax_df["Status"] == "Mismatch"]
+                if not mismatched.empty:
+                    st.warning(
+                        f"Found {len(mismatched)} tax line(s) where the effective rate differs from the standard rate "
+                        "by more than 0.05%. See the **'Tax Rate Verification'** tab in the report."
+                    )
+                with st.expander("View tax rate verification (SS / Medicare / FUTA / SUTA)", expanded=False):
+                    def color_tax(val):
+                        if val == "Mismatch": return 'background-color: #FFE5E5'
+                        if val == "Match":    return 'background-color: #E5F5E5'
+                        return ''
+                    st.dataframe(
+                        tax_df.style.map(color_tax, subset=["Status"]),
+                        use_container_width=True,
+                    )
 
             # Download button
             st.download_button(

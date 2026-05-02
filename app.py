@@ -217,11 +217,6 @@ elif tool_option == "ADP - License Details Audit":
     importlib.reload(license_audit)
     license_audit.render_ui()
 
-elif tool_option == "ADP - Prior Payroll Audit":
-    from apps.adp import prior_payroll_audit
-    importlib.reload(prior_payroll_audit)
-    prior_payroll_audit.render_ui()
-
 elif tool_option == "ADP - Prior Payroll Audit Tool":
     from apps.adp import total_comparison
     importlib.reload(total_comparison)

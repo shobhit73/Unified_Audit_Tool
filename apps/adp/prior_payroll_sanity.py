@@ -507,6 +507,12 @@ def render_ui():
         key="pps_input",
     )
 
+    agg_strategy = st.radio(
+        "Aggregation Strategy",
+        options=["Full Quarter (Default)", "Preserve Pay Periods"],
+        help="Full Quarter squashes all rows for an employee into one. Preserve Pay Periods keeps distinct dates but merges same-day duplicates."
+    )
+
     swap_net_take = st.checkbox(
         "Swap NET PAY and TAKE HOME values (the API expects them reversed)",
         value=True,
@@ -535,11 +541,17 @@ def render_ui():
             # 2. Detect bottom-of-file grand-total leak (after summary rows are gone)
             df_b, gt_info = detect_grand_total_row(df_a)
 
-            # 3. If multiple rows per associate, aggregate to one row per associate
+            # 3. If multiple rows per associate, aggregate or merge
             mode, period_info = detect_per_pay_period_structure(df_b)
             agg_info = None
+            merge_events = None
+            
             if mode == "aggregate":
-                df_c, agg_info = aggregate_by_associate(df_b)
+                if agg_strategy == "Full Quarter (Default)":
+                    df_c, agg_info = aggregate_by_associate(df_b)
+                else:
+                    df_c, merge_events = merge_duplicate_pay_periods(df_b)
+                    mode = "preserve"
             else:
                 df_c = df_b
 
@@ -559,10 +571,13 @@ def render_ui():
     m1.metric("Original Rows", original_count)
     m2.metric("Cleaned Rows", final_count)
     if mode == "aggregate":
-        m3.metric("Mode", "Per-associate aggregation")
+        m3.metric("Mode", "Full Quarter Aggregation")
         m4.metric("Associates", agg_info["associates"] if agg_info else 0)
+    elif mode == "preserve":
+        m3.metric("Mode", "Preserved Pay Periods")
+        m4.metric("Merged Dupes", len(merge_events) if merge_events else 0)
     else:
-        m3.metric("Mode", "Already aggregated")
+        m3.metric("Mode", "Already clean")
         m4.metric("Associates", period_info["associates"] if period_info else 0)
 
     note_lines = []
@@ -582,6 +597,11 @@ def render_ui():
             f"Detected per-pay-period file: {period_info['associates']} associates, "
             f"{period_info['with_multiple_rows']} with multiple rows{max_msg}. "
             f"Aggregated to one row per associate."
+        )
+    elif mode == "preserve" and period_info:
+        note_lines.append(
+            f"Preserved distinct pay periods. Successfully merged {len(merge_events)} "
+            f"same-day duplicate row pairs." if merge_events else "Preserved distinct pay periods. No same-day duplicates found."
         )
     if swapped:
         note_lines.append("Swapped NET PAY and TAKE HOME values.")

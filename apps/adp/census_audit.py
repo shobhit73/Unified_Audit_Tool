@@ -1228,6 +1228,32 @@ def run_comparison(uzio_file, adp_file) -> bytes:
                     })
     df_high_rate = pd.DataFrame(high_rate_rows)
 
+    # ---------- Hourly = 0 Hours validation (Check Uzio only) ----------
+    hourly_zero_hours_rows = []
+    if 'Pay Type' in uzio_idx.columns and 'Working Hours' in uzio_idx.columns:
+        for emp_id, row in uzio_idx.iterrows():
+            uz_pay_raw = str(norm_blank(row.get('Pay Type', '')) or "")
+            emp_pay_bucket = paytype_bucket(normalize_paytype_text(uz_pay_raw))
+            if emp_pay_bucket == "hourly":
+                wh_raw = row.get('Working Hours', '')
+                try:
+                    wh_val = float(str(wh_raw).replace(",", "").strip()) if str(wh_raw).strip() else 0.0
+                except Exception:
+                    wh_val = 0.0
+                
+                if wh_val > 0:
+                    fname = str(norm_blank(row.get('First Name', '')) or "")
+                    lname = str(norm_blank(row.get('Last Name', '')) or "")
+                    emp_name = f"{fname} {lname}".strip()
+                    hourly_zero_hours_rows.append({
+                        "Employee ID": str(emp_id),
+                        "Employee Name": emp_name,
+                        "Pay Type (Uzio)": uz_pay_raw,
+                        "Working Hours (Uzio)": str(wh_raw),
+                        "Issue": f"Hourly employee has {wh_raw} working hours. Must be 0."
+                    })
+    df_hourly_zero_hours = pd.DataFrame(hourly_zero_hours_rows)
+
     # ---------- Summary metrics ----------
     summary = pd.DataFrame({
         "Metric": [
@@ -1246,7 +1272,8 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             "Data Quality Issues (00/00/0000)",
             "Duplicate SSN Warnings",
             "Salaried Hourly-Only Exceptions",
-            "High Hourly Rate Anomalies (>$100/hr)"
+            "High Hourly Rate Anomalies (>$100/hr)",
+            "Hourly Zero Hours Exceptions"
         ],
         "Value": [
             len(uzio_keys),
@@ -1264,7 +1291,8 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             len(dq_rows),
             len(dupe_ssn_rows),
             len(df_salaried_drivers),
-            len(df_high_rate)
+            len(df_high_rate),
+            len(df_hourly_zero_hours)
         ]
     })
 
@@ -1284,6 +1312,8 @@ def run_comparison(uzio_file, adp_file) -> bytes:
             df_salaried_drivers.to_excel(writer, sheet_name="Salaried_Driver_Exceptions", index=False)
         if not df_high_rate.empty:
             df_high_rate.to_excel(writer, sheet_name="High_Hourly_Rate_Anomalies", index=False)
+        if not df_hourly_zero_hours.empty:
+            df_hourly_zero_hours.to_excel(writer, sheet_name="Hourly_Zero_Hours_Exceptions", index=False)
 
     return out.getvalue()
 

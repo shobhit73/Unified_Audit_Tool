@@ -120,10 +120,22 @@ def _compare_field(field, u_val, p_val, u_rec, p_rec):
         
     return STATUS_MISMATCH
 
+def _read_payment_file(file, header=0):
+    """Read an .xlsx/.xls/.csv payment export. Header is the row index of column names."""
+    name = (getattr(file, 'name', '') or '').lower()
+    file.seek(0)
+    if name.endswith('.csv'):
+        try:
+            return pd.read_csv(file, header=header, dtype=str)
+        except UnicodeDecodeError:
+            file.seek(0)
+            return pd.read_csv(file, header=header, dtype=str, encoding='latin1')
+    return pd.read_excel(file, header=header, dtype=str)
+
 def run_audit(file_uzio, file_adp):
     # 1. Load Uzio Data
     # Uzio Export typically starts at Row 2 (Header=1)
-    df_uzio = pd.read_excel(file_uzio, header=1, dtype=str)
+    df_uzio = _read_payment_file(file_uzio, header=1)
     
     # Map Uzio Columns
     # Clean column names first (remove newlines/extra spaces)
@@ -183,7 +195,7 @@ def run_audit(file_uzio, file_adp):
                 uzio_map[emp_id].append(acc)
 
     # 2. Load ADP Data
-    df_adp = pd.read_excel(file_adp, dtype=str)
+    df_adp = _read_payment_file(file_adp, header=0)
     df_adp.columns = [str(c).strip() for c in df_adp.columns]
     
     # Map ADP Columns
@@ -439,8 +451,8 @@ def render_ui():
 
     st.markdown("""
     **Instructions**:
-    1. Upload **Uzio Payment Export** (`HR Report_...xlsx`).
-    2. Upload **ADP Payment Export** (Excel).
+    1. Upload **Uzio Payment Export** (`HR Report_...xlsx` or `.csv`).
+    2. Upload **ADP Payment Export** (`.xlsx`, `.xls`, or `.csv`).
     
     **Notes**:
     - **ADP Account Type** ('CK1 - checking') is normalized to 'Checking'/'Savings'.
@@ -450,9 +462,9 @@ def render_ui():
     
     col1, col2 = st.columns(2)
     with col1:
-        uzio_file = st.file_uploader("Upload Uzio Payment Export", type=["xlsx"], key="u_pay")
+        uzio_file = st.file_uploader("Upload Uzio Payment Export", type=["xlsx", "csv"], key="u_pay")
     with col2:
-        adp_file = st.file_uploader("Upload ADP Payment Export", type=["xlsx", "xls"], key="a_pay")
+        adp_file = st.file_uploader("Upload ADP Payment Export", type=["xlsx", "xls", "csv"], key="a_pay")
         
     if st.button("Run Audit"):
         if not uzio_file or not adp_file:

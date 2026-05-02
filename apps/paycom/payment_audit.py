@@ -91,7 +91,7 @@ def render_ui():
 
     st.markdown("""
     **Instructions**:
-    1. Upload **Uzio Payment Export** (`HR Report_...xlsx`).
+    1. Upload **Uzio Payment Export** (`HR Report_...xlsx` or `.csv`).
     2. Upload **Paycom Payment Export** (`.csv` or `.xlsx`).
     
     **Output Report**:
@@ -102,9 +102,9 @@ def render_ui():
 
     col1, col2 = st.columns(2)
     with col1:
-        uzio_file = st.file_uploader("Allowed Uzio Export (.xlsx)", type=["xlsx", "xlsm"])
+        uzio_file = st.file_uploader("Allowed Uzio Export (.xlsx, .xlsm, .csv)", type=["xlsx", "xlsm", "csv"])
     with col2:
-        paycom_file = st.file_uploader("Allowed Paycom Census Export (.xlsx)", type=["xlsx"])
+        paycom_file = st.file_uploader("Allowed Paycom Payment Export (.xlsx, .csv)", type=["xlsx", "csv"])
 
     run_btn = st.button("Run Audit", type="primary", disabled=(not uzio_file or not paycom_file))
 
@@ -129,14 +129,26 @@ def render_ui():
             st.error(f"Failed: {e}")
 
 # ---------- Core Audit Logic ----------
+def _read_payment_file(file, header=0):
+    """Read an .xlsx/.xlsm/.csv payment export. Header is the row index of column names."""
+    name = (getattr(file, 'name', '') or '').lower()
+    file.seek(0)
+    if name.endswith('.csv'):
+        try:
+            return pd.read_csv(file, header=header, dtype=str)
+        except UnicodeDecodeError:
+            file.seek(0)
+            return pd.read_csv(file, header=header, dtype=str, encoding='latin1')
+    return pd.read_excel(file, header=header, dtype=str)
+
 def run_audit(uzio_file, paycom_file):
     # 1. Load Data
     # Uzio Raw: Skip first row (header=1)
-    df_uzio = pd.read_excel(uzio_file, header=1, dtype=str)
-    
-    # Paycom: Census Export (.xlsx)
+    df_uzio = _read_payment_file(uzio_file, header=1)
+
+    # Paycom: Payment Export (.xlsx or .csv)
     try:
-        df_paycom = pd.read_excel(paycom_file, dtype=str)
+        df_paycom = _read_payment_file(paycom_file, header=0)
     except Exception as e:
         raise ValueError(f"Error reading Paycom file: {e}")
 

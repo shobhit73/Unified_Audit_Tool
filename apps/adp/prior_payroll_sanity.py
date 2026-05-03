@@ -480,6 +480,94 @@ def merge_duplicate_pay_periods(df):
     return cleaned.reset_index(drop=True), merge_events
 
 
+def detect_file_shape(df):
+    """Inspect a (cleaned) ADP Prior Payroll DataFrame and return facts +
+    a recommended aggregation_strategy. Read-only: never mutates df. Mirrors
+    the audit_fast_api version of the same name; keep both in sync.
+    """
+    eid_col = _find_col(df, ["Associate ID", "Employee ID", "File #"])
+    pay_col = _find_col(df, ["Pay Date", "Check Date"])
+    pbeg_col = _find_col(df, ["Period Beginning Date", "Period Begin Date", "Start Date"])
+    pend_col = _find_col(df, ["Period Ending Date", "Period End Date", "End Date"])
+
+    facts = {
+        "associates": 0, "total_rows": int(len(df)),
+        "rows_per_associate_max": 0, "rows_per_associate_avg": 0.0,
+        "distinct_pay_dates": 0, "distinct_pay_dates_per_associate_avg": 0.0,
+        "period_min": None, "period_max": None, "date_span_days": None,
+        "detected_shape": "unknown",
+        "recommended_strategy": None,
+        "recommendation_reason": "",
+    }
+    if not eid_col:
+        facts["recommendation_reason"] = "No Associate ID column found; cannot recommend a strategy."
+        return facts
+
+    work = df[df[eid_col].notna()].copy()
+    work[eid_col] = work[eid_col].astype(str).str.strip()
+    work = work[work[eid_col] != ""]
+    if work.empty:
+        facts["recommendation_reason"] = "No data rows with an Associate ID."
+        return facts
+
+    rows_per_eid = work.groupby(eid_col).size()
+    facts["associates"] = int(len(rows_per_eid))
+    facts["rows_per_associate_max"] = int(rows_per_eid.max())
+    facts["rows_per_associate_avg"] = round(float(rows_per_eid.mean()), 2)
+
+    if pay_col:
+        pay_parsed = pd.to_datetime(work[pay_col], errors="coerce")
+        facts["distinct_pay_dates"] = int(pay_parsed.dropna().nunique())
+        per_eid_pd = work.assign(_pd=pay_parsed).groupby(eid_col)["_pd"].nunique()
+        facts["distinct_pay_dates_per_associate_avg"] = round(float(per_eid_pd.mean()), 2)
+
+    pmin = pmax = None
+    if pbeg_col:
+        s = pd.to_datetime(work[pbeg_col], errors="coerce").dropna()
+        if not s.empty: pmin = s.min()
+    if pend_col:
+        s = pd.to_datetime(work[pend_col], errors="coerce").dropna()
+        if not s.empty: pmax = s.max()
+    if pmin is not None: facts["period_min"] = pmin.strftime("%Y-%m-%d")
+    if pmax is not None: facts["period_max"] = pmax.strftime("%Y-%m-%d")
+    if pmin is not None and pmax is not None:
+        facts["date_span_days"] = int((pmax - pmin).days)
+
+    rmax = facts["rows_per_associate_max"]
+    span = facts["date_span_days"]
+    npd = facts["distinct_pay_dates"]
+
+    if rmax <= 1:
+        facts["detected_shape"] = "already_aggregated"
+        facts["recommendation_reason"] = (
+            "Each associate already has exactly one row; no aggregation needed."
+        )
+    elif span is not None and span >= 80 and npd >= 4:
+        facts["detected_shape"] = "full_quarter_per_pay_period"
+        facts["recommended_strategy"] = "full_quarter"
+        facts["recommendation_reason"] = (
+            f"Date span is {span} days with {npd} distinct pay dates and "
+            f"{facts['rows_per_associate_avg']} rows per associate on average -- "
+            f"this is a full-quarter per-pay-period export. "
+            f"Recommend collapsing to one row per associate."
+        )
+    elif span is not None and span <= 40:
+        facts["detected_shape"] = "partial_period"
+        facts["recommended_strategy"] = "preserve_pay_periods"
+        facts["recommendation_reason"] = (
+            f"Date span is only {span} days -- this is a partial-period export. "
+            f"Recommend preserving distinct pay periods (only merge same-day duplicates)."
+        )
+    else:
+        facts["detected_shape"] = "ambiguous"
+        span_txt = f"{span} days" if span is not None else "unknown"
+        facts["recommendation_reason"] = (
+            f"Date span ({span_txt}) is in-between full-quarter and partial. "
+            f"Please choose 'full_quarter' or 'preserve_pay_periods' explicitly."
+        )
+    return facts
+
+
 def render_ui():
     st.title("ADP - Prior Payroll Sanity Check")
     st.markdown(
@@ -507,14 +595,70 @@ def render_ui():
         key="pps_input",
     )
 
-    agg_strategy = st.radio(
-        "Aggregation Strategy",
-        options=["Full Quarter (Default)", "Preserve Pay Periods"],
-        help="Full Quarter squashes all rows for an employee into one. Preserve Pay Periods keeps distinct dates but merges same-day duplicates."
+    if not file:
+        st.info("Upload an ADP Prior Payroll file to begin.")
+        return
+
+    # ------------------------------------------------------------------
+    # Step 1: Read + run detection BEFORE asking the user anything.
+    # ------------------------------------------------------------------
+    try:
+        with st.spinner("Inspecting file..."):
+            df_in, header_idx, sheet = read_input_file(file)
+            original_count = len(df_in)
+            df_a, summary_removed = drop_summary_rows(df_in)
+            df_b, gt_info = detect_grand_total_row(df_a)
+            facts = detect_file_shape(df_b)
+    except Exception as e:
+        st.error(f"Failed to read the file: {e}")
+        return
+
+    # ------------------------------------------------------------------
+    # Step 2: Show the facts + recommendation. Always ask the user to
+    # confirm; never apply silently.
+    # ------------------------------------------------------------------
+    st.markdown("### File shape detected")
+    f1, f2, f3 = st.columns(3)
+    f1.metric("Associates", facts["associates"])
+    f2.metric("Total rows", facts["total_rows"])
+    f3.metric("Rows / associate (max)", facts["rows_per_associate_max"])
+    f4, f5, f6 = st.columns(3)
+    f4.metric("Date span (days)", facts["date_span_days"] if facts["date_span_days"] is not None else "—")
+    f5.metric("Distinct pay dates", facts["distinct_pay_dates"])
+    f6.metric("Pay dates / associate (avg)", facts["distinct_pay_dates_per_associate_avg"])
+    if facts["period_min"] and facts["period_max"]:
+        st.caption(f"Pay period range: **{facts['period_min']} → {facts['period_max']}**")
+
+    rec = facts["recommended_strategy"]
+    if facts["detected_shape"] == "already_aggregated":
+        st.info(
+            "**Already aggregated.** Each associate already has exactly one row. "
+            "Either strategy will leave the data as-is (just running grand-total / "
+            "summary-row cleanup + the optional swap). Pick either one and run."
+        )
+        default_radio_idx = 0
+    elif rec == "full_quarter":
+        st.success(f"**Recommendation: Full Quarter.**  \n{facts['recommendation_reason']}")
+        default_radio_idx = 0
+    elif rec == "preserve_pay_periods":
+        st.success(f"**Recommendation: Preserve Pay Periods.**  \n{facts['recommendation_reason']}")
+        default_radio_idx = 1
+    else:
+        st.warning(f"**Recommendation: please choose explicitly.**  \n{facts['recommendation_reason']}")
+        default_radio_idx = 0
+
+    st.markdown("### Confirm strategy and run")
+    agg_choice = st.radio(
+        "Aggregation Strategy (you can override the recommendation)",
+        options=["Full Quarter — collapse to one row per associate",
+                 "Preserve Pay Periods — keep each pay date, merge same-day duplicates only"],
+        index=default_radio_idx,
+        key="pps_agg_radio",
     )
+    agg_strategy = "Full Quarter (Default)" if agg_choice.startswith("Full Quarter") else "Preserve Pay Periods"
 
     swap_net_take = st.checkbox(
-        "Swap NET PAY and TAKE HOME values (the API expects them reversed)",
+        "Swap NET PAY and TAKE HOME values (the Carvan-style API expects them reversed)",
         value=True,
         key="pps_swap",
         help=(
@@ -524,28 +668,18 @@ def render_ui():
         ),
     )
 
-    if not file:
+    if not st.button("Run Sanity Check with this strategy", type="primary", use_container_width=True):
         return
 
-    if not st.button("Run Sanity Check", type="primary", use_container_width=True):
-        return
-
+    # ------------------------------------------------------------------
+    # Step 3: Apply the chosen strategy.
+    # ------------------------------------------------------------------
     try:
-        with st.spinner("Reading and cleaning..."):
-            df_in, header_idx, sheet = read_input_file(file)
-            original_count = len(df_in)
-
-            # 1. Drop interleaved 'Totals For Associate ID' summary rows
-            df_a, summary_removed = drop_summary_rows(df_in)
-
-            # 2. Detect bottom-of-file grand-total leak (after summary rows are gone)
-            df_b, gt_info = detect_grand_total_row(df_a)
-
-            # 3. If multiple rows per associate, aggregate or merge
+        with st.spinner("Applying chosen strategy..."):
             mode, period_info = detect_per_pay_period_structure(df_b)
             agg_info = None
             merge_events = None
-            
+
             if mode == "aggregate":
                 if agg_strategy == "Full Quarter (Default)":
                     df_c, agg_info = aggregate_by_associate(df_b)
@@ -555,7 +689,6 @@ def render_ui():
             else:
                 df_c = df_b
 
-            # 4. Optional NET PAY <-> TAKE HOME value swap
             swapped = False
             if swap_net_take:
                 df_c, swapped = apply_net_take_swap(df_c)

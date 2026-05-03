@@ -515,25 +515,48 @@ def _results_to_xlsx_bytes(results):
     return buf.getvalue()
 
 
+def _pick_bonus_example(samples, verdict):
+    """Pick the single most illustrative row for the chosen verdict."""
+    if not samples:
+        return None
+    if verdict == "non_discretionary":
+        candidates = [s for s in samples if s["verdict_row"] == "non_discretionary"]
+        return max(candidates, key=lambda s: s["diff_pct"]) if candidates else samples[0]
+    if verdict == "discretionary":
+        candidates = [s for s in samples if s["verdict_row"] == "discretionary"]
+        return min(candidates, key=lambda s: abs(s["diff_pct"])) if candidates else samples[0]
+    return samples[0]
+
+
+def _deduction_reason(row):
+    """Plain-English reason for a deduction's pre/post-tax verdict."""
+    verdict = row["Verdict"]
+    flavor = row.get("Pre-Tax Flavor", "")
+    sample = row.get("Sample", "")
+    if verdict == "post_tax":
+        return "No row in the file showed taxable wages being reduced by this deduction's amount, so it does NOT shrink the tax base."
+    if flavor == "section_125":
+        first = sample.split(";")[0].strip() if sample else ""
+        return ("Reduces FIT, FICA, Medicare, and state-income taxable wages by the deduction amount — Section 125 cafeteria plan." +
+                (f" Example row: {first}" if first else ""))
+    if flavor == "401k_traditional":
+        first = sample.split(";")[0].strip() if sample else ""
+        return ("Reduces FIT and state-income taxable wages but NOT FICA/Medicare — traditional 401(k)/403(b) pattern." +
+                (f" Example row: {first}" if first else ""))
+    if flavor == "pretax_unknown":
+        return "Reduces FIT taxable wages only (no FICA/Medicare reduction observed)."
+    if flavor == "mixed_unusual":
+        return f"Pre-tax for: {row.get('Pre-Tax Of', '')} (unusual mix — review)."
+    return "Pre-tax (see sample column for the matching row)."
+
+
 # ---------- Streamlit UI ----------
 
 def render_ui():
     st.title("ADP - Prior Payroll Setup Helper")
-    st.markdown(
-        """
-Discovers what to configure in Uzio for an ADP Prior Payroll migration.
-
-**What this tool produces:**
-
-1. **Earnings_Codes** – every REGULAR / OVERTIME / `ADDITIONAL EARNINGS : XXX` code with `$` total, employee count, paired hours, and avg rate.
-2. **Contributions** vs **Deductions** – voluntary deduction codes split by name pattern, each with **pre-tax vs post-tax** verdict and pre-tax flavor (`section_125` for medical/dental/vision; `401k_traditional` for retirement).
-3. **Tax_Mapping** – a CSV in the exact `Payroll_Mappings_Tax_Mapping_CORRECTED` format. Federal taxes get one row each; state-scoped (SIT / SDI / SUTA / FLI) get **one row per distinct WORKED IN STATE** in the file.
-4. **Bonus_Classification** – FLSA test: actual OT pay vs `1.5 × (REGULAR EARNINGS / REGULAR HOURS)`. Any single row showing the actual rate above the expected = bonus is non-discretionary for the whole file.
-
-**Pre/post-tax algorithm:** for each row, `gap_FIT = TOTAL EARNINGS − FEDERAL INCOME - EMPLOYEE TAXABLE`. Try every subset of that row's non-zero deductions; if any subset sums to `gap_FIT` (within $0.02), every member is pre-tax for FIT. **One positive proof anywhere in the file = pre-tax for everyone.** Same logic on FICA / MEDI / SIT to derive the flavor.
-
-**Tip:** Run **ADP - Prior Payroll Sanity Check** first if your file has interleaved totals rows or per-pay-period exports.
-        """
+    st.caption(
+        "Three answers from one ADP file: what to set up in Uzio, "
+        "is the bonus discretionary, and which deductions are pre-tax vs post-tax."
     )
 
     col1, col2 = st.columns(2)
@@ -545,86 +568,125 @@ Discovers what to configure in Uzio for an ADP Prior Payroll migration.
         )
     with col2:
         master_file = st.file_uploader(
-            "State Tax Code Master CSV",
+            "State Tax Code Master CSV (optional, for tax mapping)",
             type=["csv"],
             key="pps_helper_master",
-            help="The Uzio State Tax Code master (state_abbreviation, tax_code, unique_tax_id, ...)",
         )
 
     if not adp_file:
         st.info("Upload an ADP Prior Payroll file to begin.")
         return
-    if not master_file:
-        st.warning("Upload the State Tax Code master CSV to populate Uzio Tax Codes in the Tax_Mapping sheet.")
 
-    if not st.button("Run Setup Helper", type="primary"):
+    if not st.button("Run", type="primary"):
         return
 
-    with st.spinner("Analyzing file..."):
+    with st.spinner("Analyzing..."):
         try:
             results, csv_bytes = run_setup_helper(adp_file, master_file)
         except Exception as e:
             st.error(f"Failed to run analysis: {e}")
             raise
 
-    # --- Summary ---
-    st.success("Analysis complete.")
-    st.subheader("Summary")
-    st.dataframe(pd.DataFrame(results["Summary"]), hide_index=True, use_container_width=True)
+    # ------------------------------------------------------------------
+    # ANSWER 1 — What to set up
+    # ------------------------------------------------------------------
+    st.markdown("## 1. What to set up in Uzio")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("**Earnings**")
+        for r in results["Earnings_Codes"]:
+            st.markdown(f"- {r['Code']}")
+        if not results["Earnings_Codes"]:
+            st.caption("(none)")
+    with c2:
+        st.markdown("**Contributions**")
+        for r in results["Contributions"]:
+            st.markdown(f"- {r['Code']}")
+        if not results["Contributions"]:
+            st.caption("(none)")
+    with c3:
+        st.markdown("**Deductions**")
+        for r in results["Deductions"]:
+            st.markdown(f"- {r['Code']}")
+        if not results["Deductions"]:
+            st.caption("(none)")
 
-    # --- Bonus verdict (highlight) ---
+    # ------------------------------------------------------------------
+    # ANSWER 2 — Bonus discretionary or non-discretionary
+    # ------------------------------------------------------------------
+    st.markdown("## 2. Bonus: discretionary or non-discretionary?")
     bonus = results["Bonus_Classification"][0]
     verdict = bonus["Verdict"]
+    sample = _pick_bonus_example(results["Bonus_Sample_Rows"], verdict)
+
     if verdict == "non_discretionary":
-        st.error(f"**Bonus verdict: {verdict}** — {bonus['Reason']}")
+        st.error("**NON-DISCRETIONARY**")
     elif verdict == "discretionary":
-        st.success(f"**Bonus verdict: {verdict}** — {bonus['Reason']}")
+        st.success("**DISCRETIONARY**")
     else:
-        st.warning(f"**Bonus verdict: {verdict}** — {bonus['Reason']}")
-    if results["Bonus_Sample_Rows"]:
-        with st.expander("Bonus test sample rows"):
-            st.dataframe(pd.DataFrame(results["Bonus_Sample_Rows"]),
-                         hide_index=True, use_container_width=True)
+        st.warning(f"**{verdict.upper()}** — {bonus['Reason']}")
 
-    # --- Catalogs ---
-    st.subheader("Earnings Codes")
-    st.dataframe(pd.DataFrame(results["Earnings_Codes"]),
-                 hide_index=True, use_container_width=True)
+    if sample:
+        st.markdown(
+            f"""
+**Example: Employee `{sample['associate']}`**
 
-    if results["Contributions"]:
-        st.subheader("Contributions")
-        st.dataframe(pd.DataFrame(results["Contributions"]),
-                     hide_index=True, use_container_width=True)
+- Regular earnings: **${sample['regular_earnings']:,}** over **{sample['regular_hours']} hrs** → regular rate = **${sample['regular_rate']}/hr**
+- Expected overtime rate (1.5 × regular rate) = **${sample['expected_ot_rate_1.5x']}/hr**
+- Actual overtime rate from the file = **${sample['actual_ot_rate']}/hr**
+- Bonus paid in this row: **${sample['bonus_amt']:,}**
+"""
+        )
+        if verdict == "discretionary":
+            st.markdown(
+                "→ Actual OT rate matches 1.5 × regular rate. The bonus did **not** "
+                "inflate the regular rate basis, so it's **discretionary**."
+            )
+        elif verdict == "non_discretionary":
+            st.markdown(
+                f"→ Actual OT rate is **higher** than 1.5 × regular rate "
+                f"(diff: {sample['diff_pct']}%). The bonus was rolled into the regular "
+                f"rate before computing OT, so it's **non-discretionary** under FLSA."
+            )
 
-    if results["Deductions"]:
-        st.subheader("Deductions (with pre-tax / post-tax verdict)")
-        st.dataframe(pd.DataFrame(results["Deductions"]),
-                     hide_index=True, use_container_width=True)
+    # ------------------------------------------------------------------
+    # ANSWER 3 — Which deductions are pre-tax vs post-tax
+    # ------------------------------------------------------------------
+    st.markdown("## 3. Pre-tax vs post-tax (per deduction)")
+    if not results["Deductions"] and not results["Contributions"]:
+        st.caption("No voluntary deductions or contributions found in this file.")
+    else:
+        rows = []
+        for r in results["Contributions"] + results["Deductions"]:
+            rows.append({
+                "Code": r["Code"],
+                "Verdict": "PRE-TAX" if r["Verdict"] == "pre_tax" else "POST-TAX",
+                "Why": _deduction_reason(r),
+            })
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
-    # --- Tax Mapping ---
-    st.subheader("Tax Mapping")
-    states = [s["State"] for s in results["States_Detected"]]
-    st.caption(f"States detected: {', '.join(states) or '(none)'}")
-    st.dataframe(pd.DataFrame(results["Tax_Mapping"]),
-                 hide_index=True, use_container_width=True)
-    if results["Tax_Mapping_Missing"]:
-        with st.expander("Tax columns not resolved against master"):
-            st.dataframe(pd.DataFrame(results["Tax_Mapping_Missing"]),
-                         hide_index=True, use_container_width=True)
-
-    # --- Downloads ---
+    # ------------------------------------------------------------------
+    # Downloads (full report stays available, just out of the way)
+    # ------------------------------------------------------------------
+    st.markdown("---")
     base = (adp_file.name or "ADP_Prior_Payroll").rsplit(".", 1)[0]
-    st.subheader("Downloads")
-    st.download_button(
-        "Download Tax Mapping CSV",
-        data=csv_bytes,
-        file_name=f"{base}_Tax_Mapping.csv",
-        mime="text/csv",
-    )
-    xlsx_bytes = _results_to_xlsx_bytes(results)
-    st.download_button(
-        "Download Full Setup Helper Report (xlsx)",
-        data=xlsx_bytes,
-        file_name=f"{base}_Setup_Helper.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    dc1, dc2 = st.columns(2)
+    with dc1:
+        st.download_button(
+            "Download Tax Mapping CSV",
+            data=csv_bytes,
+            file_name=f"{base}_Tax_Mapping.csv",
+            mime="text/csv",
+            disabled=not master_file,
+            help=("Upload the State Tax Code master CSV to enable this download."
+                  if not master_file else None),
+        )
+    with dc2:
+        xlsx_bytes = _results_to_xlsx_bytes(results)
+        st.download_button(
+            "Download Full Detailed Report (xlsx)",
+            data=xlsx_bytes,
+            file_name=f"{base}_Setup_Helper.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Full multi-sheet workbook with $ totals, hours, sample rows, etc.",
+        )

@@ -504,14 +504,132 @@ def run_setup_helper(adp_file, master_csv_file):
 
 
 def _results_to_xlsx_bytes(results):
-    """Write the dict-of-lists to a multi-sheet xlsx in memory."""
+    """Three-tab simplified xlsx that answers exactly:
+      Tab 1 - What to set up in Uzio (Earnings | Contributions | Deductions)
+      Tab 2 - Bonus discretionary or non-discretionary (verdict + one example)
+      Tab 3 - Each deduction: pre-tax or post-tax + plain-English why
+    Nothing else. Tax mapping is offered as a separate CSV download.
+    """
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-        for sheet_name, data in results.items():
-            df = pd.DataFrame(data) if isinstance(data, list) else pd.DataFrame([data])
-            if df.empty:
-                df = pd.DataFrame([{"(no rows)": ""}])
-            df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+        wb = writer.book
+        header_fmt = wb.add_format({
+            "bold": True, "bg_color": "#1F4E78", "font_color": "white",
+            "border": 1, "align": "left", "valign": "vcenter",
+        })
+        wrap_fmt = wb.add_format({"valign": "top", "text_wrap": True})
+        verdict_pre = wb.add_format({
+            "bold": True, "bg_color": "#C6EFCE", "font_color": "#006100",
+            "align": "center", "valign": "vcenter",
+        })
+        verdict_post = wb.add_format({
+            "bold": True, "bg_color": "#FFC7CE", "font_color": "#9C0006",
+            "align": "center", "valign": "vcenter",
+        })
+        verdict_nondisc = wb.add_format({
+            "bold": True, "bg_color": "#FFC7CE", "font_color": "#9C0006",
+            "align": "left", "valign": "vcenter", "font_size": 14,
+        })
+        verdict_disc = wb.add_format({
+            "bold": True, "bg_color": "#C6EFCE", "font_color": "#006100",
+            "align": "left", "valign": "vcenter", "font_size": 14,
+        })
+
+        # ---- Tab 1: What to Set Up ----
+        earn_codes = [r["Code"] for r in results["Earnings_Codes"]]
+        contrib_codes = [r["Code"] for r in results["Contributions"]]
+        ded_codes = [r["Code"] for r in results["Deductions"]]
+        max_n = max(len(earn_codes), len(contrib_codes), len(ded_codes), 1)
+        rows1 = []
+        for i in range(max_n):
+            rows1.append({
+                "Earnings": earn_codes[i] if i < len(earn_codes) else "",
+                "Contributions": contrib_codes[i] if i < len(contrib_codes) else "",
+                "Deductions": ded_codes[i] if i < len(ded_codes) else "",
+            })
+        df1 = pd.DataFrame(rows1)
+        df1.to_excel(writer, sheet_name="1. What to Set Up", index=False)
+        ws1 = writer.sheets["1. What to Set Up"]
+        ws1.set_column("A:A", 32); ws1.set_column("B:B", 24); ws1.set_column("C:C", 32)
+        for i, col in enumerate(df1.columns):
+            ws1.write(0, i, col, header_fmt)
+        ws1.set_row(0, 24)
+
+        # ---- Tab 2: Bonus ----
+        bonus = results["Bonus_Classification"][0]
+        sample = _pick_bonus_example(results["Bonus_Sample_Rows"], bonus["Verdict"])
+        verdict_label = bonus["Verdict"].upper().replace("_", "-")
+        rows2 = [
+            ("Verdict", verdict_label),
+            ("Reason", bonus["Reason"]),
+            ("Bonus codes detected in file", bonus["Bonus Columns"]),
+            ("Rows that had both bonus AND overtime", bonus["Rows Tested"]),
+            ("    of which discretionary", bonus["Discretionary Rows"]),
+            ("    of which non-discretionary", bonus["Non-Discretionary Rows"]),
+        ]
+        if sample:
+            rows2 += [
+                ("", ""),
+                ("---- Example row that proves the verdict ----", ""),
+                ("Associate ID", sample["associate"]),
+                ("Regular earnings", f"${sample['regular_earnings']:,}"),
+                ("Regular hours", sample["regular_hours"]),
+                ("Regular rate ($/hr)", f"${sample['regular_rate']}"),
+                ("Expected overtime rate  (1.5 x regular)", f"${sample['expected_ot_rate_1.5x']}"),
+                ("Actual overtime rate from this row", f"${sample['actual_ot_rate']}"),
+                ("Difference (%)", f"{sample['diff_pct']}%"),
+                ("Bonus paid in this row", f"${sample['bonus_amt']:,}"),
+                ("", ""),
+                ("Plain-English explanation",
+                    "Actual OT rate is HIGHER than 1.5 x regular rate => the bonus was rolled into "
+                    "the regular rate before computing OT => bonus is NON-DISCRETIONARY (FLSA rule)."
+                    if bonus["Verdict"] == "non_discretionary" else
+                    "Actual OT rate matches 1.5 x regular rate exactly => the bonus did NOT inflate "
+                    "the regular rate basis => bonus is DISCRETIONARY."
+                    if bonus["Verdict"] == "discretionary" else
+                    bonus["Reason"]),
+            ]
+        df2 = pd.DataFrame(rows2, columns=["Field", "Value"])
+        df2.to_excel(writer, sheet_name="2. Bonus Verdict", index=False)
+        ws2 = writer.sheets["2. Bonus Verdict"]
+        ws2.set_column("A:A", 44); ws2.set_column("B:B", 80, wrap_fmt)
+        for i, col in enumerate(df2.columns):
+            ws2.write(0, i, col, header_fmt)
+        ws2.set_row(0, 24)
+        # Highlight the verdict cell (row 1, col B)
+        if bonus["Verdict"] == "non_discretionary":
+            ws2.write(1, 1, verdict_label, verdict_nondisc)
+        elif bonus["Verdict"] == "discretionary":
+            ws2.write(1, 1, verdict_label, verdict_disc)
+        ws2.set_row(1, 28)
+
+        # ---- Tab 3: Deductions Pre/Post-Tax ----
+        rows3 = []
+        for r in results["Contributions"] + results["Deductions"]:
+            rows3.append({
+                "Code": r["Code"],
+                "Verdict": "PRE-TAX" if r["Verdict"] == "pre_tax" else "POST-TAX",
+                "Why": _deduction_reason(r),
+            })
+        if not rows3:
+            rows3 = [{"Code": "(none)", "Verdict": "",
+                      "Why": "No voluntary deductions or contributions found in this file."}]
+        df3 = pd.DataFrame(rows3)
+        df3.to_excel(writer, sheet_name="3. Pre-Tax vs Post-Tax", index=False)
+        ws3 = writer.sheets["3. Pre-Tax vs Post-Tax"]
+        ws3.set_column("A:A", 26); ws3.set_column("B:B", 14)
+        ws3.set_column("C:C", 110, wrap_fmt)
+        for i, col in enumerate(df3.columns):
+            ws3.write(0, i, col, header_fmt)
+        ws3.set_row(0, 24)
+        # Color the verdict cells
+        for ri, r in enumerate(rows3, start=1):
+            if r["Verdict"] == "PRE-TAX":
+                ws3.write(ri, 1, "PRE-TAX", verdict_pre)
+            elif r["Verdict"] == "POST-TAX":
+                ws3.write(ri, 1, "POST-TAX", verdict_post)
+            ws3.set_row(ri, 30)
+
     return buf.getvalue()
 
 

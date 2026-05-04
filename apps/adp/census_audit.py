@@ -458,7 +458,11 @@ def run_comparison(uzio_file, adp_file) -> bytes:
     # 2. Read ADP Raw
     try:
         if adp_file.name.lower().endswith('.csv'):
-             adp = pd.read_csv(adp_file, dtype=str)
+             try:
+                 adp = pd.read_csv(adp_file, dtype=str)
+             except UnicodeDecodeError:
+                 adp_file.seek(0)
+                 adp = pd.read_csv(adp_file, dtype=str, encoding='latin1')
         else:
              adp = pd.read_excel(adp_file, dtype=str)
     except Exception as e:
@@ -1338,7 +1342,7 @@ def render_ui():
     client_name = st.text_input("Client Name", value="Client", key="adp_census_client")
 
     uzio_file = st.file_uploader("Upload Uzio Census Export (.xlsm)", type=["xlsm"])
-    adp_file = st.file_uploader("Upload ADP Census Export (.xlsx)", type=["xlsx"])
+    adp_file = st.file_uploader("Upload ADP Census Export (.csv or .xlsx)", type=["csv", "xlsx"])
 
     if st.button("Run Audit", type="primary", disabled=(not uzio_file or not adp_file)):
         try:

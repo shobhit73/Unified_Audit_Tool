@@ -64,6 +64,8 @@ def render_employee_extractor():
                     'legal first name', 'name', 'company code',
                     'license/certification description',  # Emergency & License Report
                     'contact name',                       # Emergency & License Report
+                    'lived in state tax code',            # SIT/FIT Report
+                    'worked in state description',        # SIT/FIT Report
                 ]
                 for idx, row in df_header.iterrows():
                     row_vals = [str(x).lower().strip() for x in row.tolist() if pd.notna(x)]
@@ -77,6 +79,11 @@ def render_employee_extractor():
                 _emer_lic_cols = {'License/Certification Description', 'License/Certification ID', 'Issued By', 'Expiration Date'}
                 if _emer_lic_cols.issubset(set(df_source.columns.tolist())):
                     _detected_source_type = 'emergency_license'
+                
+                # Detect SIT/FIT Withholding Report
+                _sit_fit_cols = {'Lived In State Tax Code', 'Worked in State Description', 'Worked in State Code'}
+                if _sit_fit_cols.issubset(set(df_source.columns.tolist())):
+                    _detected_source_type = 'sit_fit'
 
     except Exception as e:
         st.error(f"Error reading source file: {e}")
@@ -87,6 +94,8 @@ def render_employee_extractor():
         st.success(f"✅ **Uzio Multi-Client Census detected** — 'Employee Details' sheet loaded: {len(df_source)} rows, {len(df_source.columns)} columns.")
     elif _detected_source_type == 'emergency_license':
         st.success(f"✅ **ADP Emergency & License Report detected** — {len(df_source)} rows, {len(df_source.columns)} columns. Note: one row per license record (employees may repeat).")
+    elif _detected_source_type == 'sit_fit':
+        st.success(f"✅ **ADP SIT/FIT Withholding Report detected** — {len(df_source)} rows, {len(df_source.columns)} columns. Note: one row per tax config (employees may repeat).")
     else:
         st.success(f"✅ Source file loaded: {len(df_source)} rows, {len(df_source.columns)} columns.")
 
@@ -104,7 +113,7 @@ def render_employee_extractor():
         # Fuzzy match
         for col in all_cols:
             c_norm = str(col).lower().strip().replace('*', '').replace(' ', '_')
-            if c_norm in ['associate_id', 'employee_id', 'employee_code', 'ee_id', 'eid']:
+            if c_norm in ['associate_id', 'employee_id', 'employee_code', 'ee_id', 'eid', 'associateid', 'eeid']:
                 id_col_source = col
                 break
     
@@ -118,6 +127,8 @@ def render_employee_extractor():
         st.info("📋 **ADP Direct Deposit report detected.** Multiple rows per employee (split accounts) will all be included in the output.")
     if _detected_source_type == 'emergency_license':
         st.info("📋 **Emergency & License Report mode.** An employee may have multiple rows (one per license). All matching rows will be preserved in the output.")
+    if _detected_source_type == 'sit_fit':
+        st.info("📋 **ADP SIT/FIT Report mode.** An employee may have multiple rows (one per state tax config). All matching rows will be preserved in the output.")
 
     # 4. COLUMN SELECTOR
     st.markdown("---")
@@ -312,9 +323,10 @@ def render_employee_extractor():
     if date_like_cols:
         df_result = format_datetime_strings(df_result, date_like_cols)
 
-    # Convert full state names to 2-letter abbreviations (License/Emergency reports)
-    if 'Issued By' in df_result.columns:
-        df_result = convert_state_to_abbreviation(df_result, 'Issued By')
+    # Convert full state names to 2-letter abbreviations (License/Emergency/SIT-FIT reports)
+    for state_col in ['Issued By', 'Lived In State Description', 'Worked in State Description']:
+        if state_col in df_result.columns:
+            df_result = convert_state_to_abbreviation(df_result, state_col)
 
     # Apply formatting and columns to remaining employees
     df_remaining_out = pd.DataFrame()
@@ -322,8 +334,9 @@ def render_employee_extractor():
         df_remaining_out = df_remaining[selected_cols].copy()
         if date_like_cols:
             df_remaining_out = format_datetime_strings(df_remaining_out, date_like_cols)
-        if 'Issued By' in df_remaining_out.columns:
-            df_remaining_out = convert_state_to_abbreviation(df_remaining_out, 'Issued By')
+        for state_col in ['Issued By', 'Lived In State Description', 'Worked in State Description']:
+            if state_col in df_remaining_out.columns:
+                df_remaining_out = convert_state_to_abbreviation(df_remaining_out, state_col)
 
     # 8. RESULTS & DOWNLOAD
     st.markdown("---")

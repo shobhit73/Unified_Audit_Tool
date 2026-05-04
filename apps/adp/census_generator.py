@@ -639,6 +639,9 @@ def render_census_sanity_check():
         excel_data = generate_excel_with_audit(df_download, pd.DataFrame(audit_trail))
         st.download_button("📥 Download Corrected Source (XLSX)", excel_data, f"ADP_Cleaned_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx")
 
+        from utils.job_title_mapper import render_streamlit_section as render_job_title_mapping
+        render_job_title_mapping(df_adp, "adp", resolved_field_map, key_prefix="adp_sanity")
+
 def render_census_generator():
     st.title("ADP - Full Census Generation")
     

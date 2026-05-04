@@ -582,6 +582,9 @@ def render_census_sanity_check():
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
+        from utils.job_title_mapper import render_streamlit_section as render_job_title_mapping
+        render_job_title_mapping(df_paycom, "paycom", resolved_field_map, key_prefix="pc_sanity")
+
 def render_census_generator():
     st.title("Paycom - Census Generator")
     st.markdown("""

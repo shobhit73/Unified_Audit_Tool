@@ -3,6 +3,7 @@
 *.xls
 *.csv
 !Deduction Analyzer/Deduction Setup Config.xlsx
+!templates/amazon_job_titles.csv
 
 # Sensitive Sample Data
 Sample Data/

@@ -124,25 +124,24 @@ def render_auto_fix_options(key_prefix):
     col_fix1, col_fix2 = st.columns(2)
     with col_fix1:
         fix_flsa = st.checkbox("Enforce FLSA/Pay Type alignment (e.g. Salaried = Exempt)", value=False, key=f"{key_prefix}_fix_flsa", help="If the 'FLSA' is blank, this will fill it automatically based on whether they are Hourly (sets to Non-Exempt) or Salaried (sets to Exempt). It will NEVER change an existing FLSA status.")
-        fix_emails = st.checkbox("Use Personal Email as fallback for missing Work Email", value=False, key=f"{key_prefix}_fix_emails")
         fix_driver_smart = st.checkbox("Enable Smart Driver Correction (Dept/Job -> FLSA/Pay Type)", value=False, key=f"{key_prefix}_fix_driver_smart", help="Designed specifically for Drivers. If the Job, FLSA, or Pay Type is blank for a driver, it will fill them as: Job='Driver', FLSA='Non-Exempt', and Pay Type='Hourly'. It only fills missing info and won't overwrite your existing data.")
         fix_license = st.checkbox("Strict License Validation (Clear dates if number missing)", value=False, key=f"{key_prefix}_fix_license")
     with col_fix2:
         fix_status = st.checkbox("Auto-Map Employment Status (e.g. Inactive -> Terminated)", value=False, key=f"{key_prefix}_fix_status")
         fix_type = st.checkbox("Auto-Map Worker Category (e.g. Intern -> Part Time)", value=False, key=f"{key_prefix}_fix_type")
-        fix_position = st.checkbox("Auto-Fill blank Position with Department Description", value=False, key=f"{key_prefix}_fix_position")
-        fix_dol_status = st.checkbox("Auto-Fill blank DOL_Status to 'Full-Time' for Active Employees", value=True, key=f"{key_prefix}_fix_dol_status")
         fix_zip = st.checkbox("Auto-Fix Zip Code (Pad 4-digits & trim to 5-digits)", value=False, key=f"{key_prefix}_fix_zip")
 
     return {
         'fix_flsa': fix_flsa,
-        'fix_emails': fix_emails,
+        'fix_emails': True,
         'fix_license': fix_license,
         'fix_status': fix_status,
         'fix_inactive': fix_status,
         'fix_type': fix_type,
-        'fix_position': fix_position,
-        'fix_dol_status': fix_dol_status,
+        'fix_position': True,
+        'fix_job_title': True,
+        'fix_dol_status': True,
+        'fix_std_hours': True,
         'fix_zip': fix_zip,
         'fix_driver_smart': fix_driver_smart
     }
@@ -472,6 +471,21 @@ def render_census_sanity_check():
                 old_d = df_download.at[idx, col_dol]
                 df_download.at[idx, col_dol] = "Full-Time"
                 log_change(idx, "DOL Status", old_d, "Full-Time", "Defaulted blank value to 'Full-Time' for active employee.")
+
+        if fix_options.get('fix_std_hours'):
+            c_sh = resolved_field_map.get('Working Hours')
+            c_pt = resolved_field_map.get('Pay Type')
+            if c_sh and c_sh in df_download.columns:
+                if c_pt and c_pt in df_download.columns:
+                    pt_lower = df_download[c_pt].astype(str).str.lower().str.strip()
+                    mask_hourly = pt_lower.str.contains('hour', na=False)
+                    for idx in df_download[mask_hourly].index:
+                        old_v = str(df_download.at[idx, c_sh]).strip()
+                        if old_v not in ["0", "0.0", ""]:
+                            df_download.at[idx, c_sh] = "0"
+                            log_change(idx, "Working Hours", old_v, "0", "Forced zero hours for Hourly employee.")
+                        else:
+                            df_download.at[idx, c_sh] = "0"
 
         if fix_options.get('fix_zip'):
             c_zip = resolved_field_map.get('Zip')

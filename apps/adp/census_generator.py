@@ -645,7 +645,25 @@ def render_census_sanity_check():
 
         from utils.audit_utils import generate_excel_with_audit
         excel_data = generate_excel_with_audit(df_download, pd.DataFrame(audit_trail))
-        st.download_button("📥 Download Corrected Source (XLSX)", excel_data, f"ADP_Cleaned_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx")
+        stamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            st.download_button(
+                "📥 Download Corrected Source (XLSX)",
+                excel_data,
+                f"ADP_Cleaned_{stamp}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="adp_sanity_dl_xlsx",
+            )
+        with dl2:
+            st.download_button(
+                "📥 Download Corrected Source (CSV)",
+                df_download.to_csv(index=False).encode("utf-8"),
+                f"ADP_Cleaned_{stamp}.csv",
+                mime="text/csv",
+                key="adp_sanity_dl_csv",
+                help="Single-sheet CSV of the cleaned census (the audit-trail tab from the XLSX is omitted).",
+            )
 
         from utils.job_title_mapper import render_streamlit_section as render_job_title_mapping
         render_job_title_mapping(df_adp, "adp", resolved_field_map, key_prefix="adp_sanity")

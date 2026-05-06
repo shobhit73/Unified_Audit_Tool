@@ -589,12 +589,25 @@ def render_census_sanity_check():
 
         from utils.audit_utils import generate_excel_with_audit
         excel_data = generate_excel_with_audit(df_download, pd.DataFrame(audit_trail))
-        st.download_button(
-            label="📥 Download Corrected Source (XLSX)",
-            data=excel_data,
-            file_name=f"Paycom_Cleaned_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        stamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            st.download_button(
+                label="📥 Download Corrected Source (XLSX)",
+                data=excel_data,
+                file_name=f"Paycom_Cleaned_{stamp}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="pc_sanity_dl_xlsx",
+            )
+        with dl2:
+            st.download_button(
+                label="📥 Download Corrected Source (CSV)",
+                data=df_download.to_csv(index=False).encode("utf-8"),
+                file_name=f"Paycom_Cleaned_{stamp}.csv",
+                mime="text/csv",
+                key="pc_sanity_dl_csv",
+                help="Single-sheet CSV of the cleaned census (the audit-trail tab from the XLSX is omitted).",
+            )
 
         from utils.job_title_mapper import render_streamlit_section as render_job_title_mapping
         render_job_title_mapping(df_paycom, "paycom", resolved_field_map, key_prefix="pc_sanity")

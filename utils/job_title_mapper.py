@@ -195,6 +195,7 @@ def get_anthropic_api_key() -> str | None:
 def render_streamlit_section(df, vendor: str, resolved_field_map=None, key_prefix: str = "jtmap"):
     """Renders the 'Map Job Titles to Amazon Catalog' UI block. Used by both
     ADP and Paycom census sanity check screens."""
+    import hashlib
     import streamlit as st
 
     st.markdown("---")
@@ -211,31 +212,44 @@ def render_streamlit_section(df, vendor: str, resolved_field_map=None, key_prefi
 
     st.write(f"Found **{len(distinct)} distinct DSP titles** (after Job Title → Department fallback).")
 
-    if not st.button("Generate Job Title Mapping", key=f"{key_prefix}_jt_btn"):
-        return
+    # Cache key tied to the actual input titles — a new file invalidates the cache.
+    sig = hashlib.md5("|".join(distinct).encode()).hexdigest()[:12]
+    cache_key = f"{key_prefix}_jt_mapping_{sig}"
 
-    api_key = get_anthropic_api_key()
-    if not api_key:
-        st.error(
-            "ANTHROPIC_API_KEY not found. Set it in `.streamlit/secrets.toml` or "
-            "the `ANTHROPIC_API_KEY` environment variable, then click again."
-        )
-        return
-
-    with st.spinner(f"Mapping {len(distinct)} titles via Claude..."):
-        try:
-            catalog = load_amazon_catalog()
-            mapping_df = map_titles_with_claude(distinct, catalog, api_key)
-        except Exception as e:
-            st.error(f"Mapping failed: {e}")
+    if cache_key not in st.session_state:
+        if not st.button("Generate Job Title Mapping", key=f"{key_prefix}_jt_btn"):
             return
+
+        api_key = get_anthropic_api_key()
+        if not api_key:
+            st.error(
+                "ANTHROPIC_API_KEY not found. Set it in `.streamlit/secrets.toml` or "
+                "the `ANTHROPIC_API_KEY` environment variable, then click again."
+            )
+            return
+
+        with st.spinner(f"Mapping {len(distinct)} titles via Claude..."):
+            try:
+                catalog = load_amazon_catalog()
+                mapping_df = map_titles_with_claude(distinct, catalog, api_key)
+            except Exception as e:
+                st.error(f"Mapping failed: {e}")
+                return
+
+        st.session_state[cache_key] = mapping_df
+
+    mapping_df = st.session_state[cache_key]
 
     st.success(f"Mapped {len(mapping_df)} titles.")
     st.dataframe(mapping_df, hide_index=True, use_container_width=True)
+    stamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
     st.download_button(
         label="📥 Download Job Title Mapping (CSV)",
         data=to_csv_bytes(mapping_df),
-        file_name=f"{vendor}_job_title_mapping_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+        file_name=f"{vendor}_job_title_mapping_{stamp}.csv",
         mime="text/csv",
         key=f"{key_prefix}_jt_dl",
     )
+    if st.button("Regenerate", key=f"{key_prefix}_jt_regen"):
+        del st.session_state[cache_key]
+        st.rerun()

@@ -241,6 +241,9 @@ def calculate_totals_paycom(df, mapping_source_names, filename, uzio_item_name="
         
         # Exact match based on mapping file
         if val_desc in norm_mappings:
+            if code_desc_col and pd.notna(row[code_desc_col]):
+                if str(row[code_desc_col]).strip().lower() == "employee benefits":
+                    continue
             # Differentiate Employee vs Employer for Social Security and Medicare
             if "medicare" in val_desc or "social security" in val_desc or "ssc" in val_desc:
                 if code_desc_col and pd.notna(row[code_desc_col]):

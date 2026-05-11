@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
+import itertools
 
 def render_ui():
     st.markdown("""
@@ -71,7 +72,7 @@ def render_ui():
             st.error("❌ `state_tax_code.csv` not found.  \nPlace it in the same folder as this script.")
         st.caption("Tax Mapping tab requires the payroll file + state_tax_code.csv in the same folder.")
 
-    tab1, tab2 = st.tabs(["📋 Earnings Classifier", "🏛️ Tax Mapping"])
+    tab1, tab2, tab3 = st.tabs(["📋 Earnings Classifier", "🏛️ Tax Mapping", "💸 Deduction Classifier"])
 
     # ══════════════════════════════════════════════════════════════════
     # HELPERS
@@ -401,6 +402,183 @@ def render_ui():
                 out_df.to_csv(index=False).encode(),
                 "tax_mapping_output.csv", "text/csv"
             )
+
+    # ══════════════════════════════════════════════════════════════════
+    # TAB 3 – DEDUCTION CLASSIFIER (Pre-Tax vs Post-Tax)
+    # ══════════════════════════════════════════════════════════════════
+    with tab3:
+        if not uploaded_payroll:
+            st.markdown('<div class="card" style="text-align:center;padding:3rem;"><div style="font-size:3rem">💸</div><div style="color:#8892a4;font-family:IBM Plex Mono,monospace;">Upload an ADP Prior Payroll .xlsx file in the sidebar</div></div>', unsafe_allow_html=True)
+        else:
+            df_ded = pd.read_excel(uploaded_payroll)
+            all_cols_ded = list(df_ded.columns)
+
+            # ── Identify columns ─────────────────────────────────────────────────
+            total_earn_col  = next((c for c in all_cols_ded if c.strip().upper() == 'TOTAL EARNINGS'),  None)
+            fed_taxable_col = next((c for c in all_cols_ded if 'FEDERAL INCOME - EMPLOYEE TAXABLE' in c.upper()), None)
+
+            ded_cols_raw = [c for c in all_cols_ded
+                            if 'VOLUNTARY DEDUCTION' in c.upper()
+                            and 'TOTAL' not in c.upper()
+                            and 'REV'   not in c.upper()]
+
+            if not total_earn_col or not fed_taxable_col:
+                st.error("Could not find TOTAL EARNINGS or FEDERAL INCOME - EMPLOYEE TAXABLE columns in this file.")
+            elif not ded_cols_raw:
+                st.info("No voluntary deduction columns found in this file.")
+            else:
+                def get_code(col):
+                    return col.split(':')[1].strip().split('-')[0].strip() if ':' in col else col.strip()
+                def get_desc(col):
+                    return col.split(':')[1].strip() if ':' in col else col.strip()
+
+                # ── Filter valid individual rows ─────────────────────────────────
+                df_valid = df_ded[
+                    df_ded[total_earn_col].notna() &
+                    df_ded[fed_taxable_col].notna() &
+                    (df_ded[total_earn_col] < 100_000)   # exclude aggregate/summary rows
+                ].copy()
+
+                df_valid['_GAP'] = (df_valid[total_earn_col] - df_valid[fed_taxable_col]).round(2)
+                df_valid = df_valid[df_valid['_GAP'] >= 0]  # ignore negative gaps
+
+                # Fill deduction values
+                for col in ded_cols_raw:
+                    df_valid[col] = df_valid[col].fillna(0)
+
+                # ── Core logic ───────────────────────────────────────────────────
+                # For each row: find combination of deductions that best explains the GAP
+                # Deductions IN the best combo → Pre-Tax
+                # Deductions NOT in the best combo → Post-Tax
+                TOLERANCE = 5.00   # $5 tolerance for rounding/floating point
+
+                tally = {col: {'pretax': 0, 'posttax': 0, 'total': 0} for col in ded_cols_raw}
+
+                progress = st.progress(0, text="Analysing deductions...")
+                total_rows = len(df_valid)
+
+                for i, (_, row) in enumerate(df_valid.iterrows()):
+                    gap = row['_GAP']
+                    if gap <= 0:
+                        continue
+
+                    active = {col: row[col] for col in ded_cols_raw if row[col] > 0}
+                    if not active:
+                        continue
+
+                    # Find combo of active deductions closest to GAP
+                    best_err   = float('inf')
+                    best_combo = set()
+
+                    active_cols = list(active.keys())
+                    for r in range(1, len(active_cols) + 1):
+                        for combo in itertools.combinations(active_cols, r):
+                            s   = sum(active[c] for c in combo)
+                            err = abs(s - gap)
+                            if err < best_err:
+                                best_err   = err
+                                best_combo = set(combo)
+
+                    for col in active:
+                        tally[col]['total'] += 1
+                        if col in best_combo and best_err <= TOLERANCE:
+                            tally[col]['pretax']  += 1
+                        else:
+                            tally[col]['posttax'] += 1
+
+                    if i % 20 == 0:
+                        progress.progress(min(i / total_rows, 1.0), text=f"Analysing row {i}/{total_rows}...")
+
+                progress.empty()
+
+                # ── Build results ────────────────────────────────────────────────
+                results = []
+                for col in ded_cols_raw:
+                    t = tally[col]
+                    if t['total'] == 0:
+                        continue
+                    pre_pct  = t['pretax']  / t['total'] * 100
+                    post_pct = t['posttax'] / t['total'] * 100
+                    if pre_pct >= 60:
+                        verdict = 'Pre-Tax'
+                    elif post_pct >= 60:
+                        verdict = 'Post-Tax'
+                    else:
+                        verdict = 'Mixed / Unclear'
+                    results.append({
+                        'Code':         get_code(col),
+                        'Description':  get_desc(col),
+                        'Total Rows':   t['total'],
+                        'Pre-Tax Rows': f"{t['pretax']} ({pre_pct:.0f}%)",
+                        'Post-Tax Rows':f"{t['posttax']} ({post_pct:.0f}%)",
+                        'Verdict':      verdict,
+                        '_pretax_pct':  pre_pct,
+                    })
+
+                if not results:
+                    st.info("Not enough data rows to classify deductions.")
+                else:
+                    res_df = pd.DataFrame(results)
+
+                    # ── Metrics ──────────────────────────────────────────────────
+                    pre_count  = sum(1 for r in results if r['Verdict'] == 'Pre-Tax')
+                    post_count = sum(1 for r in results if r['Verdict'] == 'Post-Tax')
+                    mix_count  = sum(1 for r in results if r['Verdict'] == 'Mixed / Unclear')
+
+                    st.markdown('<div class="section-header">① ANALYSIS METHOD</div>', unsafe_allow_html=True)
+                    st.markdown("""
+                    <div class="card">
+                        <div style="color:#c9d1e0; font-size:0.9rem; line-height:1.8;">
+                            <b style="color:#00d4aa;">Logic:</b> For each employee row —<br>
+                            &nbsp;&nbsp;① Compute <b>GAP = Total Earnings − Federal Income Taxable</b><br>
+                            &nbsp;&nbsp;② Find which combination of deductions best explains the GAP<br>
+                            &nbsp;&nbsp;③ Deductions <b>inside</b> the best combo → <b style="color:#34d399;">Pre-Tax</b> (they reduce taxable wages)<br>
+                            &nbsp;&nbsp;④ Deductions <b>outside</b> the best combo → <b style="color:#f472b6;">Post-Tax</b> (taken after taxes)<br>
+                            &nbsp;&nbsp;⑤ Verdict decided by majority across all rows (≥60% threshold, $5 tolerance)
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    m1, m2, m3, m4 = st.columns(4)
+                    with m1: st.markdown(f'<div class="card"><div class="card-title">Total Deductions</div><div class="card-value">{len(results)}</div></div>', unsafe_allow_html=True)
+                    with m2: st.markdown(f'<div class="card"><div class="card-title">Pre-Tax</div><div class="card-value" style="color:#34d399">{pre_count}</div></div>', unsafe_allow_html=True)
+                    with m3: st.markdown(f'<div class="card"><div class="card-title">Post-Tax</div><div class="card-value" style="color:#f472b6">{post_count}</div></div>', unsafe_allow_html=True)
+                    with m4: st.markdown(f'<div class="card"><div class="card-title">Unclear</div><div class="card-value" style="color:#f59e0b">{mix_count}</div></div>', unsafe_allow_html=True)
+
+                    # ── Results tables ────────────────────────────────────────────
+                    st.markdown('<div class="section-header">② RESULTS</div>', unsafe_allow_html=True)
+
+                    display_cols = ['Code','Description','Total Rows','Pre-Tax Rows','Post-Tax Rows','Verdict']
+
+                    pre_res  = [r for r in results if r['Verdict'] == 'Pre-Tax']
+                    post_res = [r for r in results if r['Verdict'] == 'Post-Tax']
+                    mix_res  = [r for r in results if r['Verdict'] == 'Mixed / Unclear']
+
+                    if pre_res:
+                        st.markdown("#### 🟢 Pre-Tax Deductions")
+                        st.dataframe(pd.DataFrame(pre_res)[display_cols],
+                                     use_container_width=True, hide_index=True)
+
+                    if post_res:
+                        st.markdown("#### 🩷 Post-Tax Deductions")
+                        st.dataframe(pd.DataFrame(post_res)[display_cols],
+                                     use_container_width=True, hide_index=True)
+
+                    if mix_res:
+                        st.markdown("#### 🟡 Mixed / Unclear")
+                        st.dataframe(pd.DataFrame(mix_res)[display_cols],
+                                     use_container_width=True, hide_index=True)
+                        st.caption("These deductions appear in both pre-tax and post-tax positions across different rows. Manual review recommended.")
+
+                    # ── Download ──────────────────────────────────────────────────
+                    st.markdown('<div class="section-header">③ FULL SUMMARY</div>', unsafe_allow_html=True)
+                    full_df = pd.DataFrame(results)[display_cols]
+                    st.dataframe(full_df, use_container_width=True, hide_index=True)
+                    st.download_button(
+                        "⬇️ Download Deduction Classification CSV",
+                        full_df.to_csv(index=False).encode(),
+                        "deduction_classification.csv", "text/csv"
+                    )
 
 if __name__ == "__main__":
     st.set_page_config(page_title="ADP Payroll Analyzer", page_icon="📊", layout="wide")

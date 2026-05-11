@@ -133,7 +133,8 @@ with st.sidebar:
             "ADP - License Details Audit",
             "ADP - Prior Payroll Audit Tool",
             "ADP - Prior Payroll Sanity Check",
-            "ADP - Prior Payroll Setup Helper"
+            "ADP - Prior Payroll Setup Helper",
+            "ADP - Payroll Setup Agent"
         ], index=0, label_visibility="collapsed")
         
     elif provider == "Paycom":
@@ -232,6 +233,11 @@ elif tool_option == "ADP - Prior Payroll Setup Helper":
     from apps.adp import prior_payroll_setup_helper
     importlib.reload(prior_payroll_setup_helper)
     prior_payroll_setup_helper.render_ui()
+
+elif tool_option == "ADP - Payroll Setup Agent":
+    from apps.adp import payroll_setup_agent
+    importlib.reload(payroll_setup_agent)
+    payroll_setup_agent.render_ui()
 
 elif tool_option == "Paycom - Census Audit":
     from apps.paycom import census_audit

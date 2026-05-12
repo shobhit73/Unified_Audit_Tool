@@ -435,19 +435,27 @@ def render_ui():
                 def get_desc(col):
                     return col.split(':')[1].strip() if ':' in col else col.strip()
 
+                # ── Clean and Convert to Numeric ─────────────────────────────────
+                df_clean = df_ded.copy()
+                
+                def clean_currency(series):
+                    return pd.to_numeric(series.astype(str).replace(r'[\$,]', '', regex=True), errors='coerce')
+
+                df_clean[total_earn_col]  = clean_currency(df_clean[total_earn_col])
+                df_clean[fed_taxable_col] = clean_currency(df_clean[fed_taxable_col])
+                
+                for col in ded_cols_raw:
+                    df_clean[col] = clean_currency(df_clean[col]).fillna(0)
+
                 # ── Filter valid individual rows ─────────────────────────────────
-                df_valid = df_ded[
-                    df_ded[total_earn_col].notna() &
-                    df_ded[fed_taxable_col].notna() &
-                    (df_ded[total_earn_col] < 100_000)   # exclude aggregate/summary rows
+                df_valid = df_clean[
+                    df_clean[total_earn_col].notna() &
+                    df_clean[fed_taxable_col].notna() &
+                    (df_clean[total_earn_col] < 100_000)   # exclude aggregate/summary rows
                 ].copy()
 
                 df_valid['_GAP'] = (df_valid[total_earn_col] - df_valid[fed_taxable_col]).round(2)
                 df_valid = df_valid[df_valid['_GAP'] >= 0]  # ignore negative gaps
-
-                # Fill deduction values
-                for col in ded_cols_raw:
-                    df_valid[col] = df_valid[col].fillna(0)
 
                 # ── Core logic ───────────────────────────────────────────────────
                 # For each row: find combination of deductions that best explains the GAP
@@ -474,6 +482,13 @@ def render_ui():
                     best_combo = set()
 
                     active_cols = list(active.keys())
+                    # Sort active cols descending so greedy picks biggest first if we have to truncate
+                    active_cols.sort(key=lambda x: active[x], reverse=True)
+                    
+                    # Safeguard: if >12 deductions on a single row, cap at 12 to avoid 2^n explosion
+                    if len(active_cols) > 12:
+                        active_cols = active_cols[:12]
+
                     for r in range(1, len(active_cols) + 1):
                         for combo in itertools.combinations(active_cols, r):
                             s   = sum(active[c] for c in combo)

@@ -62,15 +62,18 @@ def render_ui():
 
     df_state_global = load_state_tax()
 
-    with st.sidebar:
+    with st.container():
         st.markdown("### 📂 File Uploads")
-        uploaded_payroll = st.file_uploader("ADP Prior Payroll (.xlsx)", type=["xlsx"])
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            uploaded_payroll = st.file_uploader("ADP Prior Payroll (.xlsx)", type=["xlsx"])
+        with col2:
+            if df_state_global is not None:
+                st.success(f"✅ State Tax Reference loaded  \n`state_tax_code.csv`  \n{len(df_state_global):,} rows")
+            else:
+                st.error("❌ `state_tax_code.csv` not found.  \nPlace it in the same folder as this script.")
+            st.caption("Tax Mapping tab requires the payroll file + state_tax_code.csv in the same folder.")
         st.markdown("---")
-        if df_state_global is not None:
-            st.success(f"✅ State Tax Reference loaded  \n`state_tax_code.csv`  \n{len(df_state_global):,} rows")
-        else:
-            st.error("❌ `state_tax_code.csv` not found.  \nPlace it in the same folder as this script.")
-        st.caption("Tax Mapping tab requires the payroll file + state_tax_code.csv in the same folder.")
 
     tab1, tab2, tab3 = st.tabs(["📋 Earnings Classifier", "🏛️ Tax Mapping", "💸 Deduction Classifier"])
 

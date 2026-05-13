@@ -366,8 +366,9 @@ This tool automatically applies the following corrections to your ADP Census dat
                 if not email_fallbacks.empty: 
                     st.markdown(f"- 📧 **Email Fallbacks:** {len(email_fallbacks)} employee(s) *(Using personal where work email is missing)*.{get_ids_str(email_fallbacks)}")
     # --- Persistent Download Section ---
-    show_key = f"adp_sanity_show_dl"
-    if st.button("Download Corrected Source", type="primary", key="adp_sanity_main_btn"):
+    st.markdown("### 📥 Download Results")
+    show_key = f"adp_sanity_show_dl_v2"
+    if st.button("Download Corrected Source", type="primary", key="adp_sanity_main_btn_v2"):
         st.session_state[show_key] = True
 
     if st.session_state.get(show_key):
@@ -617,7 +618,6 @@ This tool automatically applies the following corrections to your ADP Census dat
             st.download_button("📜 Download Change Log (CSV)", cached.get("audit", b""), f"ADP_Change_Log_{stamp}.csv", "text/csv", key="adp_sanity_dl_audit")
         
         st.info("The Change Log is a separate audit trail showing all automated corrections made to the file.")
-s a separate audit trail showing all automated corrections made to the file.")
 
     # --- Job Title Mapping Section ---
     from utils.job_title_mapper import render_streamlit_section as render_job_title_mapping

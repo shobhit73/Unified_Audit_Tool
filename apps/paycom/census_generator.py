@@ -374,8 +374,10 @@ This tool automatically applies the following corrections to your Paycom Census 
                 if not position_blanks.empty: 
                     st.markdown(f"- ℹ️ **Position Auto-Fill:** {len(position_blanks)} employee(s) *(Fallback blank Job Title to Dept)*.{get_ids_str(position_blanks)}")
 
-    show_key = f"pc_sanity_show_dl"
-    if st.button("Download Corrected Source", type="primary", key="pc_sanity_main_btn"):
+    # --- Persistent Download Section ---
+    st.markdown("### 📥 Download Results")
+    show_key = f"pc_sanity_show_dl_v2"
+    if st.button("Download Corrected Source", type="primary", key="pc_sanity_main_btn_v2"):
         st.session_state[show_key] = True
 
     if st.session_state.get(show_key):
@@ -567,7 +569,6 @@ This tool automatically applies the following corrections to your Paycom Census 
             st.download_button(label="📜 Download Change Log (CSV)", data=cached.get("audit", b""), file_name=f"Paycom_Change_Log_{stamp}.csv", mime="text/csv", key="pc_sanity_dl_audit")
         
         st.info("The Change Log is a separate audit trail showing all automated corrections made to the file.")
-is a separate audit trail showing all automated corrections made to the file.")
 
     # --- Job Title Mapping Section ---
     from utils.job_title_mapper import render_streamlit_section as render_job_title_mapping

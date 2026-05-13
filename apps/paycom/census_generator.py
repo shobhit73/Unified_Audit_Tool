@@ -375,8 +375,10 @@ This tool automatically applies the following corrections to your Paycom Census 
                     st.markdown(f"- ℹ️ **Position Auto-Fill:** {len(position_blanks)} employee(s) *(Fallback blank Job Title to Dept)*.{get_ids_str(position_blanks)}")
 
     # --- Persistent Download Section ---
-    st.markdown("### 📥 Download Results")
-    show_key = f"pc_sanity_show_dl_v2"
+    st.markdown("---")
+    st.subheader("📥 Download Cleaned Results")
+    st.info("Click the button below to prepare and download the corrected census files.")
+    show_key = f"pc_sanity_show_dl_v3"
     if st.button("Download Corrected Source", type="primary", key="pc_sanity_main_btn_v2"):
         st.session_state[show_key] = True
 

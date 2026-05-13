@@ -366,8 +366,10 @@ This tool automatically applies the following corrections to your ADP Census dat
                 if not email_fallbacks.empty: 
                     st.markdown(f"- 📧 **Email Fallbacks:** {len(email_fallbacks)} employee(s) *(Using personal where work email is missing)*.{get_ids_str(email_fallbacks)}")
     # --- Persistent Download Section ---
-    st.markdown("### 📥 Download Results")
-    show_key = f"adp_sanity_show_dl_v2"
+    st.markdown("---")
+    st.subheader("📥 Download Cleaned Results")
+    st.info("Click the button below to prepare and download the corrected census files.")
+    show_key = f"adp_sanity_show_dl_v3"
     if st.button("Download Corrected Source", type="primary", key="adp_sanity_main_btn_v2"):
         st.session_state[show_key] = True
 

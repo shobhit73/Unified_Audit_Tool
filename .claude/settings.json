@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -W ignore -c ' *)",
+      "Bash(\"/c/Users/shobhit.sharma/AppData/Local/Programs/Python/Python311/python.exe\" \"/c/Users/shobhit.sharma/Downloads/Deduction Tool/scratch/test_streamlit_helper.py\")",
+      "Bash(git commit -m ' *)",
+      "Bash(git -C \"c:/Users/shobhit.sharma/Downloads/Deduction Tool/audit_fast_api\" add CLAUDE.md skill.md)",
+      "Bash(git -C 'c:/Users/shobhit.sharma/Downloads/Deduction Tool/audit_fast_api' commit -m ' *)",
+      "Bash('/c/Users/shobhit.sharma/Downloads/Deduction Tool/.venv/Scripts/python' -c ' *)"
+    ]
+  }
+}

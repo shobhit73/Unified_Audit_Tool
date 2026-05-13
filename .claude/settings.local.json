@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git pull *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('apps/adp/census_generator.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(git ls-tree *)",
+      "Bash(python -c ' *)",
+      "Bash(git -C \"c:/Users/shobhit.sharma/Downloads/Deduction Tool/audit_fast_api\" log -3 --oneline)",
+      "Bash(git -C \"c:/Users/shobhit.sharma/Downloads/Deduction Tool/audit_fast_api\" diff --stat)",
+      "Bash(git -C \"c:/Users/shobhit.sharma/Downloads/Deduction Tool/audit_fast_api\" status)",
+      "Bash(git -C \"c:/Users/shobhit.sharma/Downloads/Deduction Tool/audit_fast_api\" diff main.py)",
+      "Bash(python -W ignore -c ' *)",
+      "Bash(mkdir -p core/common)",
+      "Bash(touch core/common/__init__.py)",
+      "Bash(python)",
+      "Bash(python scratch/port_consolidated.py)",
+      "Bash(\"/c/Users/shobhit.sharma/AppData/Local/Programs/Python/Python311/python.exe\" \"/c/Users/shobhit.sharma/Downloads/Deduction Tool/scratch/test_simplified_ui.py\")"
+    ]
+  }
+}

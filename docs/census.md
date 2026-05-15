@@ -66,6 +66,7 @@ The `SourceOfTruth_Status` column in the **Comparison Detail** tab uses specific
 | **Active in Uzio** | Marked as "Active" in Uzio but either "Terminated/Inactive" in the source or missing entirely. Suggests a missing termination in Uzio. |
 | **Terminated in Uzio** | Marked as "Terminated" in Uzio but "Active" in the source. Suggests a re-hire was processed in payroll but not updated in Uzio. |
 | **Active in Source** | Marked as "Active" in ADP/Paycom but missing from Uzio entirely. Indicates employees that need to be onboarded. |
+| **On Leave / Inactive** | Treated as **Active** if missing a termination date (with a prompt to exclude from payroll) or **Terminated** if a date is present. |
 | **Terminated in Source** | Marked as "Terminated" in ADP/Paycom but still "Active" in Uzio. |
 | **Employee ID Not Found in Uzio** | The Source ID (even after SSN correlation checks) does not exist in the Uzio export. |
 | **Employee ID Not Found in Source** | The Uzio ID does not exist in the Source system export. |

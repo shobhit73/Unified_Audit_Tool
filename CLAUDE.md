@@ -89,3 +89,14 @@ They share the same field-map dictionary at the top of the file and the same `ut
 - [README.md](README.md) — full architecture diagrams, module reference, field mappings (ADP→Uzio, Paycom→Uzio), and the auto-fix rule catalog with code snippets.
 - [docs/SOP.md](docs/SOP.md) — end-user operating procedure; useful when a bug report describes the workflow in user terms.
 - [frontend.md](frontend.md) — mandatory before UI work (see above).
+- [CHANGELOG.md](CHANGELOG.md) — record of all functional changes and standardizations.
+
+## Recent Platform Evolution (May 2026)
+
+The platform recently underwent a "Census Hardening" phase. Key logic changes to preserve:
+
+1.  **Leave/Inactive Management**: Employees marked "On Leave" or "Inactive" in source systems are automatically converted to **Active** if their termination date is blank (with a "Excluded from payroll" comment). If a termination date is present, they are marked **Terminated**.
+2.  **Forced Driver FLSA**: Any Job Title containing "Driver" or "Helper" is now strictly **Non-Exempt** and **Hourly**, overriding both source values and user defaults.
+3.  **Emergency Contact Fix**: Any relationship string starting with "Fian" is auto-corrected to **"Fiancee"** to satisfy Uzio validation.
+4.  **Full-Time Standard**: Always use **"Full Time"** (no hyphen) for employment types.
+5.  **MCP Sync**: The `audit_fast_api/` server logic is now synchronized with the Streamlit app's census generator. Any change to `utils/audit_utils.py` in the root should be mirrored to `audit_fast_api/utils/audit_utils.py`.

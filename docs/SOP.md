@@ -231,6 +231,7 @@ A single Excel or CSV file direct from ADP containing employee demographics.
    * **Fix Zip Codes:** Truncates zip codes after a dash (e.g., `12345-6789` -> `12345`) and zero-pads leading digits (e.g., `123` -> `00123`).
    * **Missing Work Email Fallback:** Swaps in Personal Email if Work Email is blank.
    * **Salaried Hourly-Only Conversion:** Detects "Salaried" employees in roles like Driver, Walker, or Helper and automatically converts them to **Hourly/Non-Exempt** to prevent Uzio import errors.
+   * **Leave/Inactive Status Logic:** Employees on leave or inactive without a termination date are automatically set to **Active** with a prompt to exclude them from payroll on Uzio. If a date is present, they are set to **Terminated**.
    * **Blank Working Hours:** Can automatically set blank schedules to 0.
 4. **Mapping:** Manually map your source Job Titles and Work Locations to the system-allowed list.
 5. Click Generate. The tool outputs a standardized Uzio`.xlsm` file.
@@ -248,7 +249,8 @@ A single Excel or CSV file from Paycom.
 2. **DSP Owner Detection:** The tool will automatically scan for the most frequent `Supervisor_Primary_Code`. It will display a blue banner identifying the DSP Owner. Leave the checkbox checked to automatically set their Position to `"DSP Owner"` and sort them to the **very top** of both the corrected source file and the final Uzio output template.
 3. **Paycom Specific Validations:**
    * Enforces hard stops if `DOL_Status` or `Employee Status` are blank.
-   * If `Position` is blank, it automatically checks variations of `Department Description` to use as a fallback. A blue banner will show if this fallback was used.
+    * If `Position` is blank, it automatically checks variations of `Department Description` to use as a fallback. A blue banner will show if this fallback was used.
+    * **Leave/Inactive Status Logic:** Automatically reclassifies "On Leave" or "Inactive" employees to **Active** (with a "Please make it exclude from payroll in Uzio" note) if no termination date is found. If a date is found, they are set to **Terminated**.
 4. **Auto-Fix Options:** Similar to ADP, select checkboxes to fix FLSA Statuses, working hours, zip codes, and **Convert Salaried Hourly-Only roles** to Hourly/Non-Exempt.
 5. Provide mapping for Titles/Locations and Generate.
 

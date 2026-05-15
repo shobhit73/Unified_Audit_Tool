@@ -222,11 +222,11 @@ Output: Excel report with multiple validation sheets.
 | Blank Employment Status | 🔴 Hard Error | No |
 | **Invalid Status (e.g. A04L, A08V)** | 🔴 Hard Error | No — Flagged for manual review |
 | **Termination Date before Hire Date** | 🔴 Hard Error | No — Date consistency check |
-| **Inactive/Terminated missing Date** | 🔴 Hard Error | No — Validation requirement |
+| **Inactive/Terminated missing Date** | 🔴 Hard Error | ✅ Yes — converted to Active + Payroll Exclusion warning |
 | Blank Employment Type / DOL Status | 🟡 Warning | ✅ Yes — defaults to Full Time |
 | Blank Pay Type (non-Driver) | 🔴 Hard Error | No |
 | Blank Pay Type (Driver) | 🟡 Warning | ✅ Yes — forced to Hourly |
-| Blank FLSA Classification | 🟡 Warning | ✅ Yes — inferred from Pay Type |
+| Blank FLSA Classification | 🟡 Warning | ✅ Yes — inferred from Pay Type / Job Title |
 | Blank FLSA + Blank Pay (Driver) | 🟡 Warning | ✅ Yes — Non-Exempt / Hourly |
 | Blank Job Title | 🟡 Warning | ✅ Yes — fallback to Department |
 | Blank Work Location | 🔴 Hard Error | No |
@@ -265,10 +265,10 @@ Integrity: Preserves ALL original source headers exactly as they appeared in the
 ### Driver Rule (Highest Priority)
 ```python
 # Rule: Any employee with "Driver" in their Job Title
-IF job_title CONTAINS "driver" (case-insensitive):
+IF job_title CONTAINS "driver", "lead driver", "helper", etc. (case-insensitive):
     Pay Type*        → "Hourly"
     FLSA Classification → "Non-Exempt"
-    # This overrides whatever is in the source, even if blank
+    # This overrides whatever is in the source, even if blank or marked as Salaried/Exempt
 ```
 
 ### DOL Status Auto-Fill
@@ -282,9 +282,11 @@ IF dol_status IS BLANK OR NULL:
 ### FLSA Alignment
 ```python
 # Rule: Enforce alignment between Pay Type and FLSA
-IF pay_type == "Hourly":
+IF job_title contains "Driver":
+    FLSA Classification → "Non-Exempt" (Forced)
+ELSE IF pay_type == "Hourly":
     FLSA Classification → "Non-Exempt"
-IF pay_type == "Salaried":
+ELSE IF pay_type == "Salaried":
     FLSA Classification → "Exempt"
 IF FLSA is still BLANK after above:
     FLSA Classification → "Non-Exempt"  # Safe default

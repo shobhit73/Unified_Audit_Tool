@@ -127,6 +127,7 @@ with st.sidebar:
             "ADP - Selective Census Sync",
             "ADP - Prior Payroll Generator",
             "ADP - Payment Audit",
+            "ADP - Payment Method Sanity Check",
             "ADP - Emergency Contact Audit",
             "ADP - Withholding Audit",
             "ADP - Time Off Tool",
@@ -203,6 +204,11 @@ elif tool_option == "ADP - Payment Audit":
     from apps.adp import payment_audit
     importlib.reload(payment_audit)
     payment_audit.render_ui()
+
+elif tool_option == "ADP - Payment Method Sanity Check":
+    from apps.adp import payment_method_sanity
+    importlib.reload(payment_method_sanity)
+    payment_method_sanity.render_ui()
 
 elif tool_option == "ADP - Emergency Contact Audit":
     from apps.adp import emergency_audit

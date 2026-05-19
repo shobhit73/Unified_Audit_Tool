@@ -513,9 +513,19 @@ def run_sanity(adp_file):
         preview_df.to_excel(writer, sheet_name="Before_After", index=False)
         df_fixed_clean.to_excel(writer, sheet_name="Corrected_Source", index=False)
 
+    # For the CSV, wrap routing/account values in Excel's text-formula syntax
+    # (="...") so that double-clicking the CSV in Excel preserves the literal
+    # digits instead of converting long numbers to scientific notation.
+    df_for_csv = df_fixed_clean.copy()
+    for c in (col_routing, col_account):
+        if c and c in df_for_csv.columns:
+            df_for_csv[c] = df_for_csv[c].apply(
+                lambda v: f'="{v}"' if v else v
+            )
+
     # utf-8-sig writes a BOM so Excel opens the CSV in UTF-8 instead of
     # falling back to a locale codec.
-    csv_bytes = df_fixed_clean.to_csv(index=False).encode("utf-8-sig")
+    csv_bytes = df_for_csv.to_csv(index=False).encode("utf-8-sig")
 
     return out.getvalue(), csv_bytes, summary_df, issues_df, preview_df
 

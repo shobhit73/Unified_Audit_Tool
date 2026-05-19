@@ -281,15 +281,28 @@ IF dol_status IS BLANK OR NULL:
 
 ### FLSA Alignment
 ```python
-# Rule: Enforce alignment between Pay Type and FLSA
-IF job_title contains "Driver":
-    FLSA Classification → "Non-Exempt" (Forced)
-ELSE IF pay_type == "Hourly":
-    FLSA Classification → "Non-Exempt"
-ELSE IF pay_type == "Salaried":
-    FLSA Classification → "Exempt"
-IF FLSA is still BLANK after above:
-    FLSA Classification → "Non-Exempt"  # Safe default
+# Rule: FLSA precedence (post May 2026 rewrite — populated source FLSA
+# is preserved unconditionally unless Rule 1 fires).
+
+# Rule 1 (always wins): Driver / hourly-only Job Title forces both fields
+IF job_title matches roster (whole-word, case-insensitive):
+    # Roster: Driver, Lead Driver, Walker, Helper, Driver-Lite,
+    # Driver-Step Van, Driver-Unscheduled, DDU Dedicated, DDU Shared,
+    # Delivery Associate, Driver -Major Appliance
+    Pay Type            → "Hourly"      # overwrites source
+    FLSA Classification → "Non-Exempt"  # overwrites source
+
+# Rules 2–3 (blanks only — never overwrite a populated source FLSA value)
+ELSE IF source FLSA is BLANK:
+    IF pay_type == "Salaried":  FLSA → "Exempt"
+    IF pay_type == "Hourly":    FLSA → "Non-Exempt"
+
+# Rule 4: Cannot determine — surface in change log, do NOT default
+ELSE IF source FLSA is BLANK and Pay Type is also blank/unknown:
+    FLSA → BLANK + Change Log: "Manual review required"
+
+# REMOVED: the previous "default any remaining blank → Non-Exempt"
+# safety net. Populated source FLSA values are now preserved.
 ```
 
 ### DSP Owner Detection (Paycom Only)

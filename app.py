@@ -130,6 +130,7 @@ with st.sidebar:
             "ADP - Payment Method Sanity Check",
             "ADP - Emergency Contact Audit",
             "ADP - Withholding Audit",
+            "ADP - FIT/SIT Sanity Check",
             "ADP - Time Off Tool",
             "ADP - License Details Audit",
             "ADP - Prior Payroll Audit Tool",
@@ -294,6 +295,11 @@ elif tool_option == "ADP - Withholding Audit":
     from apps.adp import withholding_audit
     importlib.reload(withholding_audit)
     withholding_audit.render_ui()
+
+elif tool_option == "ADP - FIT/SIT Sanity Check":
+    from apps.adp import fit_sit_sanity
+    importlib.reload(fit_sit_sanity)
+    fit_sit_sanity.render_ui()
 
 elif tool_option == "Paycom - Emergency Contact Audit":
     from apps.paycom import emergency_audit

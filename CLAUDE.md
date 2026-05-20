@@ -66,18 +66,51 @@ The `total_comparison.py` audit reports for both vendors now include three addit
 
 `apps/{adp,paycom}/census_generator.py` exposes three render entry points that the router dispatches to separately:
 
-- `render_census_sanity_check()` — validation-only, no output file
+- `render_census_sanity_check()` — validates the source, shows findings on screen, and produces a downloadable **Corrected Source** (.xlsx with a `Change Log` sheet)
 - `render_census_generator()` — full ADP/Paycom → Uzio template conversion
 - `render_selective_census_generator()` — update specific columns in an existing Uzio template
 
 They share the same field-map dictionary at the top of the file and the same `utils.audit_utils.generate_uzio_template()` backend.
+
+### Census Sanity Check — backend / UI / Change Log (keep all three in sync)
+
+The Census Sanity Check has three layers. **Never apply a transformation in one layer without reflecting it in the other two** — every change to the user's data must be both shown on screen and recorded in the Change Log. There are no silent transformations.
+
+**Layer 1 — Backend** (applied to the downloaded Corrected Source, inside `render_census_sanity_check`'s download block):
+
+*Per-employee fixes* — each writes one Change Log row via the local `log_change()`:
+- FLSA: Driver/Walker/Helper job titles forced to Non-Exempt + Hourly; blank FLSA filled from Pay Type; unresolvable FLSA left blank and flagged.
+- Smart Driver: blank Job Title / FLSA / Pay Type filled for Driver-like roles from Department.
+- Blank Job Title → "Driver" for Non-Exempt Hourly employees.
+- Blank Work Email → filled from Personal Email.
+- Status: On Leave / Inactive → Active (no term date) or Terminated (has term date); Intern → Part-Time; blank Employment Type → Full Time.
+- Zip codes padded / trimmed / cleaned to 5 digits.
+- Emergency-contact relationship starting "Fian" → "Fiancee".
+- Working Hours → 0 for **every** employee (hourly and salaried, blank or filled).
+
+*File-wide standardizations* — each writes ONE summary Change Log row via the local `log_summary()` (Employee ID = `(All employees)`):
+- All date columns → MM/DD/YYYY.
+- Columns reordered (key fields first).
+- Rows reordered to cluster each manager with their reportees (only when a reporting hierarchy exists).
+- ADP only: home-zip column header → "Primary Address: Zip Code"; Gender column populated from the Sex column.
+
+**Layer 2 — UI** (on screen, before download):
+- `render_validation_results()` — three sections: red "Needs your attention" (hard errors), green "Fixed automatically", amber "Please review". Issue text is GENERIC (no per-employee values such as a job title or state name) so each issue type collapses to one consolidated line; per-employee detail stays in the "View the full list" table.
+- `render_standardization_notice()` — one info box listing the file-wide standardizations.
+- `render_duplicate_column_error()` / `render_missing_column_error()` — hard-stop screens: if a column is duplicated, or a `REQUIRED_CENSUS_FIELDS` column is missing, `preprocess_*_file()` returns `None` and **no census file is produced**.
+
+**Layer 3 — Change Log** (a `Change Log` sheet inside the downloaded .xlsx):
+- One row per per-employee fix (`log_change`): Employee ID, Name, Field Changed, Old Value, Assumed Value, Comments.
+- One summary row per file-wide standardization (`log_summary`): Employee ID = `(All employees)`.
+
+When adding a new auto-fix: decide whether it is per-employee (`log_change`) or file-wide (`log_summary`), and add it to `render_standardization_notice` or the relevant validation list so the user is told on screen. The census-sanity logic is mirrored in the API at `audit_fast_api/core/census/sanity_check.py` (`generate_corrected_census_xlsx`).
 
 ### Shared engine: utils/
 
 - [utils/audit_utils.py](utils/audit_utils.py) — the core engine: `generate_uzio_template()`, `validate_source_data()`, `inject_into_uzio_template()`, `selective_update_uzio()`, plus shared helpers (`check_duplicate_columns`, `format_datetime_strings`, `US_STATE_TO_ABBR`). All auto-fix logic (Driver rule, FLSA alignment, DOL default, email fallback, zip normalization) lives here.
 - [utils/preprocess_source_data.py](utils/preprocess_source_data.py) — opt-in auto-fix scanning applied *after* sanity checks are shown. Do not fold this back into `validate_source_data` — sanity reporting must stay read-only.
 - [utils/withholding_core.py](utils/withholding_core.py) — shared withholding comparison logic; used by both ADP and Paycom withholding audits.
-- [utils/ui_components.py](utils/ui_components.py) — `inject_premium_styles`, `render_premium_header`, `render_finding_card` (the "Editorial Ledger" UI primitives).
+- [utils/ui_components.py](utils/ui_components.py) — UI primitives: `inject_premium_styles`, `render_premium_header`, plus the census-sanity components `render_validation_results`, `render_standardization_notice`, `render_duplicate_column_error`, `render_missing_column_error`, the `REQUIRED_CENSUS_FIELDS` list and the `_plain_english_issue` translator. (`render_finding_card` still exists but is no longer used.)
 
 ### Withholding config lives in key_mapping.yml
 

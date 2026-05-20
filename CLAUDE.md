@@ -13,6 +13,29 @@ There is no test suite, linter config, or build step. The only runtime dependenc
 
 The Census Generator tools require [templates/Uzio_Census_Template.xlsm](templates/Uzio_Census_Template.xlsm) to exist on disk. It is a `.xlsm` with VBA that must be preserved through read/write; use `openpyxl` with `keep_vba=True` when opening it.
 
+## Repository topology — THREE repos, mirror BEFORE you push
+
+This working directory contains **three independent git repositories** as plain nested folders. There is **no `.gitmodules`** — they are NOT submodules, so a normal `git push` from the root reaches **only the root repo**.
+
+| Path | Remote (SSH) | What it is |
+|---|---|---|
+| `.` (root) | `shobhit73/Unified_Audit_Tool` | Parent Streamlit app |
+| `implementors_repo/` | `shobhitsharma-rgb/unified_audit_for_implementors` | Standalone "implementors" build of the **same** Streamlit app — its **own** Streamlit Cloud deployment |
+| `audit_fast_api/` | `shobhit73/audit_fast_api_` | FastAPI + MCP server (no Streamlit UI) |
+
+**`implementors_repo/` keeps byte-identical copies of `app.py`, `apps/`, and `utils/`.** It is a full mirror, not a slim fork. When you change any UI or app file in the root you MUST mirror it and push **both** repos to **their own remotes**:
+
+1. Change the file(s) in the root → commit + push to `Unified_Audit_Tool`.
+2. Copy the identical file(s) into `implementors_repo/<same path>` → commit + push to `unified_audit_for_implementors`.
+
+**Pushing only the root is a silent production failure** — the implementors Streamlit Cloud app keeps serving stale code while the root repo looks correct. This already caused one missed deploy (the census-sanity plain-English UI redesign, May 2026: pushed to root only, the deployed implementors app still showed the old 3-column "Action Center").
+
+Mirror matrix:
+- Root **UI / app-logic** change (`apps/**`, `utils/ui_components.py`, `app.py`) → also mirror into `implementors_repo/`.
+- Root **`utils/audit_utils.py`** change → also `implementors_repo/utils/audit_utils.py` **and** `audit_fast_api/` (the latter has its own slimmed `core/` port — apply the equivalent fix, don't blind-copy). See "MCP Sync" below.
+
+All three remotes use **SSH**. Corporate TLS inspection kills HTTPS git operations on this machine — never re-point a remote to HTTPS.
+
 ## Architecture
 
 ### Single-router Streamlit app

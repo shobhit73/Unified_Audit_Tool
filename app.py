@@ -120,40 +120,40 @@ with st.sidebar:
     if provider == "ADP":
         st.markdown('<div class="provider-header">ADP Tools</div>', unsafe_allow_html=True)
         tool_option = st.radio("Select ADP Tool", [
-            "ADP - Deduction Audit", 
-            "ADP - Census Audit",
             "ADP - Census Sanity Check",
+            "ADP - Census Audit",
             "ADP - Full Census Generation",
             "ADP - Selective Census Sync",
-            "ADP - Prior Payroll Generator",
-            "ADP - Payment Audit",
             "ADP - Payment Method Sanity Check",
-            "ADP - Emergency Contact Audit",
-            "ADP - Withholding Audit",
+            "ADP - Payment Audit",
             "ADP - FIT/SIT Sanity Check",
-            "ADP - Time Off Tool",
-            "ADP - License Details Audit",
-            "ADP - Prior Payroll Audit Tool",
+            "ADP - Withholding Audit",
+            "ADP - Deduction Audit",
             "ADP - Prior Payroll Sanity Check",
+            "ADP - Prior Payroll Audit Tool",
+            "ADP - Prior Payroll Generator",
             "ADP - Prior Payroll Setup Helper",
-            "ADP - Payroll Setup Agent"
+            "ADP - Payroll Setup Agent",
+            "ADP - Emergency Contact Audit",
+            "ADP - Time Off Tool",
+            "ADP - License Details Audit"
         ], index=0, label_visibility="collapsed")
         
     elif provider == "Paycom":
         st.markdown('<div class="provider-header">Paycom Tools</div>', unsafe_allow_html=True)
         tool_option = st.radio("Select Paycom Tool", [
-            "Paycom - Census Audit",
             "Paycom - Census Sanity Check",
+            "Paycom - Census Audit",
             "Paycom - Full Census Generation",
             "Paycom - Selective Census Sync",
-            "Paycom - Prior Payroll Generator",
             "Paycom - Withholding Audit",
             "Paycom - Payment Audit",
             "Paycom - Deduction Audit",
+            "Paycom - Prior Payroll Generator",
             "Paycom - Prior Payroll Setup Helper",
+            "Paycom - Prior Payroll Audit Tool",
             "Paycom - Emergency Contact Audit",
             "Paycom - Time Off Tool",
-            "Paycom - Prior Payroll Audit Tool",
             "Paycom - UPS SQL Master"
         ], index=0, label_visibility="collapsed")
         

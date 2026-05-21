@@ -99,9 +99,9 @@ The Census Sanity Check has three layers. **Never apply a transformation in one 
 - `render_standardization_notice()` — one info box listing the file-wide standardizations.
 - `render_duplicate_column_error()` / `render_missing_column_error()` — hard-stop screens: if a column is duplicated, or a `REQUIRED_CENSUS_FIELDS` column is missing, `preprocess_*_file()` returns `None` and **no census file is produced**.
 
-**Layer 3 — Change Log** (a `Change Log` sheet inside the downloaded .xlsx):
-- One row per per-employee fix (`log_change`): Employee ID, Name, Field Changed, Old Value, Assumed Value, Comments.
-- One summary row per file-wide standardization (`log_summary`): Employee ID = `(All employees)`.
+**Layer 3 — Change Log & Issues** (downloads):
+- The Corrected Source `.xlsx` carries a `Change Log` sheet alongside the `Corrected Census` sheet.
+- A separate **Change Log & Issues** `.xlsx` (`generate_changelog_and_issues_xlsx`) has two tabs: **Change Log** — one row per per-employee fix (`log_change`) plus one summary row per file-wide standardization (`log_summary`, Employee ID = `(All employees)`); and **Issues** — every problem still needing the implementor (hard errors as "Needs your attention", FLSA conflicts / leave anomalies as "Please review"), with a plain-English Issue and a "What to do" column.
 
 When adding a new auto-fix: decide whether it is per-employee (`log_change`) or file-wide (`log_summary`), and add it to `render_standardization_notice` or the relevant validation list so the user is told on screen. The census-sanity logic is mirrored in the API at `audit_fast_api/core/census/sanity_check.py` (`generate_corrected_census_xlsx`).
 

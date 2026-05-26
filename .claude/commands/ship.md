@@ -91,6 +91,12 @@ Push the current branch (the root repo's branch if we were in root, or whichever
 
 ## Step 7 — Open the PR for the originating repo
 
+If multiple `gh` accounts are logged in (check `gh auth status`), the active one may not have collaborator access to the current repo's owner. Before `gh pr create`:
+
+1. Extract the owner from `git remote get-url origin` (the segment between `github.com:` and `/`, e.g. `shobhit73` for `git@github.com:shobhit73/Unified_Audit_Tool.git`).
+2. Run `gh auth switch -u <owner>` — ignore any error from this (the account may not exist, in which case keep whichever account is already active).
+3. Then run `gh pr create`. If it fails with "must be a collaborator", try `gh auth switch` to the other account and retry once.
+
 Use `gh pr create` with:
 - Title under 70 chars, why-focused.
 - Body with `## Summary` (1–3 bullets) and `## Test plan` (checklist) sections.

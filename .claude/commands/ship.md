@@ -103,7 +103,18 @@ Use `gh pr create` with:
 - Footer: `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 - Pass the body via HEREDOC for correct formatting.
 
-Print every PR URL (root + mirror + port, whichever apply) at the end so the user can click through.
+Print every PR URL (root + mirror + port, whichever apply).
+
+## Step 8 — Auto-merge each PR and sync local main
+
+For every PR created in this run (root + mirror + port, whichever apply):
+
+1. `gh pr merge <PR-number-or-URL> --squash --delete-branch` (run from inside the matching repo, with the matching active gh account from Step 7).
+2. If the merge is rejected because the PR has merge conflicts with `main`, STOP and report — do not improvise (do not `--admin`, do not force).
+3. After all merges succeed, in each affected repo, run `git checkout main && git pull --ff-only origin main` to bring the local clone up to date.
+4. Delete the local feature branch with `git branch -d <branch>` (the `-d` form, never `-D` — if git refuses because the branch isn't merged locally, stop and report).
+
+Note for the user: this auto-merges without a code-review pause. Future PRs from this command land on `main` immediately. This is acceptable because the alternative the user is moving away from is direct-to-main pushes — auto-merged PRs are strictly better (branch history, revertable, mirror-safety enforced). If a collaborator review step becomes needed later, remove this Step 8 and switch to manual merges.
 
 ## Hard constraints — do not violate
 

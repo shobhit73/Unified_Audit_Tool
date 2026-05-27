@@ -100,8 +100,8 @@ If multiple `gh` accounts are logged in (check `gh auth status`), the active one
 Use `gh pr create` with:
 - Title under 70 chars, why-focused.
 - Body with `## Summary` (1–3 bullets) and `## Test plan` (checklist) sections.
-- Footer: `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
-- Pass the body via HEREDOC for correct formatting.
+- Footer: `Generated with Claude Code`.
+- **Always pass the body via `--body-file <tempfile>`, not `--body "<string>"`.** PowerShell's tokenizer splits long quoted strings with newlines and special chars, so inline `--body` is unreliable. Write the body to a temp file (e.g. `.pr-body.tmp` in the repo root, gitignored or deleted immediately), run `gh pr create --body-file .pr-body.tmp`, then delete the temp file.
 
 Print every PR URL (root + mirror + port, whichever apply).
 

@@ -13,11 +13,11 @@ Run `git remote get-url origin`. Confirm it contains one of:
 
 If not, stop and report — the command does not recognize this repo.
 
-## Step 2 — Pre-flight checks
+## Step 2 — Note the current branch
 
-In parallel:
-- `git status --short` — bail with a clear message if there are uncommitted or unstaged changes. Tell the user to commit (`/ship`) or stash first. Do NOT auto-stash.
-- `git branch --show-current` — note which branch we are on.
+- `git branch --show-current`.
+
+Do NOT pre-check `git status` and do NOT bail on a dirty working tree. Most of the time the dirty entries are permanent noise (Claude settings files accumulating allowlist entries, nested-repo HEAD pointers, untracked test-data folders) and bailing made /sync unusable. Git itself will refuse to fast-forward or rebase if there would be a real conflict — that is sufficient protection.
 
 ## Step 3 — Sync
 
@@ -26,7 +26,8 @@ Two cases:
 **Case A — on `main`:**
 - `git fetch origin`
 - `git pull --ff-only origin main`
-- If `--ff-only` fails (local `main` has diverged), STOP and report. Do not auto-resolve. The user must investigate why their `main` has commits that aren't on origin.
+- If `--ff-only` fails because of a real conflict with local changes, STOP and report — let the user decide (commit, stash, or revert). Do not auto-stash.
+- If `--ff-only` fails because local `main` has diverged from origin (someone committed straight to local `main`), STOP and report. Do not auto-resolve.
 
 **Case B — on a feature branch (anything not `main`):**
 - `git fetch origin`
@@ -47,4 +48,4 @@ Print a one-line summary:
 - NEVER use `--force`.
 - NEVER touch other repos. /sync operates ONLY on the repo of the current working directory. Even if we are in root, do NOT recurse into `implementors_repo/` or `audit_fast_api/`.
 - NEVER switch remotes to HTTPS.
-- If the working tree is dirty, bail — do not auto-stash.
+- NEVER auto-stash. If git itself refuses an operation because of dirty state, surface the error and let the user decide.

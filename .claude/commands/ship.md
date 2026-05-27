@@ -70,16 +70,26 @@ Procedure:
 
 CLAUDE.md is explicit: "the latter has its own slimmed `core/` port — apply the equivalent fix, don't blind-copy."
 
-Trigger: any change in root to `utils/audit_utils.py`. If `utils/audit_utils.py` did NOT change, skip 5b entirely.
+**Trigger (generalized):** for every file you changed in the root commit, check whether a sibling exists under `audit_fast_api/`. The mapping is:
 
-Procedure:
-1. Read the structure of `audit_fast_api/` (look for `core/` and `utils/` subdirectories).
-2. Identify the function(s) you changed in root's `utils/audit_utils.py`.
-3. Find the equivalent function(s) in `audit_fast_api/` (likely under `core/census/` or `audit_fast_api/utils/audit_utils.py`).
-4. Read both files. Apply the **semantically equivalent** change to the fastapi side — do not blind-overwrite, because the fastapi version is structurally different.
-5. `cd audit_fast_api/`, create/check out `<user>/<slug>` branch, commit with the same message + `(port)` suffix, push to its SSH remote, open a PR via `gh pr create` with title prefixed `[port]`.
+| Root file changed | Sibling in audit_fast_api/ |
+|---|---|
+| `utils/audit_utils.py` | `audit_fast_api/utils/audit_utils.py` |
+| `utils/<name>.py` | `audit_fast_api/utils/<name>.py` if it exists |
+| `apps/adp/<name>.py` | `audit_fast_api/core/adp/<name>.py` if it exists |
+| `apps/paycom/<name>.py` | `audit_fast_api/core/paycom/<name>.py` if it exists |
+| `apps/common/<name>.py` | `audit_fast_api/core/common/<name>.py` if it exists |
 
-If the equivalent fix in fastapi is non-trivial or ambiguous, stop and ask the user before guessing — porting silently broken code is worse than asking.
+For each changed root file, **glob/test for the sibling path**. If the sibling exists, treat that file as a fastapi port target. If no sibling exists, no port is needed for that file. Skip 5b entirely if NO changed root file has a sibling.
+
+Procedure (per port target):
+1. Read both the root file and the fastapi sibling — they are intentionally structurally different (Streamlit UI + Excel output vs JSON return).
+2. Identify the function(s) you changed in root.
+3. Apply the **semantically equivalent** change to the fastapi side — do not blind-overwrite. The output shape, helper imports, and data flow differ; preserve the fastapi conventions (returns a dict, uses `smart_read_df`, etc.).
+4. `cd audit_fast_api/`, create/check out `<user>/<slug>` branch, commit with the same message + `(port)` suffix, push to its SSH remote.
+5. Open a PR via `gh pr create` with title prefixed `[port]`.
+
+If the equivalent fix in fastapi is non-trivial or ambiguous (e.g. the fastapi side uses a different algorithm shape, or the change pulls in a function that doesn't exist in fastapi's slimmed `utils/`), stop and ask the user before guessing — porting silently broken code is worse than asking.
 
 ## Step 6 — Push the original repo's branch
 

@@ -79,7 +79,11 @@ def _compare_val(field, u_val, a_val):
 
     return False
 
-def run_audit(file_uzio, file_adp):
+def compute_audit_dataframes(file_uzio, file_adp):
+    """Pure-compute split of run_audit: returns the DataFrames that the Excel writer
+    would have written, without the BytesIO/openpyxl step. The standalone tool calls
+    this and then writes Excel; the ADP Consolidated Audit calls this and embeds the
+    DataFrames into the chief workbook. Logic must stay identical to run_audit."""
     # 1. Load Data
     # Uzio: Header=1 based on inspection
     df_uzio = pd.read_excel(file_uzio, header=1)
@@ -259,14 +263,21 @@ def run_audit(file_uzio, file_adp):
                 })
 
     df_res = pd.DataFrame(rows)
-    
+
+    return {"Emergency_Contact_Audit": df_res}
+
+
+def run_audit(file_uzio, file_adp):
+    dfs = compute_audit_dataframes(file_uzio, file_adp)
+    df_res = dfs["Emergency_Contact_Audit"]
+
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df_res.to_excel(writer, sheet_name='Emergency_Contact_Audit', index=False)
         if not df_res.empty:
             summ = df_res.groupby(["Status", "Field"]).size().reset_index(name="Count")
             summ.to_excel(writer, sheet_name='Summary', index=False)
-            
+
     return output.getvalue()
 
 def render_ui():

@@ -122,6 +122,32 @@ When adding a new auto-fix: decide whether it is per-employee (`log_change`) or 
 - Uploaded files are `BytesIO` streams — always `file_obj.seek(0)` after a peek-read (headers, duplicate check) before the real parse.
 - Inputs accept both `.xlsx` and `.csv`; the sniffing happens in `check_duplicate_columns` and the per-tool loaders.
 
+### CSV output rule — NEVER WRITE A UTF-8 BOM. **NON-NEGOTIABLE.**
+
+**Every CSV this codebase produces MUST be plain UTF-8 with NO byte-order mark.** This is a product requirement set by the downstream API team — our APIs match the first column header *literally* (e.g. `Associate ID`, `Employee_Code`), so a BOM smuggles `U+FEFF` in front of the first header and the column lookup silently misses. We have already shipped at least one customer-impacting incident from this (Skyland, May 2026).
+
+**Forbidden — never do this:**
+
+```python
+# ❌ utf-8-sig writes EF BB BF before the first byte
+df.to_csv(path).encode("utf-8-sig")
+df.to_csv(path, encoding="utf-8-sig")
+io.open(path, "w", encoding="utf-8-sig")
+```
+
+**Required:**
+
+```python
+# ✅ plain UTF-8, no BOM
+df.to_csv(path).encode("utf-8")
+df.to_csv(path, encoding="utf-8")
+df.to_csv(path)  # pandas default is also bare utf-8 — fine
+```
+
+The "but Excel needs the BOM to render UTF-8 correctly" rationale that historically justified `utf-8-sig` is **not a valid reason** here. Every sanity / generator tool that produces a CSV also produces an XLSX from the same DataFrame; route Excel users to the XLSX download. The CSV is for API ingestion only.
+
+**Mirror enforcement:** this rule applies to root, `implementors_repo/`, and `audit_fast_api/`. Before merging any change that calls `to_csv` or writes a `.csv` file, grep the diff for `utf-8-sig` / `utf_8_sig` — they must not appear in encoding arguments. (They MAY appear in comments explaining this rule; that's fine.)
+
 ## UI rules (non-obvious)
 
 [frontend.md](frontend.md) is load-bearing — **read it before any CSS change**. Key constraints that break the app if violated:

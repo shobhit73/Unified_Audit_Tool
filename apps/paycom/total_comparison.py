@@ -172,17 +172,28 @@ def calculate_totals_uzio(df, header_top, column_names):
     else:
         df_clean = df.copy()
 
-    norm_cols_main = {norm_colname(c).lower(): i for i, c in enumerate(df.columns)}
+    # Exact (case-insensitive) header lookup wins over the normalized lookup so
+    # that 'Bonus' and 'Bonus (Hours)' don't collapse onto the same key — norm_colname
+    # strips parens, which would otherwise hand 'Bonus' the 'Bonus (Hours)' column.
+    exact_cols_main = {str(c).strip().lower(): i for i, c in enumerate(df.columns)}
+    norm_cols_main = {}
+    for i, c in enumerate(df.columns):
+        norm_cols_main.setdefault(norm_colname(c).lower(), i)
     norm_cols_top = {}
     if header_top:
         for i, c in enumerate(header_top):
             if pd.notna(c) and str(c).strip() != "":
-                norm_cols_top[norm_colname(c).lower()] = i
+                norm_cols_top.setdefault(norm_colname(c).lower(), i)
 
     cols_to_sum = []
     for name in column_names:
+        raw_name = str(name).strip().lower()
         n_name = norm_colname(name).lower()
-        if n_name in norm_cols_main:
+        if raw_name in exact_cols_main:
+            idx = exact_cols_main[raw_name]
+            cols_to_sum.append(df.columns[idx])
+            found_cols.append(df.columns[idx])
+        elif n_name in norm_cols_main:
             idx = norm_cols_main[n_name]
             cols_to_sum.append(df.columns[idx])
             found_cols.append(df.columns[idx])

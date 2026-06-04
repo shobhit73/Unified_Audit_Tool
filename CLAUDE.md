@@ -166,6 +166,49 @@ The "but Excel needs the BOM to render UTF-8 correctly" rationale that historica
 
 `Sample Data/` is excluded entirely (contains real employee data).
 
+## Standard Uzio Job Titles (Company Master reference)
+
+The canonical Uzio **Company Master → Job Titles** list for a DSP company. Uzio groups every job title under a **Job Category** (`Owner`, `Overhead Staff`, `Delivery Associates`, `Non-DSP`). This is the source of truth the census tools' `ALLOWED_JOB_TITLES` (in `apps/{adp,paycom}/census_generator.py`) and `HOURLY_ONLY_JOB_TITLES` (in `utils/audit_utils.py`) should align with. **30 titles** total:
+
+| Code | Job Category | Job Title |
+|---|---|---|
+| 001 | Owner | DSP Owner |
+| 002 | Overhead Staff | Operations Manager |
+| 003 | Overhead Staff | Operations Lead |
+| 004 | Overhead Staff | Fleet Manager |
+| 005 | Overhead Staff | Safety Manager |
+| 006 | Overhead Staff | Performance Manager |
+| 007 | Overhead Staff | Trainer |
+| 008 | Overhead Staff | Human Resources |
+| 009 | Overhead Staff | Recruiter |
+| 010 | Overhead Staff | Office Personnel |
+| 011 | Overhead Staff | Payroll Assistant |
+| 012 | Overhead Staff | Finance |
+| 013 | Overhead Staff | Dispatch |
+| 014 | Overhead Staff | Management |
+| 015 | Overhead Staff | Admin |
+| 016 | Overhead Staff | Survey |
+| 017 | Overhead Staff | Warehouse |
+| 018 | Delivery Associates | Walker |
+| 019 | Delivery Associates | Driver |
+| 020 | Delivery Associates | Helper |
+| 021 | Delivery Associates | Driver-Lite |
+| 022 | Delivery Associates | Driver-Step Van |
+| 023 | Delivery Associates | Driver-Unscheduled |
+| 024 | Delivery Associates | Lead Driver |
+| 025 | Delivery Associates | DDU Dedicated |
+| 026 | Delivery Associates | DDU Shared |
+| 027 | Non-DSP | Non-DSP Related |
+| 028 | Delivery Associates | Driver -Major Appliance |
+| 029 | Delivery Associates | E-Biker |
+| 030 | Delivery Associates | TSO-PV Driver |
+
+**`Delivery Associates` is a Job *Category*, not a job title** — the 12 titles under it (Walker, Driver, Helper, Driver-Lite, Driver-Step Van, Driver-Unscheduled, Lead Driver, DDU Dedicated, DDU Shared, Driver -Major Appliance, E-Biker, TSO-PV Driver) are the ones Uzio treats as Hourly / Non-Exempt. The `HOURLY_ONLY_JOB_TITLES` roster in code is the force-Hourly/Non-Exempt set and matches this category. `E-Biker` and `TSO-PV Driver` were added to the roster. `delivery associate` / `delivery associates` are intentionally **kept** in the roster (even though Uzio uses it only as a category name) because the literal string arrives as an actual Job Title in ADP/Paycom source exports.
+
+**Two opposite job-title rules (don't confuse them):**
+- **Driver rule (auto-fix):** a hourly-only title (Driver/Walker/E-Biker/…) marked Salaried or with blank FLSA is *force-set* to Hourly + Non-Exempt on download.
+- **Manager rule (flag-only):** a non-delivery title (DSP Owner, any Overhead Staff role, Non-DSP Related, or any unrecognized title) marked **Hourly** and/or **Non-Exempt** is **flagged for review and left UNCHANGED** — surfaced in the amber "Please review" UI box (`manager_hourly_flags`) and recorded in the Change Log as "(No change — please review)". Blank job titles are excluded (handled by the Driver-default logic).
+
 ## Docs to consult
 
 - [README.md](README.md) — full architecture diagrams, module reference, field mappings (ADP→Uzio, Paycom→Uzio), and the auto-fix rule catalog with code snippets.

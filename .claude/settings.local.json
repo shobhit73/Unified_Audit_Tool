@@ -17,7 +17,8 @@
       "Bash(touch core/common/__init__.py)",
       "Bash(python)",
       "Bash(python scratch/port_consolidated.py)",
-      "Bash(\"/c/Users/shobhit.sharma/AppData/Local/Programs/Python/Python311/python.exe\" \"/c/Users/shobhit.sharma/Downloads/Deduction Tool/scratch/test_simplified_ui.py\")"
+      "Bash(\"/c/Users/shobhit.sharma/AppData/Local/Programs/Python/Python311/python.exe\" \"/c/Users/shobhit.sharma/Downloads/Deduction Tool/scratch/test_simplified_ui.py\")",
+      "Bash(git remote *)"
     ]
   }
 }

@@ -1,0 +1,30 @@
+Benefit-type deductions (8): ['AD&D', 'Critical Illness', 'Dental', 'Employee Medical', 'Medical - PostTax', 'STD', 'VOL EE Life', 'Vision']
+
+Per-deduction field values:
+  Type Code              | UZIO Master Deductions | UZIO Method            | Auto-Sync from Uzio Be | Assign to all employee | Track arrears          | Arrears Processing Met | Deduction Schedule    
+  -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  ACC                    | Voluntary AD&D After-tax | Fixed $                | Yes                    | Yes                    | Yes                    | Total Amount           | Every Paycheck        
+  CIL                    | Critical Illness After-tax | Fixed $                | Yes                    | Yes                    | Yes                    | Total Amount           | Every Paycheck        
+  CPC                    | Med Claim Reimbursement | Fixed $                | N/A                    | Yes                    | No                     |                        | Every Paycheck        
+  CPP                    | Med Plus Premium       | Fixed $                | N/A                    | Yes                    | No                     |                        | Every Paycheck        
+  CS1                    | Child Support          | Fixed $                | N/A                    | Yes                    | No                     |                        | Every Paycheck        
+  CS2                    | Child Support 2        | Fixed $                | N/A                    | Yes                    | No                     |                        | Every Paycheck        
+  DEN                    | Dental Pre-tax         | Fixed $                | Yes                    | Yes                    | Yes                    | Total Amount           | Every Paycheck        
+  GP1                    | Creditor Garnishment   | % of Disposable Income | N/A                    | Yes                    | No                     |                        | Every Paycheck        
+  ITR                    | Other                  | Fixed $                | N/A                    | Yes                    | No                     |                        | Every Paycheck        
+  K4P                    | 401k                   | % of Gross Pay         | N/A                    | Yes                    | No                     |                        | Every Paycheck        
+  LN1                    | 401(k) Loan            | Fixed $                | N/A                    | Yes                    | No                     |                        | Every Paycheck        
+  MDC                    | Medical Pre-tax        | Fixed $                | Yes                    | Yes                    | Yes                    | Total Amount           | Every Paycheck        
+  MLP                    | Medical After-tax      | Fixed $                | Yes                    | Yes                    | Yes                    | Total Amount           | Every Paycheck        
+  R4P                    | Roth 401k              | % of Gross Pay         | N/A                    | Yes                    | No                     |                        | Every Paycheck        
+  STD                    | Voluntary STD After-tax | Fixed $                | Yes                    | Yes                    | Yes                    | Total Amount           | Every Paycheck        
+  VEE                    | Voluntary Life Employee After-tax | Fixed $                | Yes                    | Yes                    | Yes                    | Total Amount           | Every Paycheck        
+  VIS                    | Vision Pre-tax         | Fixed $                | Yes                    | Yes                    | Yes                    | Total Amount           | Every Paycheck        
+
+Rule checks:
+  All per-row rule assertions passed.
+
+Wrote C:\Users\rohit.kaushik\Downloads\Chief Delivery\REBUILD_UZIO_Columns.xlsx (8,900 bytes)
+
+Deductions tab columns (15): ['Type Code', 'Type Description', 'Calc Description', 'Pre/Post Tax', 'UZIO Master Deductions List', 'UZIO Deduction Type', 'UZIO Deduction Name', 'UZIO Method', 'Amount per pay', 'Auto-Sync from Uzio Benefits', 'Assign to all employees', 'Deduction Schedule', 'Track arrears', 'Arrears Processing Method', 'W-2 Box']
+Column order matches DEDUCTION_OUTPUT_COLUMNS. OK.

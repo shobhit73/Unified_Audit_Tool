@@ -20,8 +20,10 @@ Outputs:
 
 from __future__ import annotations
 import base64
+import difflib
 import io
 import json
+import os
 import re
 import zipfile
 
@@ -81,6 +83,19 @@ DEFAULT_UZIO_DEDUCTIONS_TO_SKIP = {
 MATCH_MEMO_RE = re.compile(r"\b(match|memo)\b", re.IGNORECASE)
 
 
+def _is_ignored_paycom_item(type_code, type_description):
+    """Items the tool drops EVERYWHERE — earnings, deductions, contributions, and
+    taxes. Currently: Worker's Compensation (code WKC, or a name containing
+    'worker(s) comp...'). UZIO handles WC separately, so we never emit it."""
+    code = (type_code or "").strip().upper()
+    desc = (type_description or "").strip().lower()
+    if code == "WKC":
+        return True
+    if "worker" in desc and "comp" in desc:
+        return True
+    return False
+
+
 def _extract_unique_pairs_by_code_description(prior_df, code_description_value):
     """Generic helper: filter Prior Payroll file(s) to rows where the
     `Code Description` column equals a specific value, then return unique
@@ -107,7 +122,8 @@ def _extract_unique_pairs_by_code_description(prior_df, code_description_value):
     unique = pairs.drop_duplicates().sort_values(["Type Code", "Type Description"]).reset_index(drop=True)
 
     return [{"Type Code": r["Type Code"], "Type Description": r["Type Description"]}
-            for _, r in unique.iterrows()]
+            for _, r in unique.iterrows()
+            if not _is_ignored_paycom_item(r["Type Code"], r["Type Description"])]
 
 
 def extract_unique_deductions_from_prior(prior_df):
@@ -578,8 +594,13 @@ def enrich_earnings_for_uzio(rows, start_display_order=20, include_in_ot_map=Non
         else:
             rate_factor = EARNING_NA
             rate_value = EARNING_NA
-        # Include-in-overtime / discretionary determination: only for bonuses.
-        if is_bonus_earning(r.get("Type Description")):
+        # Include-in-overtime applies ONLY when the (possibly overridden) Earning
+        # Type is exactly "Bonus" — that's the only UZIO type that shows the
+        # "Include Bonus in Overtime Rate Calculation?" field. For every other type
+        # (including "Other") the field doesn't exist, so emit "NA". Driving this
+        # off the final etype (not the name) means changing Bonus→Other flips the
+        # value to NA, and Other→Bonus flips it back to the No/Yes default.
+        if etype == "Bonus":
             include_ot = include_in_ot_map.get(
                 autosync_row_key(r.get("Type Code"), r.get("Type Description")),
                 EARNING_INCLUDE_OT_DEFAULT,
@@ -1168,8 +1189,9 @@ MAPPING_DOWNLOAD_HTML = """
   .dl-note { color:#808495; font-size:.8rem; margin-top:.5rem; }
 </style>
 <div class="dlwrap">
-  <button class="dl-btn" id="dlAllMaps">&#128229; Download all 3 mapping CSVs</button>
-  <div class="dl-note">Saves three separate files. The first time, Chrome may ask to
+  <button class="dl-btn" id="dlAllMaps">&#128229; Download all mapping CSVs</button>
+  <div class="dl-note">Saves the mapping files (earnings, deductions, contributions, taxes)
+    as separate files. The first time, Chrome may ask to
     &ldquo;allow downloading multiple files&rdquo; &mdash; choose <b>Allow</b>.</div>
 </div>
 <script>
@@ -1640,6 +1662,361 @@ def _deduction_reason_short(verdict, flavor):
     return "Tax Treatment value not recognized -- review manually."
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Taxes: Paycom → UZIO tax-catalog mapping
+#
+# Paycom delivers taxes in two prior-payroll sections:
+#   - "W/H Taxes"               → EMPLOYEE-side withholding (FIT, Medicare, SS,
+#                                 State Income, local city/school)
+#   - "Client Side Liabilities" → EMPLOYER-side taxes (FUTA, State Unemployment,
+#                                 Employer Medicare/Social Security). This section
+#                                 also holds employer benefit contributions, so we
+#                                 keep only the tax rows (keyword filter).
+# The SECTION is part of each tax's identity: the same code+name (e.g. MED
+# "Medicare") appears in both sections and maps to a DIFFERENT UZIO tax
+# (Medicare Tax vs Employer Medicare Tax).
+#
+# UZIO side = the bundled tax catalog (uzio_tax_catalog.csv): state_abbreviation,
+# tax_code (TAX####), unique_tax_id, tax_name, sub_tax_desc. The 4th dash-segment
+# of unique_tax_id is the tax-TYPE token (FIT / MEDI / FICA / ER_FUTA / ER_MEDI /
+# ER_FICA / SIT / ER_SUTA / CITY / SCHL / ...), which is the precise match key.
+#
+# Mapping is NOT a creation step — UZIO already owns these taxes; we only produce
+# the mapping file (Source tax → UZIO tax_code/unique_tax_id). Tiers:
+#   federal  (deterministic)  state (deterministic)  local (best-guess + confirm).
+# ─────────────────────────────────────────────────────────────────────────────
+
+TAX_SECTION_WH = "W/H Taxes"
+TAX_SECTION_EMPLOYER = "Client Side Liabilities"
+TAX_SECTIONS = (TAX_SECTION_WH, TAX_SECTION_EMPLOYER)
+
+# Output columns — verbatim from the client tax-mapping template.
+MAPPING_TAX_COLUMNS = [
+    "Source Tax Code", "Source Tax Code Name", "Source Tax Code Description",
+    "Uzio Tax Code", "Unique Tax ID", "Uzio Tax Code Description",
+    "Uzio Sub-Tax Description",
+]
+
+UZIO_TAX_CATALOG_PATH = os.path.join(os.path.dirname(__file__), "uzio_tax_catalog.csv")
+
+STATE_NAME_TO_ABBREV = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+    "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
+    "district of columbia": "DC", "florida": "FL", "georgia": "GA", "hawaii": "HI",
+    "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+    "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+    "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS",
+    "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV",
+    "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+    "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+    "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI",
+    "south carolina": "SC", "south dakota": "SD", "tennessee": "TN", "texas": "TX",
+    "utah": "UT", "vermont": "VT", "virginia": "VA", "washington": "WA",
+    "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
+}
+US_STATE_ABBREVS = set(STATE_NAME_TO_ABBREV.values())
+
+# Abbreviated / nickname state spellings Paycom uses, e.g. "N Carolina W/H" → NC,
+# "Penn. State W/H" → PA. Checked (word-boundary) after full names, before the
+# 2-letter fallback. Word boundaries keep short ones (ind/ill/del) from matching
+# inside other words.
+STATE_NAME_VARIANTS = {
+    # directional
+    "n carolina": "NC", "no carolina": "NC", "s carolina": "SC", "so carolina": "SC",
+    "n dakota": "ND", "no dakota": "ND", "s dakota": "SD", "so dakota": "SD",
+    "w virginia": "WV", "n hampshire": "NH", "n jersey": "NJ", "n mexico": "NM",
+    "n york": "NY", "r island": "RI",
+    # common Paycom abbreviations / nicknames
+    "penn": "PA", "penna": "PA", "calif": "CA", "conn": "CT", "mass": "MA",
+    "mich": "MI", "minn": "MN", "wisc": "WI", "wis": "WI", "tenn": "TN",
+    "fla": "FL", "ariz": "AZ", "colo": "CO", "okla": "OK", "oreg": "OR",
+    "wyo": "WY", "nev": "NV", "nebr": "NE", "neb": "NE", "mont": "MT",
+    "kans": "KS", "ark": "AR", "ala": "AL", "miss": "MS", "ind": "IN",
+    "ill": "IL", "del": "DE", "wash": "WA", "ga": "GA", "vt": "VT",
+}
+
+
+def load_uzio_tax_catalog(path=UZIO_TAX_CATALOG_PATH):
+    """Read the bundled UZIO tax catalog into a list of dicts. Strings only,
+    no NaN. Returns [] if the file is missing/unreadable."""
+    try:
+        df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    except Exception:
+        return []
+    out = []
+    for _, r in df.iterrows():
+        out.append({
+            "state_abbreviation": str(r.get("state_abbreviation", "")).strip(),
+            "tax_code": str(r.get("tax_code", "")).strip(),
+            "unique_tax_id": str(r.get("unique_tax_id", "")).strip(),
+            "tax_name": str(r.get("tax_name", "")).strip(),
+            "sub_tax_desc": str(r.get("sub_tax_desc", "")).strip(),
+        })
+    return out
+
+
+def _uti_token(unique_tax_id):
+    """The tax-TYPE token = 4th dash-segment of the unique_tax_id."""
+    parts = (unique_tax_id or "").split("-")
+    return parts[3].upper() if len(parts) >= 4 else ""
+
+
+def _is_statewide(r):
+    """True if a catalog row is the statewide entry (place segment == '0000') —
+    i.e. the state-level tax, not a city/school within the state."""
+    p = (r.get("unique_tax_id") or "").split("-")
+    return len(p) >= 3 and p[2] == "0000"
+
+
+# Client Side Liabilities mixes employer taxes with employer contributions; keep
+# only rows that look like a tax.
+_EMPLOYER_TAX_KW = (
+    "futa", "suta", "sui", "unemploy", "medicare", "social security", "fica",
+    "oasdi", "disability", "sdi", "state w/h", "state withhold", "income tax",
+    "local", "lst", "eit",
+)
+
+
+def _is_employer_tax_row(name):
+    d = (name or "").lower()
+    return any(k in d for k in _EMPLOYER_TAX_KW)
+
+
+def tax_row_key(section, code, desc):
+    """Unique key per tax row — MUST include section (same code+name repeats across
+    W/H Taxes vs Client Side Liabilities and maps to different UZIO taxes)."""
+    return f"{(section or '').strip()}||{(code or '').strip()}||{(desc or '').strip()}"
+
+
+def extract_unique_taxes_from_prior(prior_df):
+    """Unique taxes from W/H Taxes (all) + Client Side Liabilities (tax rows only).
+    Each dict: Type Code, Type Description, Section. Section order preserved
+    (employee first, then employer)."""
+    required = {"Code Description", "Type Code", "Type Description"}
+    if required - set(prior_df.columns):
+        return []
+    out, seen = [], set()
+    for section in TAX_SECTIONS:
+        sub = prior_df[prior_df["Code Description"].astype(str).str.strip() == section]
+        for _, r in sub.iterrows():
+            tc = str(r.get("Type Code", "")).strip()
+            td = str(r.get("Type Description", "")).strip()
+            if tc.lower() in ("", "nan", "none"):
+                continue
+            if _is_ignored_paycom_item(tc, td):   # drop Worker's Comp (WKC) everywhere
+                continue
+            if section == TAX_SECTION_EMPLOYER and not _is_employer_tax_row(td):
+                continue
+            key = (section, tc, td)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"Type Code": tc, "Type Description": td, "Section": section})
+    return out
+
+
+def _detect_state_abbrev(name):
+    """Pull a US state from a tax name: full name first, then a 2-letter token."""
+    d = (name or "").lower()
+    # Match the LONGEST full-name/variant phrase first, so "West Virginia" and
+    # "W Virginia" win over the sub-word "Virginia" (and likewise for any future
+    # containment like that).
+    phrases = list(STATE_NAME_VARIANTS.items()) + list(STATE_NAME_TO_ABBREV.items())
+    for phrase, ab in sorted(phrases, key=lambda kv: -len(kv[0])):
+        if re.search(r"\b" + re.escape(phrase) + r"\b", d):
+            return ab
+    for tok in re.findall(r"\b[A-Za-z]{2}\b", name or ""):
+        u = tok.upper()
+        if u == "SD":  # "SD" in a tax name means School District, not South Dakota
+            continue
+        if u in US_STATE_ABBREVS:
+            return u
+    return None
+
+
+def _federal_token(name, employer):
+    """UZIO federal TYPE token for a Paycom federal tax (None if not federal)."""
+    d = (name or "").lower()
+    if "futa" in d or ("federal" in d and "unemploy" in d):
+        return "ER_FUTA"                      # FUTA is employer-only
+    if "additional medicare" in d:
+        return "MEDI2"
+    if "medicare" in d:
+        return "ER_MEDI" if employer else "MEDI"
+    if "social security" in d or "fica" in d or "oasdi" in d:
+        return "ER_FICA" if employer else "FICA"
+    if "federal" in d and ("withhold" in d or "income" in d or "fit" in d.split()):
+        return "FIT"
+    return None
+
+
+def _state_token(name, employer):
+    """UZIO state-level TYPE token (SIT / SUTA / ER_SUTA / SDI), or None."""
+    d = (name or "").lower()
+    if "sdi" in d or "disability" in d:
+        return "SDI"
+    if "suta" in d or "sui" in d or "unemploy" in d:
+        return "ER_SUTA" if employer else "SUTA"
+    # State withholding = state income tax. Paycom often omits the word "state"
+    # (e.g. "N Carolina W/H"), so "w/h"/"withhold"/"income" is enough.
+    if "w/h" in d or "withhold" in d or "income" in d or "sit" in d.split():
+        return "SIT"
+    return None
+
+
+_LOCAL_SCHOOL_KW = ("lsd", "csd", "school", "district")
+
+
+def _local_kind(name):
+    """City vs School vs JEDD/JEDZ from a Paycom local tax name."""
+    d = (name or "").lower()
+    if "jedd" in d:
+        return "JEDD"
+    if "jedz" in d:
+        return "JEDZ"
+    if any(k in d for k in _LOCAL_SCHOOL_KW) or re.search(r"\bsd\b", d):
+        return "SCHL"
+    if "local" in d or "city" in d or "lst" in d or "eit" in d:
+        return "CITY"
+    return None
+
+
+def _clean_place(name, state_ab):
+    """Reduce a Paycom local name to its place tokens (drop state + kind words)."""
+    s = (name or "").lower()
+    s = re.sub(r"[^a-z0-9 ]", " ", s)
+    for full, ab in STATE_NAME_TO_ABBREV.items():
+        if ab == state_ab:
+            s = re.sub(r"\b" + re.escape(full) + r"\b", " ", s)
+    drop = {
+        (state_ab or "").lower(), "local", "city", "lsd", "csd", "sd", "school",
+        "district", "jedd", "jedz", "tax", "lst", "eit", "township", "borough",
+        "of", "the",
+    }
+    # Drop the leading numeric jurisdiction code (e.g. "510101") and de-duplicate
+    # tokens (Paycom repeats names like "PHILADELPHIA CITY/PHILADELPHIA CITY").
+    toks = [t for t in s.split() if t and t not in drop and not t.isdigit()]
+    seen = set()
+    return " ".join(t for t in toks if not (t in seen or seen.add(t)))
+
+
+def _catalog_place(tax_name, state_ab):
+    """Reduce a UZIO catalog tax_name to its place tokens for similarity scoring."""
+    s = (tax_name or "").lower()
+    s = re.sub(r"[^a-z0-9 ]", " ", s)
+    if state_ab:
+        s = re.sub(r"^\s*" + re.escape(state_ab.lower()) + r"\b", " ", s)
+    s = re.sub(r"\b(city|lsd|csd|sd|school|district|tax|jedd|jedz|income|state|of|the)\b", " ", s)
+    return " ".join(s.split())
+
+
+def dominant_tax_state(taxes):
+    """Most-common state among the non-federal taxes — used as the default state
+    for locals whose name omits the state (e.g. 'Evergreen SD')."""
+    from collections import Counter
+    c = Counter()
+    for t in taxes:
+        if _federal_token(t.get("Type Description"), False):
+            continue
+        st = _detect_state_abbrev(t.get("Type Description"))
+        if st:
+            c[st] += 1
+    return c.most_common(1)[0][0] if c else None
+
+
+def map_tax_to_uzio(code, name, section, catalog, file_default_state=None):
+    """Map one Paycom tax to the UZIO catalog.
+
+    Returns {"tier", "match", "candidates", "state", "kind"} where:
+      - match      = best catalog-row dict (or None)
+      - candidates = ranked catalog rows (locals) / exact matches (fed/state)
+      - tier       = "federal" | "state" | "local" | "unknown"
+    """
+    employer = (section or "").strip() == TAX_SECTION_EMPLOYER
+
+    # 1) Federal — deterministic.
+    ftok = _federal_token(name, employer)
+    if ftok:
+        hits = [r for r in catalog
+                if r["state_abbreviation"].upper() == "FED" and _uti_token(r["unique_tax_id"]) == ftok]
+        return {"tier": "federal", "match": hits[0] if hits else None,
+                "candidates": hits, "state": "FED", "kind": ftok, "detected": None}
+
+    # 2) State-level (income / unemployment / disability) — but NOT when this is
+    #    clearly a local (city/school) tax. Candidates span EVERY state so the
+    #    dropdown is a real fallback when our state guess is off; we pre-select the
+    #    detected state's statewide row (and only when the state was actually
+    #    detected from the name — never a silent wrong guess).
+    detected = _detect_state_abbrev(name)
+    st = detected or file_default_state
+    kind = _local_kind(name)
+    stok = _state_token(name, employer)
+    if stok and not kind:
+        typed = [r for r in catalog if _uti_token(r["unique_tax_id"]) == stok]
+        typed.sort(key=lambda r: (not _is_statewide(r),
+                                  r["state_abbreviation"].upper() != (detected or ""),
+                                  r["state_abbreviation"]))
+        match = None
+        if detected:
+            match = next((r for r in typed
+                          if r["state_abbreviation"].upper() == detected and _is_statewide(r)), None)
+        if typed:
+            return {"tier": "state", "match": match, "candidates": typed,
+                    "state": detected, "kind": stok, "detected": detected}
+
+    # 3) Local (city / school district) — best-guess; user confirms.
+    if st:
+        kind = _local_kind(name)
+        place = _clean_place(name, st)
+        pool = [r for r in catalog if r["state_abbreviation"].upper() == st]
+
+        def _kind_ok(r):
+            t = _uti_token(r["unique_tax_id"])
+            if kind == "SCHL":
+                return t == "SCHL"
+            if kind == "CITY":
+                return t == "CITY"
+            if kind in ("JEDD", "JEDZ"):
+                return t == kind
+            return True
+
+        kinded = [r for r in pool if _kind_ok(r)] or pool
+
+        def _score(r):
+            return difflib.SequenceMatcher(None, place, _catalog_place(r["tax_name"], st)).ratio()
+
+        ranked = sorted(kinded, key=_score, reverse=True)
+        # Looser threshold when the state came from the NAME; stricter when the
+        # state is only a dominant-state fallback — otherwise we'd force a garbage
+        # match in the wrong state (e.g. "Philadelphia" → an NJ tax at 0.35).
+        threshold = 0.34 if detected else 0.6
+        best = ranked[0] if (ranked and place and _score(ranked[0]) >= threshold) else None
+        return {"tier": "local", "match": best, "candidates": ranked,
+                "state": st, "kind": kind, "detected": detected}
+
+    return {"tier": "unknown", "match": None, "candidates": [],
+            "state": None, "kind": None, "detected": detected}
+
+
+def build_taxes_mapping_rows(taxes, resolved):
+    """taxes: extracted list (Type Code/Description/Section).
+    resolved: {tax_row_key -> chosen catalog-row dict or None}.
+    Emits rows in MAPPING_TAX_COLUMNS order (verbatim source names)."""
+    rows = []
+    for t in taxes:
+        m = resolved.get(tax_row_key(t["Section"], t["Type Code"], t["Type Description"]))
+        rows.append({
+            "Source Tax Code": t["Type Code"],
+            "Source Tax Code Name": t["Type Description"],
+            "Source Tax Code Description": t["Section"],
+            "Uzio Tax Code": (m or {}).get("tax_code", ""),
+            "Unique Tax ID": (m or {}).get("unique_tax_id", ""),
+            "Uzio Tax Code Description": (m or {}).get("tax_name", ""),
+            "Uzio Sub-Tax Description": (m or {}).get("sub_tax_desc", ""),
+        })
+    return rows
+
+
 # ---------- Streamlit UI ----------
 
 def _render_name_editor(title, rows, name_field, key_prefix, caption=None):
@@ -1688,6 +2065,22 @@ def _render_name_editor(title, rows, name_field, key_prefix, caption=None):
             val = st.session_state.get(wkey, default)
             # Never let an empty box null out the name — fall back to the default.
             r[name_field] = val.strip() if isinstance(val, str) and val.strip() else default
+
+
+@st.cache_data(show_spinner=False)
+def _cached_tax_catalog(path=UZIO_TAX_CATALOG_PATH):
+    """Load the bundled UZIO tax catalog once per session (cached)."""
+    return load_uzio_tax_catalog(path)
+
+
+def _tax_autoselect_state(state_key, tax_key, lblmap_key):
+    """on_change for a tax dropdown: when a tax is picked, set its State picker to
+    that tax's state. Lets the 'Search all states' mode auto-fill the State field
+    once you choose a result."""
+    label = st.session_state.get(tax_key)
+    state_for_label = (st.session_state.get(lblmap_key) or {}).get(label)
+    if state_for_label:
+        st.session_state[state_key] = state_for_label
 
 
 def render_ui():
@@ -1752,6 +2145,8 @@ def render_ui():
                     # "Source ... Code Name" matches the source file verbatim.
                     "earn_raw": _raw_name_map(prior_df, "Earnings"),
                     "ded_raw": _raw_name_map(prior_df, "Deductions"),
+                    # Taxes: employee (W/H Taxes) + employer (Client Side Liabilities).
+                    "taxes": extract_unique_taxes_from_prior(prior_df),
                 }
             except Exception as e:
                 st.session_state.pop("ppsh_results", None)
@@ -1768,6 +2163,7 @@ def render_ui():
     skipped_default_deds = results["skipped"]
     earn_raw = results.get("earn_raw", {})
     ded_raw = results.get("ded_raw", {})
+    taxes_from_prior = results.get("taxes", [])
 
     # Earnings: first drop UZIO's auto-created defaults (Regular Wage, Overtime,
     # Holiday, etc. — recognized from the Paycom names), then enrich the rest
@@ -1794,15 +2190,21 @@ def render_ui():
         )
 
     # ── "Is the earning Non Discretionary?" toggle section ─────────────────
-    # For every bonus (except Lookback/Realtime, which are skipped defaults),
-    # ask whether it's non-discretionary. Yes => non-discretionary => the bonus
-    # MUST be included in the overtime rate calculation; No => discretionary =>
-    # not included. The toggle answer is written verbatim into the
-    # "Include Bonus in Overtime Calculation" column.
+    # Show a toggle ONLY for earnings whose EFFECTIVE Earning Type is "Bonus"
+    # (the only UZIO type with the Include-in-Overtime field). We read the type
+    # the user picked in the "Map earnings to an earning type" accordion from
+    # session_state (falling back to the tool's inferred type), so changing a
+    # bonus to Other removes its toggle and changing something to Bonus adds one.
+    # Yes => non-discretionary (included in OT rate); No => discretionary (default).
+    def _effective_earn_type(code, td):
+        return st.session_state.get(
+            f"ppsh_earntype2::{autosync_row_key(code, td)}"
+        ) or map_paycom_to_earning_type(code, td)
+
     bonus_rows = [
         (r["Type Code"], r["Type Description"])
         for r in kept_earnings
-        if is_bonus_earning(r.get("Type Description"))
+        if _effective_earn_type(r["Type Code"], r["Type Description"]) == "Bonus"
     ]
     btd_counts = {}
     for _, td in bonus_rows:
@@ -2132,6 +2534,178 @@ def render_ui():
             hide_index=True, use_container_width=True,
         )
 
+    # ── Taxes (Paycom → UZIO tax-catalog mapping) ──────────────────────────
+    # Employee (W/H Taxes) + employer (Client Side Liabilities) taxes. Federal &
+    # state auto-map deterministically; local city/school taxes are a best guess
+    # the user confirms via a searchable dropdown. Taxes are NOT created in UZIO —
+    # we only produce the mapping file.
+    st.markdown("---")
+    st.markdown("## Taxes")
+
+    catalog = _cached_tax_catalog()
+    with st.expander("Tax catalog source (advanced)", expanded=False):
+        up = st.file_uploader(
+            "Override the UZIO tax catalog with a newer CSV (optional)",
+            type=["csv"], key="ppsh_taxcat",
+        )
+        if up is not None:
+            try:
+                up.seek(0)
+                catalog = load_uzio_tax_catalog(up)
+            except Exception as e:
+                st.warning(f"Couldn't read the uploaded catalog ({e}); using the bundled one.")
+        st.caption(f"Using **{len(catalog)}** UZIO tax entries (bundled catalog unless overridden).")
+
+    tax_map_rows = []
+    if not taxes_from_prior:
+        st.caption("No taxes found in the prior payroll (W/H Taxes / Client Side Liabilities).")
+    elif not catalog:
+        st.warning("UZIO tax catalog not found (`uzio_tax_catalog.csv`) — can't map taxes.")
+    else:
+        dd_state = dominant_tax_state(taxes_from_prior)
+        wh = [t for t in taxes_from_prior if t["Section"] == TAX_SECTION_WH]
+        emp = [t for t in taxes_from_prior if t["Section"] == TAX_SECTION_EMPLOYER]
+        st.caption(
+            f"**{len(taxes_from_prior)} tax(es)** — {len(wh)} employee (W/H Taxes) + "
+            f"{len(emp)} employer (Client Side Liabilities). Federal & state auto-map; "
+            f"**local city/school are a best guess — confirm them**. Dominant state: "
+            f"`{dd_state or 'n/a'}`."
+        )
+
+        def _tax_opt_label(r):
+            base = f"{r['tax_name']}  [{r['tax_code']}]"
+            return base + (f" — {r['sub_tax_desc']}" if r['sub_tax_desc'] else "")
+
+        TAX_LEAVE = "— leave unmapped —"
+        TAX_ANY_STATE = "🔍 Search all states"
+        tax_resolved = {}
+        state_options = sorted({r["state_abbreviation"].upper() for r in catalog})
+        with st.expander("Map taxes to a UZIO tax", expanded=False):
+            st.caption(
+                "Federal & State auto-map (reliable). **Local** taxes — and anything the "
+                "tool couldn't map — get a **finder**: pick the **State**, **type** part of "
+                "the city / school name, then choose the exact tax. The dropdown shows the "
+                "UZIO code and Municipal/School so you can tell duplicates apart."
+            )
+            for t in taxes_from_prior:
+                code, td, section = t["Type Code"], t["Type Description"], t["Section"]
+                key = tax_row_key(section, code, td)
+                res = map_tax_to_uzio(code, td, section, catalog, file_default_state=dd_state)
+                tier = res["tier"]
+                badge = {"federal": "Federal", "state": "State",
+                         "local": "Local — find & confirm", "unknown": "Unmapped — find"}.get(tier, tier)
+                # Full finder for locals and anything unmapped; clean dropdown for
+                # Federal/State that mapped confidently.
+                use_finder = (tier == "local") or (res["match"] is None)
+
+                nm_col, pk_col = st.columns([1, 1])
+                with nm_col:
+                    st.markdown(f"**{code}** — {td}")
+                    st.caption(f"{section} · {badge}")
+
+                if not use_finder:
+                    cand = res["candidates"][:60]
+                    if res["match"] and res["match"] not in cand:
+                        cand = [res["match"]] + cand
+                    labels = [TAX_LEAVE] + [_tax_opt_label(r) for r in cand]
+                    rowmap = {_tax_opt_label(r): r for r in cand}
+                    bl = _tax_opt_label(res["match"]) if res["match"] is not None else None
+                    default_index = labels.index(bl) if (bl and bl in labels) else 0
+                    with pk_col:
+                        sel = st.selectbox(
+                            f"Tax {section} {code}", options=labels, index=default_index,
+                            key=f"ppsh_tax::{key}", label_visibility="collapsed",
+                        )
+                    tax_resolved[key] = rowmap.get(sel)
+                else:
+                    state_key = f"ppsh_taxstate::{key}"
+                    search_key = f"ppsh_taxsearch::{key}"
+                    tax_key = f"ppsh_tax::{key}"
+                    lblmap_key = f"ppsh_taxlblstate::{key}"
+                    # Smart default: confident match's state → detected state →
+                    # "search all states" (so we never pre-select a wrong state).
+                    if res["match"]:
+                        guess_state = res["match"].get("state_abbreviation", "").upper()
+                    elif res.get("detected"):
+                        # state came from the NAME → scope to it
+                        guess_state = res["detected"]
+                    else:
+                        # only a dominant-state fallback (or none) → start in
+                        # "Search all states" so we never pre-select a wrong state
+                        guess_state = TAX_ANY_STATE
+                    if guess_state != TAX_ANY_STATE and guess_state not in state_options:
+                        guess_state = TAX_ANY_STATE
+                    if state_key not in st.session_state:
+                        st.session_state[state_key] = guess_state
+
+                    with pk_col:
+                        state_sel = st.selectbox(
+                            f"State {section} {code}", options=[TAX_ANY_STATE] + state_options,
+                            key=state_key, label_visibility="collapsed",
+                        )
+                        all_states = (state_sel == TAX_ANY_STATE)
+                        search = st.text_input(
+                            f"Search {section} {code}",
+                            value=_clean_place(td, "" if all_states else state_sel),
+                            key=search_key, placeholder="type a city / school name…",
+                            label_visibility="collapsed",
+                        )
+                        # Token-based filter over the chosen scope (one state, or
+                        # the whole catalog when "Search all states"). Numeric codes
+                        # / 1-2 char noise ignored, so "510101 philadelphia" works.
+                        q = (search or "").strip().lower()
+                        toks = [w for w in re.split(r"[^a-z0-9]+", q) if len(w) >= 3 and not w.isdigit()]
+                        pool = (list(catalog) if all_states
+                                else [r for r in catalog if r["state_abbreviation"].upper() == state_sel])
+                        if toks:
+                            strict = [r for r in pool if all(w in r["tax_name"].lower() for w in toks)]
+                            pool = strict if strict else [r for r in pool
+                                                          if any(w in r["tax_name"].lower() for w in toks)]
+                        ref = " ".join(toks) or _clean_place(td, "" if all_states else state_sel)
+                        pool.sort(key=lambda r: difflib.SequenceMatcher(
+                            None, ref, _catalog_place(r["tax_name"], r["state_abbreviation"].upper())).ratio(),
+                            reverse=True)
+                        pool = pool[:50]
+                        # Keep the tool's best guess visible (if it fits the scope).
+                        if res["match"] and res["match"] not in pool and (
+                                all_states or res["match"].get("state_abbreviation", "").upper() == state_sel):
+                            pool = [res["match"]] + pool
+
+                        labels = [TAX_LEAVE] + [_tax_opt_label(r) for r in pool]
+                        rowmap = {_tax_opt_label(r): r for r in pool}
+                        # label → state, so picking a result can auto-fill the State.
+                        st.session_state[lblmap_key] = {
+                            _tax_opt_label(r): r["state_abbreviation"].upper() for r in pool
+                        }
+                        # Stable key + validate: if the persisted pick is no longer
+                        # an option (scope/search changed), reset to the default.
+                        default_label = (_tax_opt_label(res["match"])
+                                         if (res["match"] and _tax_opt_label(res["match"]) in labels)
+                                         else TAX_LEAVE)
+                        if st.session_state.get(tax_key) not in labels:
+                            st.session_state[tax_key] = default_label
+                        sel = st.selectbox(
+                            f"Tax {section} {code}", options=labels, key=tax_key,
+                            on_change=_tax_autoselect_state,
+                            args=(state_key, tax_key, lblmap_key),
+                            label_visibility="collapsed",
+                        )
+                    tax_resolved[key] = rowmap.get(sel)
+
+        tax_map_rows = build_taxes_mapping_rows(taxes_from_prior, tax_resolved)
+        st.markdown("### UZIO Tax Mapping")
+        st.dataframe(
+            pd.DataFrame(tax_map_rows, columns=MAPPING_TAX_COLUMNS),
+            hide_index=True, use_container_width=True,
+        )
+        unmapped = [r for r in tax_map_rows if not r["Uzio Tax Code"]]
+        if unmapped:
+            nm = ", ".join(f"{r['Source Tax Code']} {r['Source Tax Code Name']}" for r in unmapped)
+            st.warning(
+                f"**{len(unmapped)} tax(es) not yet mapped** (`{nm}`) — pick a UZIO tax in the "
+                f"accordion above, or they'll be blank in the mapping file."
+            )
+
     # ── Download — single xlsx, three tabs: Earnings | Deductions | Contributions
     st.markdown("---")
     # Filename = "<Client Name>_Payroll_Setup_Helper.xlsx". Falls back to
@@ -2168,16 +2742,18 @@ def render_ui():
     st.caption(
         f"For the API run, alongside the Source file. **{len(earn_map_rows)} earning(s)** "
         f"(incl. {len(skipped_earnings)} skipped UZIO default(s)), "
-        f"**{len(ded_map_rows)} deduction(s)**, **{len(contrib_map_rows)} contribution(s)**. "
+        f"**{len(ded_map_rows)} deduction(s)**, **{len(contrib_map_rows)} contribution(s)**, "
+        f"**{len(tax_map_rows)} tax(es)**. "
         "⚠️ This is a **critical** file — the *Source* name must match the source file "
         "exactly (spaces included), so it's taken verbatim from the upload; the *UZIO* "
         "name is taken from the exact field the script types into UZIO."
     )
 
-    # Single button → three separate CSV downloads with the exact filenames:
-    #   <Client>_earnings_mapping.csv / _deductions_mapping.csv / _contributions_mapping.csv
-    # (st.download_button can only send one file per click, so we embed the three
-    # CSVs as base64 and trigger the downloads from a small HTML/JS component.)
+    # Single button → separate CSV downloads with the exact filenames:
+    #   <Client>_earnings_mapping.csv / _deductions_mapping.csv /
+    #   _contributions_mapping.csv / _taxes_mapping.csv
+    # (st.download_button can only send one file per click, so we embed each CSV
+    # as base64 and trigger the downloads from a small HTML/JS component.)
     _map_files = [
         [f"{safe_name}_earnings_mapping.csv",
          base64.b64encode(_mapping_csv_bytes(earn_map_rows, MAPPING_EARNING_COLUMNS)).decode("ascii")],
@@ -2185,6 +2761,8 @@ def render_ui():
          base64.b64encode(_mapping_csv_bytes(ded_map_rows, MAPPING_DEDUCTION_COLUMNS)).decode("ascii")],
         [f"{safe_name}_contributions_mapping.csv",
          base64.b64encode(_mapping_csv_bytes(contrib_map_rows, MAPPING_CONTRIBUTION_COLUMNS)).decode("ascii")],
+        [f"{safe_name}_taxes_mapping.csv",
+         base64.b64encode(_mapping_csv_bytes(tax_map_rows, MAPPING_TAX_COLUMNS)).decode("ascii")],
     ]
     components.html(
         MAPPING_DOWNLOAD_HTML.replace("__FILES__", json.dumps(_map_files)),
@@ -2205,5 +2783,10 @@ def render_ui():
         st.markdown("**Contributions mapping**")
         st.dataframe(
             pd.DataFrame(contrib_map_rows, columns=MAPPING_CONTRIBUTION_COLUMNS),
+            hide_index=True, use_container_width=True,
+        )
+        st.markdown("**Taxes mapping**")
+        st.dataframe(
+            pd.DataFrame(tax_map_rows, columns=MAPPING_TAX_COLUMNS),
             hide_index=True, use_container_width=True,
         )

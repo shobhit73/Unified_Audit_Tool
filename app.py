@@ -122,7 +122,6 @@ with st.sidebar:
         tool_option = st.radio("Select ADP Tool", [
             "ADP - Census Sanity Check",
             "ADP - Census Audit",
-            "ADP - Full Census Generation",
             "ADP - Selective Census Sync",
             "ADP - Payment Method Sanity Check",
             "ADP - Payment Audit",
@@ -131,7 +130,6 @@ with st.sidebar:
             "ADP - Deduction Audit",
             "ADP - Prior Payroll Sanity Check",
             "ADP - Prior Payroll Audit Tool",
-            "ADP - Prior Payroll Generator",
             "ADP - Prior Payroll Setup Helper",
             "ADP - Payroll Setup Agent",
             "ADP - Emergency Contact Audit",
@@ -144,17 +142,14 @@ with st.sidebar:
         tool_option = st.radio("Select Paycom Tool", [
             "Paycom - Census Sanity Check",
             "Paycom - Census Audit",
-            "Paycom - Full Census Generation",
             "Paycom - Selective Census Sync",
             "Paycom - Withholding Audit",
             "Paycom - Payment Audit",
             "Paycom - Deduction Audit",
-            "Paycom - Prior Payroll Generator",
             "Paycom - Prior Payroll Setup Helper",
             "Paycom - Prior Payroll Audit Tool",
             "Paycom - Emergency Contact Audit",
-            "Paycom - Time Off Tool",
-            "Paycom - UPS SQL Master"
+            "Paycom - Time Off Tool"
         ], index=0, label_visibility="collapsed")
         
     elif provider == "Common Utilities":
@@ -187,20 +182,10 @@ elif tool_option == "ADP - Census Sanity Check":
     importlib.reload(census_generator)
     census_generator.render_census_sanity_check()
 
-elif tool_option == "ADP - Full Census Generation":
-    from apps.adp import census_generator
-    importlib.reload(census_generator)
-    census_generator.render_census_generator()
-
 elif tool_option == "ADP - Selective Census Sync":
     from apps.adp import census_generator
     importlib.reload(census_generator)
     census_generator.render_selective_census_generator()
-
-elif tool_option == "ADP - Prior Payroll Generator":
-    from apps.adp import prior_payroll_generator
-    importlib.reload(prior_payroll_generator)
-    prior_payroll_generator.render_ui()
 
 elif tool_option == "ADP - Payment Audit":
     from apps.adp import payment_audit
@@ -257,20 +242,10 @@ elif tool_option == "Paycom - Census Sanity Check":
     importlib.reload(census_generator)
     census_generator.render_census_sanity_check()
 
-elif tool_option == "Paycom - Full Census Generation":
-    from apps.paycom import census_generator
-    importlib.reload(census_generator)
-    census_generator.render_census_generator()
-
 elif tool_option == "Paycom - Selective Census Sync":
     from apps.paycom import census_generator
     importlib.reload(census_generator)
     census_generator.render_selective_census_generator()
-
-elif tool_option == "Paycom - Prior Payroll Generator":
-    from apps.paycom import prior_payroll_generator
-    importlib.reload(prior_payroll_generator)
-    prior_payroll_generator.render_ui()
 
 elif tool_option == "Paycom - Withholding Audit":
     from apps.paycom import withholding_audit
@@ -316,11 +291,6 @@ elif tool_option == "Paycom - Prior Payroll Audit Tool":
     from apps.paycom import total_comparison
     importlib.reload(total_comparison)
     total_comparison.render_ui()
-
-elif tool_option == "Paycom - UPS SQL Master":
-    from apps.paycom import ups_sql_master
-    importlib.reload(ups_sql_master)
-    ups_sql_master.render_ui()
 
 elif tool_option == "Selective Employee Extractor":
     from apps.common import employee_extractor

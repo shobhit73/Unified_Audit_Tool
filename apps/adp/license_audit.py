@@ -81,15 +81,26 @@ def read_uzio_license(file) -> pd.DataFrame:
 
 def read_adp_license(file) -> pd.DataFrame:
     """Reads ADP license report, extracting headers while bypassing metadata."""
+    is_csv = getattr(file, "name", "").lower().endswith(".csv")
+
+    def _read(header):
+        if is_csv:
+            try:
+                return pd.read_csv(file, header=header, dtype=str)
+            except UnicodeDecodeError:
+                file.seek(0)
+                return pd.read_csv(file, header=header, dtype=str, encoding="latin1")
+        return pd.read_excel(file, header=header, dtype=str)
+
     try:
-        df = pd.read_excel(file, header=None, dtype=str)
+        df = _read(None)
         # Locate header row
         header_idx = -1
         for i, row in df.head(20).iterrows():
             if any(str(c).strip() == 'Associate ID' for c in row.values if pd.notna(c)):
                 header_idx = i
                 break
-                
+
         if header_idx != -1:
             df.columns = [str(c).strip() if pd.notna(c) else f"Unnamed_{i}" for i, c in enumerate(df.iloc[header_idx])]
             df = df.iloc[header_idx + 1:].reset_index(drop=True)
@@ -99,7 +110,7 @@ def read_adp_license(file) -> pd.DataFrame:
         else:
             # Fallback
             file.seek(0)
-            df = pd.read_excel(file, dtype=str)
+            df = _read(0)
             return df
     except Exception as e:
         st.error(f"Could not read ADP file: {e}")

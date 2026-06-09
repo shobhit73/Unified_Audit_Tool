@@ -237,6 +237,7 @@ UZIO_EARNING_TYPES = [
     "Tuition Assistance", "Non Tax Tuition Assistance", "Allocated Tips",
     "COVID 100 Sick", "COVID 2/3 Sick", "COVID Family Leave", "Sick", "Other",
     "Owner's Draw", "Unpaid Time Off", "OT Adjustment", "Station Closure",
+    "DA Recognition - TWA",
 ]
 
 # Method options EXACTLY as they appear in UZIO's Method dropdown. These must
@@ -476,6 +477,15 @@ EARNING_DEFAULT_DISPOSABLE = "Yes"
 EARNING_DEFAULT_WORKERS_COMP = "Yes"
 EARNING_DEFAULT_W2_BOX = "Not Required"
 
+# Per-Earning-Type overrides for the "disposable income" / "Workers' Comp" radios.
+# Those two are editable for a few named types (not just "Other"), so the tool
+# sets the right default and the userscript applies it (it self-skips if the field
+# turns out locked). Reimbursements -> both No. "DA Recognition - TWA" keeps the
+# Yes/Yes default, so it needs no entry here.
+EARNING_TYPE_FIELD_DEFAULTS = {
+    "Reimbursements": {"disposable": "No", "workersComp": "No"},
+}
+
 # Rate Determination Factor only appears for "Other" earnings with Hourly=Yes.
 # Then a "Rate" box appears where the value is 1. For everything else: "NA".
 EARNING_RATE_FACTOR_MULTIPLES = "Multiples of Regular Wage Rate"
@@ -607,6 +617,14 @@ def enrich_earnings_for_uzio(rows, start_display_order=20, include_in_ot_map=Non
             )
         else:
             include_ot = EARNING_NA
+        # Disposable-income / Workers'-Comp defaults, with per-type overrides
+        # (e.g. Reimbursements -> No/No).
+        disposable = EARNING_DEFAULT_DISPOSABLE
+        workers_comp = EARNING_DEFAULT_WORKERS_COMP
+        _fov = EARNING_TYPE_FIELD_DEFAULTS.get(etype)
+        if _fov:
+            disposable = _fov.get("disposable", disposable)
+            workers_comp = _fov.get("workersComp", workers_comp)
         out.append({
             **r,
             "Earning Type": etype,
@@ -616,8 +634,8 @@ def enrich_earnings_for_uzio(rows, start_display_order=20, include_in_ot_map=Non
             "Hourly Based Earning": hourly,
             "Rate Determination Factor": rate_factor,
             "Rate": rate_value,
-            "Subject to garnishment disposable income": EARNING_DEFAULT_DISPOSABLE,
-            "Subject to Workers Compensation": EARNING_DEFAULT_WORKERS_COMP,
+            "Subject to garnishment disposable income": disposable,
+            "Subject to Workers Compensation": workers_comp,
             "Taxability Type": taxability,
             EARNING_INCLUDE_OT_COL: include_ot,
             "W-2 Box": EARNING_DEFAULT_W2_BOX,

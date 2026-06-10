@@ -1852,6 +1852,18 @@ def _detect_state_abbrev(name):
     return None
 
 
+def _is_employer_side(name, section):
+    """Employee vs employer side. An explicit EE/ER (or Employee/Employer) in the
+    NAME wins (e.g. 'New Jersey EE SUI' = employee); otherwise the Paycom section
+    decides (Client Side Liabilities = employer)."""
+    d = (name or "").lower()
+    if re.search(r"\bemployer\b", d) or re.search(r"\ber\b", d):
+        return True
+    if re.search(r"\bemployee\b", d) or re.search(r"\bee\b", d):
+        return False
+    return (section or "").strip() == TAX_SECTION_EMPLOYER
+
+
 def _federal_token(name, employer):
     """UZIO federal TYPE token for a Paycom federal tax (None if not federal)."""
     d = (name or "").lower()
@@ -1869,12 +1881,17 @@ def _federal_token(name, employer):
 
 
 def _state_token(name, employer):
-    """UZIO state-level TYPE token (SIT / SUTA / ER_SUTA / SDI), or None."""
+    """UZIO state-level TYPE token, or None. Employer-aware so EE vs ER taxes map
+    to the correct side. Catalog tokens: SIT, SUI (employee unemployment) /
+    ER_SUTA (employer unemployment), SDI (employee) / ER_SDI (employer), FLI."""
     d = (name or "").lower()
+    if "family leave" in d or "fli" in d.split():
+        return "FLI"
     if "sdi" in d or "disability" in d:
-        return "SDI"
+        return "ER_SDI" if employer else "SDI"
     if "suta" in d or "sui" in d or "unemploy" in d:
-        return "ER_SUTA" if employer else "SUTA"
+        # Employee unemployment is the catalog token "SUI"; employer is "ER_SUTA".
+        return "ER_SUTA" if employer else "SUI"
     # State withholding = state income tax. Paycom often omits the word "state"
     # (e.g. "N Carolina W/H"), so "w/h"/"withhold"/"income" is enough.
     if "w/h" in d or "withhold" in d or "income" in d or "sit" in d.split():
@@ -1950,7 +1967,7 @@ def map_tax_to_uzio(code, name, section, catalog, file_default_state=None):
       - candidates = ranked catalog rows (locals) / exact matches (fed/state)
       - tier       = "federal" | "state" | "local" | "unknown"
     """
-    employer = (section or "").strip() == TAX_SECTION_EMPLOYER
+    employer = _is_employer_side(name, section)
 
     # 1) Federal — deterministic.
     ftok = _federal_token(name, employer)
@@ -2612,9 +2629,10 @@ def render_ui():
                 tier = res["tier"]
                 badge = {"federal": "Federal", "state": "State",
                          "local": "Local — find & confirm", "unknown": "Unmapped — find"}.get(tier, tier)
-                # Full finder for locals and anything unmapped; clean dropdown for
-                # Federal/State that mapped confidently.
-                use_finder = (tier == "local") or (res["match"] is None)
+                # Every tax row gets the same finder (State picker + Search +
+                # filtered dropdown) for consistency — pre-selected to the tool's
+                # best guess, so confident Federal/State picks still default right.
+                use_finder = True
 
                 nm_col, pk_col = st.columns([1, 1])
                 with nm_col:

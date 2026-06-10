@@ -500,13 +500,22 @@ EARNING_NA = "NA"
 EARNING_INCLUDE_OT_COL = "Include Bonus in Overtime Calculation"
 EARNING_INCLUDE_OT_DEFAULT = "No"
 
+# "Time Off Policies" dropdown only appears for time-off Earning Types:
+#   - Vacation (e.g. Amazon "Paid Time Off") -> "All" (all policies)
+#   - Unpaid Time Off                         -> "All" (all policies)
+#   - every other type                        -> NA (the field isn't shown)
+# Editable in the Excel if a client needs a specific policy instead of All.
+EARNING_TIMEOFF_COL = "Time Off Policy"
+EARNING_TIMEOFF_VACATION = "All"
+EARNING_TIMEOFF_ALL = "All"
+
 # Canonical column order for the Earnings tab + UI dataframe.
 EARNING_OUTPUT_COLUMNS = [
     "Type Code", "Type Description", "Earning Type", "Earning Name",
     "Display Order", "Paid Earning", "Hourly Based Earning",
     "Rate Determination Factor", "Rate",
     "Subject to garnishment disposable income", "Subject to Workers Compensation",
-    "Taxability Type", EARNING_INCLUDE_OT_COL, "W-2 Box",
+    "Taxability Type", EARNING_INCLUDE_OT_COL, EARNING_TIMEOFF_COL, "W-2 Box",
 ]
 
 
@@ -625,6 +634,14 @@ def enrich_earnings_for_uzio(rows, start_display_order=20, include_in_ot_map=Non
         if _fov:
             disposable = _fov.get("disposable", disposable)
             workers_comp = _fov.get("workersComp", workers_comp)
+        # Time Off Policies dropdown: Vacation -> "Paid PTO", Unpaid Time Off ->
+        # "All", everything else -> NA (field not shown for other types).
+        if etype == "Vacation":
+            timeoff = EARNING_TIMEOFF_VACATION
+        elif etype == "Unpaid Time Off":
+            timeoff = EARNING_TIMEOFF_ALL
+        else:
+            timeoff = EARNING_NA
         out.append({
             **r,
             "Earning Type": etype,
@@ -638,6 +655,7 @@ def enrich_earnings_for_uzio(rows, start_display_order=20, include_in_ot_map=Non
             "Subject to Workers Compensation": workers_comp,
             "Taxability Type": taxability,
             EARNING_INCLUDE_OT_COL: include_ot,
+            EARNING_TIMEOFF_COL: timeoff,
             "W-2 Box": EARNING_DEFAULT_W2_BOX,
         })
         order += 1
@@ -975,7 +993,8 @@ def build_3tab_setup_xlsx(earnings, deductions, contributions):
             "Subject to garnishment disposable income": 36,
             "Subject to Workers Compensation": 28,
             "Taxability Type": 16,
-            "Include Bonus in Overtime Calculation": 32, "W-2 Box": 14,
+            "Include Bonus in Overtime Calculation": 32,
+            "Time Off Policy": 16, "W-2 Box": 14,
         }
         for i, c in enumerate(earn_cols):
             ws_e.set_column(i, i, earn_widths.get(c, 18))

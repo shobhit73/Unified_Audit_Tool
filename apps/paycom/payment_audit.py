@@ -210,9 +210,12 @@ def run_audit(uzio_file, paycom_file):
 
     # 3. Process Paycom Data (Wide Format -> Unpivot)
     paycom_accounts = []
+    paycom_status_map = {}  # resolved EmpID -> Paycom Employee_Status (Active/Terminated/...)
     df_paycom.columns = [str(c).strip() for c in df_paycom.columns]
-    
+
     pc_empid_col = next((c for c in df_paycom.columns if "Employee_Code" in c or "Emp Code" in c), "Employee_Code")
+    # Employee status column (exact match only — avoid Bonus_Status / Net_Status / DOL_Status etc.)
+    pc_status_col = next((c for c in df_paycom.columns if c.strip().lower() in ("employee_status", "employee status")), "")
     
     # Identify Name Columns in Paycom for validation
     # Pria Paycom Cenus.xlsx has: Legal_Firstname, Legal_Lastname, Legal_Middle_Name
@@ -310,8 +313,14 @@ def run_audit(uzio_file, paycom_file):
         
         # Smart Resolve with Name
         emp_id = resolve_paycom_id(raw_id, name_parts, uzio_emp_names)
-        
+
         if not emp_id: continue
+
+        # Capture Paycom employee status (first non-blank wins per employee)
+        if pc_status_col:
+            status_val = norm_str(row.get(pc_status_col))
+            if status_val and emp_id not in paycom_status_map:
+                paycom_status_map[emp_id] = status_val
 
         # --- Extract Distributions (1 to 8) FIRST, so we can sum percents ---
         dist_entries = []
@@ -635,8 +644,13 @@ def run_audit(uzio_file, paycom_file):
                 })
 
     # ---------- Build Output DataFrames ----------
-    comparison_detail = pd.DataFrame(rows)[[
-        "Employee ID", "Employee Name", "Paycom_Account_Class", "Field",
+    comparison_detail = pd.DataFrame(rows)
+    # Employee Status sourced from Paycom (blank for Uzio-only employees not in Paycom)
+    comparison_detail["Employee Status"] = comparison_detail["Employee ID"].map(
+        lambda e: paycom_status_map.get(e, "")
+    )
+    comparison_detail = comparison_detail[[
+        "Employee ID", "Employee Name", "Employee Status", "Paycom_Account_Class", "Field",
         "UZIO_Value", "Paycom_Value", "Paycom_SourceOfTruth_Status"
     ]]
 

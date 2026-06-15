@@ -13,6 +13,14 @@ Three independent cleanups are applied as needed:
      smart-merged into one row without double-counting.
   3. Grand-total row removal: the last row of the file, where the last
      employee's ID got bled into the totals row, is detected and dropped.
+  4. 401k / Roth memo split: when the file has K-401K and/or R-Roth
+     deduction columns, the MEMO column carrying the combined employer
+     match is identified (its entry count equals the number of employees
+     having K-401K or R-Roth; 0.00 counts as an entry) and split -- each
+     employee keeps memo money in the original column up to their K-401K
+     amount, the excess moves to a new 'Roth:<memo column>' column
+     inserted immediately to its right. Ties and count mismatches are
+     flagged so the user picks the memo column (or skips) before running.
 
 Optional Carvan-specific NET PAY <-> TAKE HOME value swap is exposed as
 a checkbox in the UI (default ON) because the API expects them reversed.
@@ -587,6 +595,113 @@ def detect_file_shape(df):
     return facts
 
 
+def _is_entry(v):
+    """An 'entry' is any non-blank cell. 0 / 0.00 counts; blanks, '-', NaN don't."""
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return False
+    return str(v).strip() not in ("", "-", "nan", "NaT")
+
+
+def find_retirement_columns(df):
+    """Locate the K-401K and R-Roth deduction columns (MEMO columns excluded).
+
+    Headers are matched on a lowercase alphanumeric-only normalization so
+    'Voluntary K-401K', 'K-401K' and '401(k)' all hit. Any header containing
+    'roth' is the Roth column and is never picked as the 401k column.
+    """
+    k_col = roth_col = None
+    for c in df.columns:
+        cl = str(c).strip().lower()
+        if "memo" in cl:
+            continue
+        norm = re.sub(r"[^a-z0-9]", "", cl)
+        if "roth" in norm:
+            if roth_col is None:
+                roth_col = c
+            continue
+        if k_col is None and "401k" in norm:
+            k_col = c
+    return k_col, roth_col
+
+
+def detect_memo_split(df):
+    """Find the MEMO column carrying the combined 401k/Roth employer-match money.
+
+    The target count is the number of rows holding an entry in K-401K OR
+    R-Roth. A memo column whose own entry count equals the target is a match.
+    Returns None when not applicable (no retirement columns or no memo
+    columns), otherwise a dict:
+      k_col, roth_col, target, memo_counts {col: count}, matches [cols]
+    """
+    k_col, roth_col = find_retirement_columns(df)
+    if not k_col and not roth_col:
+        return None
+    memo_cols = [c for c in df.columns if "memo" in str(c).strip().lower()]
+    if not memo_cols:
+        return None
+
+    union = pd.Series(False, index=df.index)
+    for col in (k_col, roth_col):
+        if col:
+            union = union | df[col].map(_is_entry)
+    target = int(union.sum())
+
+    memo_counts = {c: int(df[c].map(_is_entry).sum()) for c in memo_cols}
+    matches = [c for c, n in memo_counts.items() if n == target]
+    return {
+        "k_col": k_col,
+        "roth_col": roth_col,
+        "target": target,
+        "memo_counts": memo_counts,
+        "matches": matches,
+    }
+
+
+def split_memo_column(df, memo_col, k_col):
+    """Split the matched memo column into 401k vs Roth employer-match portions.
+
+    Per row: the memo value stays in `memo_col` up to the row's K-401K value;
+    the excess moves to a new 'Roth:<memo_col>' column inserted immediately to
+    the right of `memo_col`. Rows with no K-401K value (or when the file has
+    no K-401K column at all) move the entire memo value. Rows whose memo fits
+    inside the K-401K amount are left untouched, Roth cell blank.
+
+    Returns (new_df, {"new_col": name, "rows_split": n}).
+    """
+    df = df.copy()
+    new_col = f"Roth:{memo_col}"
+    if new_col in df.columns:
+        i = 1
+        while f"{new_col}.{i}" in df.columns:
+            i += 1
+        new_col = f"{new_col}.{i}"
+
+    kept_vals = []
+    roth_vals = []
+    rows_split = 0
+    for idx in df.index:
+        memo_raw = df.at[idx, memo_col]
+        memo_val = _to_float(memo_raw)
+        if memo_val is None:
+            kept_vals.append(memo_raw)
+            roth_vals.append("")
+            continue
+        k_val = _to_float(df.at[idx, k_col]) if k_col else None
+        roth_amt = round(max(0.0, memo_val - (k_val or 0.0)), 2)
+        if roth_amt > 0:
+            rows_split += 1
+            kept = round(memo_val - roth_amt, 2)
+            kept_vals.append(kept if kept != 0 else "")
+            roth_vals.append(roth_amt)
+        else:
+            kept_vals.append(memo_raw)
+            roth_vals.append("")
+
+    df[memo_col] = kept_vals
+    df.insert(df.columns.get_loc(memo_col) + 1, new_col, roth_vals)
+    return df, {"new_col": new_col, "rows_split": rows_split}
+
+
 def render_ui():
     st.title("ADP - Prior Payroll Sanity Check")
     st.markdown(
@@ -601,9 +716,14 @@ def render_ui():
            smart-merged into one without double-counting.
         3. **Grand-total row removal** -- the bottom-of-file totals row where the
            previous employee's ID leaked is dropped.
+        4. **401k / Roth memo split** -- when K-401K / R-Roth deductions exist, the
+           MEMO column carrying the combined employer match is identified by entry
+           count and split: each employee keeps memo money up to their K-401K amount,
+           the excess moves to a new `Roth:<memo column>` column.
 
         Upload an `.xlsx` / `.xls` / `.csv`. The cleaned output is **always a `.csv`** with
-        the **exact same column headers and order** as the input.
+        the **exact same column headers and order** as the input (plus the new Roth
+        memo column when the split applies).
         """
     )
 
@@ -676,6 +796,93 @@ def render_ui():
     )
     agg_strategy = "Full Quarter (Default)" if agg_choice.startswith("Full Quarter") else "Preserve Pay Periods"
 
+    # ------------------------------------------------------------------
+    # Step 2.5: Apply the chosen strategy in-memory so the 401k/Roth memo
+    # detection runs on aggregated data ("aggregate first, then count"),
+    # and let the user confirm the memo split before running.
+    # ------------------------------------------------------------------
+    try:
+        with st.spinner("Applying strategy and analyzing memo columns..."):
+            mode, period_info = detect_per_pay_period_structure(df_b)
+            agg_info = None
+            merge_events = None
+
+            if mode == "aggregate":
+                if agg_strategy == "Full Quarter (Default)":
+                    df_c, agg_info = aggregate_by_associate(df_b)
+                else:
+                    df_c, merge_events = merge_duplicate_pay_periods(df_b)
+                    mode = "preserve"
+            else:
+                df_c = df_b
+
+            memo_info = detect_memo_split(df_c)
+    except Exception as e:
+        st.error(f"Failed to process the file: {e}")
+        return
+
+    chosen_memo = None
+    if memo_info and memo_info["target"] > 0:
+        k_col = memo_info["k_col"]
+        roth_col = memo_info["roth_col"]
+        matches = memo_info["matches"]
+        ded_desc = " / ".join(f"`{c}`" for c in (k_col, roth_col) if c)
+
+        st.markdown("### 401k / Roth memo split")
+        if not roth_col:
+            if matches:
+                st.info(
+                    f"Memo column `{matches[0]}` matches the {memo_info['target']} employees "
+                    f"with {ded_desc}, but this file has no R-Roth column -- all memo money "
+                    f"already belongs to 401k, so no split is needed."
+                )
+        elif len(matches) == 1:
+            chosen_memo = matches[0]
+            if k_col:
+                action_txt = (
+                    f"each employee keeps memo money up to their `{k_col}` amount, "
+                    f"the excess moves to a new `Roth:{chosen_memo}` column"
+                )
+            else:
+                action_txt = (
+                    f"there is no K-401K column, so each memo value moves entirely "
+                    f"to a new `Roth:{chosen_memo}` column"
+                )
+            st.success(
+                f"Matched memo column **`{chosen_memo}`** -- its entry count "
+                f"({memo_info['target']}) equals the number of employees having "
+                f"{ded_desc}. On run, {action_txt}."
+            )
+        elif len(matches) > 1:
+            st.warning(
+                f"**Multiple memo columns tie** at {memo_info['target']} entries "
+                f"(= employees with {ded_desc}): "
+                + ", ".join(f"`{c}`" for c in matches)
+                + ". Pick the one carrying the 401k/Roth employer match, or skip the split."
+            )
+            pick = st.selectbox(
+                "Memo column to split",
+                options=["(Don't split)"] + matches,
+                index=0,
+                key="pps_memo_pick_tie",
+            )
+            chosen_memo = None if pick == "(Don't split)" else pick
+        else:
+            counts_txt = ", ".join(f"`{c}` = {n}" for c, n in memo_info["memo_counts"].items())
+            st.warning(
+                f"**No memo column matched.** {memo_info['target']} employees have "
+                f"{ded_desc}, but the memo entry counts are: {counts_txt}. "
+                f"You can still pick one manually, or skip the split."
+            )
+            label_map = {f"{c}  ({n} entries)": c for c, n in memo_info["memo_counts"].items()}
+            pick = st.selectbox(
+                "Memo column to split",
+                options=["(Don't split)"] + list(label_map.keys()),
+                index=0,
+                key="pps_memo_pick_manual",
+            )
+            chosen_memo = label_map.get(pick)
+
     swap_net_take = st.checkbox(
         "Swap NET PAY and TAKE HOME values (the Carvan-style API expects them reversed)",
         value=True,
@@ -691,22 +898,13 @@ def render_ui():
         return
 
     # ------------------------------------------------------------------
-    # Step 3: Apply the chosen strategy.
+    # Step 3: Apply the confirmed memo split + optional swap.
     # ------------------------------------------------------------------
     try:
-        with st.spinner("Applying chosen strategy..."):
-            mode, period_info = detect_per_pay_period_structure(df_b)
-            agg_info = None
-            merge_events = None
-
-            if mode == "aggregate":
-                if agg_strategy == "Full Quarter (Default)":
-                    df_c, agg_info = aggregate_by_associate(df_b)
-                else:
-                    df_c, merge_events = merge_duplicate_pay_periods(df_b)
-                    mode = "preserve"
-            else:
-                df_c = df_b
+        with st.spinner("Finalizing..."):
+            split_info = None
+            if chosen_memo:
+                df_c, split_info = split_memo_column(df_c, chosen_memo, memo_info["k_col"])
 
             swapped = False
             if swap_net_take:
@@ -755,6 +953,18 @@ def render_ui():
             f"Preserved distinct pay periods. Successfully merged {len(merge_events)} "
             f"same-day duplicate row pairs." if merge_events else "Preserved distinct pay periods. No same-day duplicates found."
         )
+    if split_info:
+        if memo_info["k_col"]:
+            note_lines.append(
+                f"Split memo column `{chosen_memo}`: each employee kept memo money up to their "
+                f"`{memo_info['k_col']}` amount; the excess for {split_info['rows_split']} employee(s) "
+                f"moved to the new `{split_info['new_col']}` column."
+            )
+        else:
+            note_lines.append(
+                f"No K-401K column exists, so the memo value for {split_info['rows_split']} employee(s) "
+                f"in `{chosen_memo}` moved entirely to the new `{split_info['new_col']}` column."
+            )
     if swapped:
         note_lines.append("Swapped NET PAY and TAKE HOME values.")
     elif swap_net_take and not swapped:
@@ -762,7 +972,7 @@ def render_ui():
     if note_lines:
         st.warning("\n".join("- " + line for line in note_lines))
 
-    if mode == "none" and not summary_removed and not gt_info:
+    if mode == "none" and not summary_removed and not gt_info and not split_info:
         st.info("No issues detected -- the cleaned output is identical to the input (minus formula evaluation).")
 
     with st.expander(f"Preview cleaned data ({final_count} rows)", expanded=False):

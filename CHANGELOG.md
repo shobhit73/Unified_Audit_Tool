@@ -2,7 +2,13 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
-## [2026-05-15] - Status & FLSA Standardization
+## [2026-06-11] - ADP Prior Payroll Sanity: 401k / Roth Memo Split
+
+### Added
+- **401k / Roth employer-match memo split** (ADP Prior Payroll Sanity Check): when the file has `K-401K` and/or `R-Roth` deduction columns, the tool identifies the MEMO column carrying the combined employer-match money — the memo column whose entry count equals the number of employees having K-401K **or** R-Roth (a `0.00` cell counts as an entry; blanks and `-` don't).
+    - **Split rule (per employee)**: memo money stays in the matched memo column up to the employee's K-401K amount; all excess moves to a new `Roth:<memo column>` column inserted immediately to its right. Employees with no K-401K value move the entire memo amount.
+    - **Tie or no count match**: the tool flags it and the user picks the memo column manually (or skips the split) before running. An unambiguous match is shown for confirmation and applied on run.
+    - Detection runs **after** aggregation (on the final cleaned rows), under whichever aggregation strategy is selected.
 
 ### Added
 - **MCP Server Sync**: All census sanity and auto-fix rules are now fully synchronized with the `audit_fast_api` MCP server.

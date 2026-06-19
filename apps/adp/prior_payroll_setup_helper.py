@@ -1190,10 +1190,11 @@ def extract_adp_taxes(df, tax_cols):
         name = re.sub(r"\s*-\s*EMPLOY(EE|ER)\s+TAX$", "", u).strip()
         n = name.lower()
 
-        def add(state, tokens, tier):
+        def add(state, tokens, tier, sub_pref=None):
             rows.append({
                 "Tax Column": raw, "Tax Name": _smart_title(name), "Side": side,
                 "State": state, "Tokens": tokens, "Tier": tier,
+                "Sub Pref": sub_pref,
             })
 
         if "federal income" in n:
@@ -1211,10 +1212,17 @@ def extract_adp_taxes(df, tax_cols):
             toks = ["ER_SUTA", "ER_SDI"] if employer else ["SDI", "SUI"]
             for st_ab in (states or [None]):
                 add(st_ab, toks, "state")
+        elif "medical leave" in n:
+            # PFML states (e.g. MA) split Family vs Medical leave into separate
+            # ADP columns that share the FLI catalog tax but differ only by
+            # sub_tax_desc — carry a preference so the matcher picks the right one.
+            toks = ["ER_FLI"] if employer else ["FLI"]
+            for st_ab in (states or [None]):
+                add(st_ab, toks, "state", sub_pref="medical")
         elif "family leave" in n or "fli" in n:
             toks = ["ER_FLI"] if employer else ["FLI"]
             for st_ab in (states or [None]):
-                add(st_ab, toks, "state")
+                add(st_ab, toks, "state", sub_pref="family")
         elif "mta" in n:
             add("NY", ["ER_POP"], "state")
         elif "local" in n:
@@ -1237,11 +1245,22 @@ def adp_tax_best_match(row, catalog):
                  and "mctmt" in r["tax_name"].lower()]
         if mctmt:
             return mctmt[0]
+    sub_pref = row.get("Sub Pref")
     for tok in tokens:
         hits = [r for r in pool if _uti_token(r["unique_tax_id"]) == tok]
+        if not hits:
+            continue
+        # FLI families (e.g. MA Paid FMLY & Medical Leave) carry multiple catalog
+        # rows that differ only by sub_tax_desc — narrow to the family/medical
+        # variant this column is about. Single-row FLI states (NY, NJ, CT...) have
+        # nothing to narrow, so they're unaffected.
+        if sub_pref and tok in ("FLI", "ER_FLI"):
+            kw = "MEDICAL" if sub_pref == "medical" else "FAMILY"
+            pref = [r for r in hits if kw in (r.get("sub_tax_desc") or "").upper()]
+            if pref:
+                hits = pref
         statewide = next((r for r in hits if _is_statewide(r)), None)
-        if statewide or hits:
-            return statewide or hits[0]
+        return statewide or hits[0]
     return None
 
 
@@ -1251,12 +1270,12 @@ def build_adp_tax_mapping_rows(taxes, resolved):
     rows = []
     for t in taxes:
         m = resolved.get(adp_tax_key(t))
-        state = t.get("State")
-        desc = t["Side"] + (f" ({state})" if state and state != "FED" else "")
         rows.append({
             "Source Tax Code": "",
             "Source Tax Code Name": t["Tax Column"],
-            "Source Tax Code Description": desc,
+            # ADP doesn't use this column — keep the header for template parity
+            # but leave it blank (per the client tax-mapping sample).
+            "Source Tax Code Description": "",
             "Uzio Tax Code": (m or {}).get("tax_code", ""),
             "Unique Tax ID": (m or {}).get("unique_tax_id", ""),
             "Uzio Tax Code Description": (m or {}).get("tax_name", ""),
@@ -2508,17 +2527,10 @@ def _render_tax_mapping_section(results, src_name):
     if unmapped:
         st.warning(
             f"**{len(unmapped)} tax(es) unmapped**: "
-            f"`{'; '.join(r['Source Tax Code Name'] + ' ' + r['Source Tax Code Description'] for r in unmapped)}` "
-            "— pick them in the finder above before downloading."
+            f"`{'; '.join(r['Source Tax Code Name'] for r in unmapped)}` "
+            "— pick them in the finder above. (The Tax mapping CSV ships in the "
+            "**Download all mapping CSVs** bundle below.)"
         )
-    base = (src_name or "ADP_Prior_Payroll").rsplit(".", 1)[0]
-    st.download_button(
-        "Download Tax Mapping CSV",
-        data=_csv_bytes(mapping_rows, MAPPING_TAX_COLUMNS),
-        file_name=f"{base}_Tax_Mapping.csv",
-        mime="text/csv",
-        key="adp_ppsh_tax_dl",
-    )
     st.markdown("---")
     return mapping_rows
 

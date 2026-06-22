@@ -991,6 +991,16 @@ CONTRIBUTION_OUTPUT_COLUMNS = [
 
 _MEMO_PREFIX_RE = re.compile(r"^MEMO\s*:?\s*", re.IGNORECASE)
 _MATCH_WORD_RE = re.compile(r"\bmatch\b", re.IGNORECASE)
+# "Roth:MEMO : N" — the Roth-match column the Sanity-Check 401k/Roth split carves
+# out of a combined memo column. Recognized as the Roth 401k match.
+_ROTH_PREFIX_RE = re.compile(r"^\s*roth\s*:", re.IGNORECASE)
+
+# Value-based employer-match test thresholds. A real match is a SMALL slice of
+# each person's gross (never the whole paycheck), and it only appears where the
+# employee has a 401k/Roth deferral.
+_CONTRIB_RATIO_MIN = 0.003     # 0.3% of gross
+_CONTRIB_RATIO_MAX = 0.10      # 10% of gross  (gross-equal memos like "J" ~ 1.0)
+_CONTRIB_COOCCUR_MIN = 0.60    # >=60% of the column's rows also have a deferral
 
 
 def _format_formula(tiers):
@@ -1002,26 +1012,117 @@ def _format_formula(tiers):
     return "; ".join(parts)
 
 
-def adp_contributions_from_memos(df, memo_cols):
-    """Extract employer contributions from MEMO columns whose label contains the
-    word MATCH. Returns setup rows (Type Code / Type Description + `_` stats)."""
-    rows = []
-    for c in memo_cols or []:
-        raw = str(c).strip()
-        label = _MEMO_PREFIX_RE.sub("", raw).strip()
-        if not _MATCH_WORD_RE.search(label):
+def _memo_candidate_cols(df):
+    """Every MEMO column plus any 'Roth:MEMO ...' split column (excluding the
+    TOTAL MEMOS aggregate). These are the options the contribution picker shows."""
+    out = []
+    for c in df.columns:
+        s = str(c).strip()
+        u = s.upper()
+        if u.startswith("TOTAL"):
             continue
-        code, desc = _split_code_desc(label)
-        desc = _smart_title(desc) if desc else code
+        if u.startswith("MEMO") or _ROTH_PREFIX_RE.match(s):
+            out.append(c)
+    return out
+
+
+def _retirement_deferral_cols(df):
+    """Employee 401k / Roth deferral DEDUCTION columns (memos excluded) — used to
+    confirm a memo's match money lines up with people who actually defer."""
+    out = []
+    for c in df.columns:
+        u = str(c).strip().upper()
+        if u.startswith("VOLUNTARY DEDUCTION") and ("401" in u or "ROTH" in u):
+            out.append(c)
+    return out
+
+
+def _looks_like_employer_match(df, col, gross_col, deferral_cols):
+    """Value-based test (name-blind): the column's dollars are a small % of each
+    person's gross AND most of its rows co-occur with a 401k/Roth deferral.
+    Rejects gross-equal memos (ratio ~1.0) and flat trackers (no deferral link)."""
+    if gross_col is None:
+        return False
+    ratios, with_deferral, n = [], 0, 0
+    for _, row in df.iterrows():
+        v = _num(row.get(col))
+        if v <= 0:
+            continue
+        g = _num(row.get(gross_col))
+        if g <= 0:
+            continue
+        n += 1
+        ratios.append(v / g)
+        if any(_num(row.get(d)) > 0 for d in deferral_cols):
+            with_deferral += 1
+    if n < 3 or not ratios:
+        return False
+    ratios.sort()
+    typical = ratios[len(ratios) // 2]   # median ratio to gross
+    if not (_CONTRIB_RATIO_MIN <= typical <= _CONTRIB_RATIO_MAX):
+        return False
+    return (with_deferral / n) >= _CONTRIB_COOCCUR_MIN
+
+
+def _memo_contribution_name(raw_col):
+    """(kind, display_name) for a memo column. kind = 'roth' / '401k'. Uses a
+    descriptive label when present (e.g. 'K-401K MATCH' -> '401K Match'); opaque
+    codes (e.g. 'N') fall back to a generic name by kind."""
+    raw = str(raw_col).strip()
+    low = raw.lower()
+    kind = "roth" if (_ROTH_PREFIX_RE.match(raw) or "roth" in low) else "401k"
+    default_name = "Roth 401K Match" if kind == "roth" else "401K Match"
+    label = _MEMO_PREFIX_RE.sub("", _ROTH_PREFIX_RE.sub("", raw)).strip()
+    code, desc = _split_code_desc(label)
+    desc = _smart_title(desc) if desc else ""
+    if desc and any(k in desc.lower() for k in ("401", "roth", "match")):
+        name = desc
+    else:
+        name = default_name
+    return kind, (code or label or name), name
+
+
+def build_memo_candidate_rows(df):
+    """One setup-row per memo candidate column, each flagged `_Detected` if the
+    three-tier auto-detection thinks it's an employer contribution:
+      1. label contains 'MATCH'         (fast path, e.g. Happy Delivery)
+      2. 'Roth:<col>' split column      (Roth 401k match)
+      3. value-based match              (small % of gross + deferral co-occurrence)
+    Empty (all-zero) columns are never auto-detected. The UI shows every
+    candidate so the user can override the auto-pick."""
+    gross_col = _find_col(df, ["GROSS PAY"])
+    deferral_cols = _retirement_deferral_cols(df)
+    cands = []
+    for c in _memo_candidate_cols(df):
+        raw = str(c).strip()
+        label = _MEMO_PREFIX_RE.sub("", _ROTH_PREFIX_RE.sub("", raw)).strip()
         amounts = df[c].apply(_num)
-        rows.append({
+        total = round(float(amounts.sum()), 2)
+        emp = int((amounts != 0).sum())
+        has_money = float(amounts.abs().sum()) > 0
+        is_match_kw = bool(_MATCH_WORD_RE.search(label))
+        is_roth_split = bool(_ROTH_PREFIX_RE.match(raw))
+        is_value = _looks_like_employer_match(df, c, gross_col, deferral_cols)
+        detected = has_money and (is_match_kw or is_roth_split or is_value)
+        kind, code, name = _memo_contribution_name(raw)
+        cands.append({
             "Type Code": code,
-            "Type Description": desc,
+            "Type Description": name,
+            "_Source Column": raw,
             "_Source Label": raw,
-            "_Total $": round(float(amounts.sum()), 2),
-            "_Employees": int((amounts != 0).sum()),
+            "_Total $": total,
+            "_Employees": emp,
+            "_Detected": detected,
+            "_Kind": kind,
         })
-    return _dedupe_setup_rows(rows)
+    return cands
+
+
+def build_contributions_from_memo_cols(candidates, selected_cols):
+    """Pick the candidate rows for the user-selected memo columns (the manual
+    override). Order follows `selected_cols`."""
+    by_col = {c["_Source Column"]: c for c in (candidates or [])}
+    return [by_col[col] for col in (selected_cols or []) if col in by_col]
 
 
 def map_contribution_to_deduction(type_code, type_description, available_deduction_masters):
@@ -1857,9 +1958,10 @@ def run_setup_helper(adp_files, master_csv_file=None):
         "States_Detected": [{"State": s} for s in states],
         "Bonus_Classification": bonus_rows,
         "Bonus_Sample_Rows": bonus_info["samples"],
-        # New UZIO-setup sections: employer matches from MEMO columns, and the
-        # structured tax rows for the catalog-based mapping UI.
-        "Contribs_Memo": adp_contributions_from_memos(df, cats["memos"]),
+        # New UZIO-setup sections: every MEMO candidate column (with auto-detect
+        # flags) for the Contributions picker, and the structured tax rows for
+        # the catalog-based mapping UI.
+        "Memo_Candidates": build_memo_candidate_rows(df),
         "ADP_Taxes": extract_adp_taxes(df, cats["taxes"]),
     }
     csv_bytes = tax_mapping_to_csv_bytes(tax_mapping_rows)
@@ -2342,11 +2444,53 @@ def _render_contribution_setup_section(results, enriched_deds):
     Lets the user link each contribution to a company deduction (defaults for
     401k / Roth 401k / Medical), rename it, and review the form fields.
     Returns the enriched rows for the combined setup workbook."""
-    contrib_rows = results.get("Contribs_Memo") or []
+    candidates = results.get("Memo_Candidates") or []
 
     st.markdown("## UZIO Contribution Setup")
+    if not candidates:
+        st.caption("(no MEMO columns found in the file(s))")
+        st.markdown("---")
+        return []
+
+    # ── Which MEMO columns are employer contributions? (auto + manual override)
+    # Auto-detection (name "MATCH" / Roth: split column / value-based small-%-of-
+    # gross-tied-to-a-deferral) pre-selects the picker; the user corrects it when
+    # the tool guesses wrong (e.g. a gross-pay memo) or misses one.
+    detected_cols = [c["_Source Column"] for c in candidates if c.get("_Detected")]
+    all_cols = [c["_Source Column"] for c in candidates]
+
+    def _opt_label(col):
+        c = next((x for x in candidates if x["_Source Column"] == col), None)
+        if not c:
+            return col
+        tag = "  ·  auto-detected" if c.get("_Detected") else ""
+        return f"{col}   (${c.get('_Total $', 0):,.2f}, {c.get('_Employees', 0)} emp){tag}"
+
+    st.caption(
+        "Employer match money lives in `MEMO` columns. The tool auto-detects them "
+        "by name (contains **MATCH**), by `Roth:` split columns, or by **value** "
+        "(a small % of gross that lines up with a 401k/Roth deferral). If the "
+        "auto-pick is wrong, fix it here — every selected column becomes a "
+        "contribution; deselect ones that aren't (e.g. a gross-pay or PTO memo)."
+    )
+    selected_cols = st.multiselect(
+        "Memo columns to treat as employer contributions",
+        options=all_cols,
+        default=detected_cols,
+        format_func=_opt_label,
+        key="adp_ppsh_contrib_cols",
+        help="Pre-selected with what the tool detected. Add a column it missed, "
+             "or remove a wrong one.",
+    )
+    contrib_rows = build_contributions_from_memo_cols(candidates, selected_cols)
     if not contrib_rows:
-        st.caption("(no employer-match memo columns found in the file(s))")
+        if detected_cols:
+            st.caption("(no memo columns selected — pick at least one above)")
+        else:
+            st.caption(
+                "(nothing auto-detected as an employer match — if this client has "
+                "a 401k/Roth match, pick its MEMO column above)"
+            )
         st.markdown("---")
         return []
 

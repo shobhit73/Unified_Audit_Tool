@@ -726,6 +726,7 @@ ADP_DEDUCTION_CODE_SEEDS = {
     "STD": "Voluntary STD After-tax",
     "SPT": "Voluntary STD After-tax",
     "VEE": "Voluntary Life Employee After-tax",
+    "WEE": "Whole Life Insurance After-tax",
     "VCH": ("Voluntary Life Child Pre-tax", "Voluntary Life Child After-tax"),
     "VSP": ("Voluntary Life Spouse Pre-tax", "Voluntary Life Spouse After-tax"),
     "DEN": ("Dental Pre-tax", "Dental After-tax"),

@@ -686,11 +686,12 @@ FIXED_DOLLAR_MASTERS = {
     "reverse / reissue",
 }
 
-# Benefit-type masters show the "Auto-Sync from Uzio Benefits" radio.
+# Benefit-type masters show the "Auto-Sync from Uzio Benefits" radio (and, being
+# benefit types, also Track arrears = Yes / Arrears Processing = Total Amount).
 BENEFIT_TYPE_KEYWORDS = (
     "dental", "medical", "vision", "voluntary life", "critical illness",
     "accident insurance", "cancer insurance", "hospital indemnity",
-    "voluntary std", "ad&d",
+    "voluntary std", "ad&d", "whole life",
 )
 
 # Masters whose "Assign to all employees" is FORCED Yes + disabled by UZIO.

@@ -183,6 +183,7 @@ flowchart TD
 | **Payment & Emergency Audit** | `apps/adp/payment_audit.py` + `emergency_audit.py` | Reviews bank account and emergency contact data. |
 | **Withholding Audit** | `apps/adp/withholding_audit.py` | Audits Federal/State tax withholding parameters. |
 | **Prior Payroll Audit** | `apps/adp/prior_payroll_audit.py` | Transforms prior payroll input files into a grouped, wide-format validation report. |
+| **Prior Payroll Sanity Check** | `apps/adp/prior_payroll_sanity.py` | Cleans a prior payroll export: per-pay-period aggregation, duplicate merge, grand-total removal, 401k/Roth memo split, and auto-adds missing `PERIOD BEGINNING DATE` / `PERIOD ENDING DATE` / `PAY DATE` columns (from the `..._MMDDYYYY_MMDDYYYY_MMDDYYYY` filename or manual input) between `WORKED IN STATE` and `GROSS PAY`. |
 | **Prior Payroll Generator** | `apps/adp/prior_payroll_generator.py` | Converts prior payroll data into Uzio import format. |
 | **License Audit** | `apps/adp/license_audit.py` | Audits driver license numbers and expiration dates. |
 | **Time Off Audit** | `apps/adp/timeoff_audit.py` | Reconciles PTO/vacation balances and accruals. |

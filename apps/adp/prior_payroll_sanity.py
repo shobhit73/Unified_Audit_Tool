@@ -21,6 +21,16 @@ Three independent cleanups are applied as needed:
      amount, the excess moves to a new 'Roth:<memo column>' column
      inserted immediately to its right. Ties and count mismatches are
      flagged so the user picks the memo column (or skips) before running.
+  5. Pay-period date columns: consolidated quarter files often arrive
+     without PERIOD BEGINNING DATE / PERIOD ENDING DATE / PAY DATE, which
+     the downstream API requires. When any of the three is missing, the
+     dates are read from the filename (three 8-digit MMDDYYYY blocks
+     joined by underscores, in begin_end_pay order, e.g.
+     PriorPayroll_01012026_01072026_01142026.xlsx) and the missing
+     columns are inserted between WORKED IN STATE and GROSS PAY, stamped
+     on every row as MM/DD/YYYY text. If the filename has no parseable
+     dates, the user enters the three dates manually in the UI. Columns
+     already present are never modified.
 
 Optional Carvan-specific NET PAY <-> TAKE HOME value swap is exposed as
 a checkbox in the UI (default ON) because the API expects them reversed.
@@ -31,6 +41,8 @@ order preserved. Input accepts .xlsx / .xls / .csv.
 
 import re
 import io
+from datetime import datetime
+
 import streamlit as st
 import pandas as pd
 import openpyxl
@@ -48,6 +60,78 @@ def _find_col(df, candidates):
             if cand.lower() in str(c).strip().lower():
                 return c
     return None
+
+
+# Canonical headers for the API-required date columns, in insertion order.
+PERIOD_DATE_COLUMNS = ["PERIOD BEGINNING DATE", "PERIOD ENDING DATE", "PAY DATE"]
+
+_FILENAME_DATES_RE = re.compile(r"(?<!\d)(\d{8})_(\d{8})_(\d{8})(?!\d)")
+
+
+def check_period_date_columns(df):
+    """Report which of the three API-required date columns exist in the file.
+
+    Matching reuses _find_col semantics (case-insensitive, substring), so an
+    existing 'Pay Date' or 'Check Date' counts as PAY DATE being present.
+    Returns (found_map {canonical: actual_col_or_None}, missing_list).
+    """
+    found = {
+        "PERIOD BEGINNING DATE": _find_col(df, ["Period Beginning Date", "Period Begin Date"]),
+        "PERIOD ENDING DATE": _find_col(df, ["Period Ending Date", "Period End Date"]),
+        "PAY DATE": _find_col(df, ["Pay Date", "Check Date"]),
+    }
+    missing = [c for c in PERIOD_DATE_COLUMNS if found[c] is None]
+    return found, missing
+
+
+def parse_filename_dates(filename):
+    """Extract the three pay-period dates from the uploaded file's name.
+
+    The name must contain exactly one run of three 8-digit MMDDYYYY blocks
+    joined by underscores, in <begin>_<end>_<pay> order, e.g.
+    'PriorPayroll_01012026_01072026_01142026.xlsx'. Each block must be a
+    real calendar date. Returns {canonical_col: 'MM/DD/YYYY'} or None.
+    """
+    matches = _FILENAME_DATES_RE.findall(str(filename or ""))
+    if len(matches) != 1:
+        return None
+    out = {}
+    for col, block in zip(PERIOD_DATE_COLUMNS, matches[0]):
+        try:
+            out[col] = datetime.strptime(block, "%m%d%Y").strftime("%m/%d/%Y")
+        except ValueError:
+            return None
+    return out
+
+
+def insert_period_date_columns(df, dates, missing):
+    """Insert the missing date columns between WORKED IN STATE and GROSS PAY,
+    stamping every row with the same MM/DD/YYYY string. Columns already in the
+    file are never touched. Falls back to inserting before GROSS PAY, then to
+    after WORKED IN STATE, then to appending at the end.
+
+    Returns (new_df, {"added": [cols], "placement": key}).
+    """
+    df = df.copy()
+    gross_col = _find_col(df, ["Gross Pay"])
+    state_col = _find_col(df, ["Worked In State"])
+    if gross_col is not None:
+        pos = df.columns.get_loc(gross_col)
+        placement = "between" if state_col is not None else "before_gross"
+    elif state_col is not None:
+        pos = df.columns.get_loc(state_col) + 1
+        placement = "after_state"
+    else:
+        pos = len(df.columns)
+        placement = "appended"
+
+    added = []
+    for col in PERIOD_DATE_COLUMNS:
+        if col in missing:
+            df.insert(pos, col, dates[col])
+            pos += 1
+            added.append(col)
+    return df, {"added": added, "placement": placement}
 
 
 _ROUND_FORMULA_RE = re.compile(r"^=ROUND\(\s*(-?[\d.]+)\s*,\s*[\d.]+\s*\)\s*$", re.IGNORECASE)
@@ -720,6 +804,11 @@ def render_ui():
            MEMO column carrying the combined employer match is identified by entry
            count and split: each employee keeps memo money up to their K-401K amount,
            the excess moves to a new `Roth:<memo column>` column.
+        5. **Missing pay-period date columns** -- when `PERIOD BEGINNING DATE`,
+           `PERIOD ENDING DATE`, or `PAY DATE` is absent (consolidated quarter files),
+           the dates are read from the filename (`..._MMDDYYYY_MMDDYYYY_MMDDYYYY...`,
+           begin / end / pay order) or entered manually, and the missing columns are
+           inserted between `WORKED IN STATE` and `GROSS PAY` on every row.
 
         Upload an `.xlsx` / `.xls` / `.csv`. The cleaned output is **always a `.csv`** with
         the **exact same column headers and order** as the input (plus the new Roth
@@ -747,6 +836,11 @@ def render_ui():
             original_count = len(df_in)
             df_a, summary_removed = drop_summary_rows(df_in)
             df_b, gt_info = detect_grand_total_row(df_a)
+            date_found, date_missing = check_period_date_columns(df_b)
+            fname_dates = parse_filename_dates(file.name) if date_missing else None
+            date_fix_info = None
+            if date_missing and fname_dates:
+                df_b, date_fix_info = insert_period_date_columns(df_b, fname_dates, date_missing)
             facts = detect_file_shape(df_b)
     except Exception as e:
         st.error(f"Failed to read the file: {e}")
@@ -785,6 +879,58 @@ def render_ui():
     else:
         st.warning(f"**Recommendation: please choose explicitly.**  \n{facts['recommendation_reason']}")
         default_radio_idx = 0
+
+    # ------------------------------------------------------------------
+    # Step 2.2: Pay-period date columns (API requirement). Priority:
+    # columns present -> untouched; missing -> filename dates; filename
+    # unparseable -> manual date inputs (required before Run).
+    # ------------------------------------------------------------------
+    _PLACEMENT_TXT = {
+        "between": "between `WORKED IN STATE` and `GROSS PAY`",
+        "before_gross": "before `GROSS PAY` (no `WORKED IN STATE` column found)",
+        "after_state": "after `WORKED IN STATE` (no `GROSS PAY` column found)",
+        "appended": "at the end of the file (neither `WORKED IN STATE` nor `GROSS PAY` found)",
+    }
+    manual_dates = None
+    if not date_missing:
+        st.caption(
+            "Pay-period date columns (PERIOD BEGINNING DATE / PERIOD ENDING DATE / "
+            "PAY DATE) are already present -- left untouched."
+        )
+    else:
+        st.markdown("### Pay-period date columns")
+        missing_txt = ", ".join(f"`{c}`" for c in date_missing)
+        if fname_dates:
+            st.success(
+                f"The file is missing {missing_txt}. Dates were read from the "
+                f"filename and will be stamped on every row "
+                f"({_PLACEMENT_TXT[date_fix_info['placement']]}):  \n"
+                f"Period Beginning **{fname_dates['PERIOD BEGINNING DATE']}** · "
+                f"Period Ending **{fname_dates['PERIOD ENDING DATE']}** · "
+                f"Pay Date **{fname_dates['PAY DATE']}**.  \n"
+                f"Please confirm these look right before running."
+            )
+        else:
+            st.warning(
+                f"The file is missing {missing_txt}, and the filename does not "
+                f"contain three underscore-separated MMDDYYYY dates (expected e.g. "
+                f"`PriorPayroll_01012026_01072026_01142026.xlsx`). Enter the dates "
+                f"below -- they will be stamped on every row."
+            )
+            dcol1, dcol2, dcol3 = st.columns(3)
+            d_begin = dcol1.date_input("Period Beginning Date", value=None,
+                                       format="MM/DD/YYYY", key="pps_date_begin")
+            d_end = dcol2.date_input("Period Ending Date", value=None,
+                                     format="MM/DD/YYYY", key="pps_date_end")
+            d_pay = dcol3.date_input("Pay Date", value=None,
+                                     format="MM/DD/YYYY", key="pps_date_pay")
+            if d_begin and d_end and d_pay:
+                manual_dates = {
+                    "PERIOD BEGINNING DATE": d_begin.strftime("%m/%d/%Y"),
+                    "PERIOD ENDING DATE": d_end.strftime("%m/%d/%Y"),
+                    "PAY DATE": d_pay.strftime("%m/%d/%Y"),
+                }
+                df_b, date_fix_info = insert_period_date_columns(df_b, manual_dates, date_missing)
 
     st.markdown("### Confirm strategy and run")
     agg_choice = st.radio(
@@ -897,6 +1043,10 @@ def render_ui():
     if not st.button("Run Sanity Check with this strategy", type="primary", use_container_width=True):
         return
 
+    if date_missing and date_fix_info is None:
+        st.error("Please fill in all three pay-period dates above before running.")
+        return
+
     # ------------------------------------------------------------------
     # Step 3: Apply the confirmed memo split + optional swap.
     # ------------------------------------------------------------------
@@ -931,6 +1081,14 @@ def render_ui():
         m4.metric("Associates", period_info["associates"] if period_info else 0)
 
     note_lines = []
+    if date_fix_info:
+        date_src = "the filename" if fname_dates else "manual input"
+        added_txt = ", ".join(f"`{c}`" for c in date_fix_info["added"])
+        note_lines.append(
+            f"Added missing date column(s) {added_txt} "
+            f"{_PLACEMENT_TXT[date_fix_info['placement']]}, stamped on every row "
+            f"from {date_src} (MM/DD/YYYY)."
+        )
     if summary_removed:
         note_lines.append(f"Dropped {summary_removed} interleaved 'Totals For Associate ID' summary rows from the raw file.")
     if gt_info:
@@ -972,7 +1130,7 @@ def render_ui():
     if note_lines:
         st.warning("\n".join("- " + line for line in note_lines))
 
-    if mode == "none" and not summary_removed and not gt_info and not split_info:
+    if mode == "none" and not summary_removed and not gt_info and not split_info and not date_fix_info:
         st.info("No issues detected -- the cleaned output is identical to the input (minus formula evaluation).")
 
     with st.expander(f"Preview cleaned data ({final_count} rows)", expanded=False):

@@ -2,6 +2,15 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-07-17] - ADP Prior Payroll Sanity: Auto-add Pay-Period Date Columns
+
+### Added
+- **Missing pay-period date columns auto-fix** (ADP Prior Payroll Sanity Check): consolidated quarter files from ADP often arrive without `PERIOD BEGINNING DATE`, `PERIOD ENDING DATE`, and `PAY DATE`, which the downstream API requires. The tool now fills them automatically, in this priority order:
+    1. **Columns present** → the file is left untouched (even if some cells are blank).
+    2. **Columns missing → filename dates**: the filename must contain exactly one run of three 8-digit `MMDDYYYY` blocks joined by underscores, in `<begin>_<end>_<pay>` order (e.g. `PriorPayroll_01012026_01072026_01142026.xlsx`). Each block is validated as a real calendar date. The parsed dates are shown in the UI for confirmation before running.
+    3. **Filename unparseable → manual input**: three date pickers appear; the Run button refuses to proceed until all three are filled.
+    - The missing columns are inserted **between `WORKED IN STATE` and `GROSS PAY`** (falling back to before `GROSS PAY`, then after `WORKED IN STATE`, then appending at the end) and stamped on every row as `MM/DD/YYYY` text — the only format the API accepts. Columns that already exist are never modified; only the missing ones are added.
+
 ## [2026-06-11] - ADP Prior Payroll Sanity: 401k / Roth Memo Split
 
 ### Added

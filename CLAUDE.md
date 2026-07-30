@@ -209,6 +209,28 @@ The canonical Uzio **Company Master → Job Titles** list for a DSP company. Uzi
 - **Driver rule (auto-fix):** a hourly-only title (Driver/Walker/E-Biker/…) marked Salaried or with blank FLSA is *force-set* to Hourly + Non-Exempt on download.
 - **Manager rule (flag-only):** a non-delivery title (DSP Owner, any Overhead Staff role, Non-DSP Related, or any unrecognized title) marked **Hourly** and/or **Non-Exempt** is **flagged for review and left UNCHANGED** — surfaced in the amber "Please review" UI box (`manager_hourly_flags`) and recorded in the Change Log as "(No change — please review)". Blank job titles are excluded (handled by the Driver-default logic).
 
+## External reference — Uzio onboarding API source
+
+The backend onboarding / census-ingestion logic lives **outside this repo**, on local
+disk. When you need the EXACT rules the onboarding API enforces during an ADP/Paycom
+migration (how gender, payment methods, deductions, taxes etc. are validated and
+mapped), **Read/Grep the local path instead of guessing** — do NOT reverse-engineer it
+from the sanity tools alone.
+
+- Local path (actionable — Claude can Read/Grep this directly):
+  `C:\Users\shobhit.sharma\Downloads\Uzio Code\onboarding\onboarding-service\`
+- Git remote (human reference only — internal server, NOT cloneable from a fresh session):
+  `https://git.internal.uzio.com/git/onboarding`
+
+Useful entry points under that path:
+- `src/main/java/com/uzio/onboarding/enums/Gender.java` — accepted gender values (Male/Female/M/F/Intersex; everything else → null).
+- `src/main/java/com/uzio/onboarding/validator/EmployeeCensusValidator.java` — per-field census validation (gender, race, pronouns, disability, …).
+- `src/main/java/com/uzio/onboarding/mapper/EmployeeCensusMapper.java` — source columns → Uzio person/employee model.
+- `src/main/java/com/uzio/onboarding/model/EmployeeMasterPaycom.java` / `EmployeeMasterADP.java` — CSV column bindings per vendor.
+- `src/main/java/com/uzio/onboarding/validator/impl/adp/ADPPaymentMethodValidator.java` — the 5 payment-method group rules.
+
+(The wider `Uzio Code` folder holds other Uzio repos too; it is not itself a single git repo.)
+
 ## Docs to consult
 
 - [README.md](README.md) — full architecture diagrams, module reference, field mappings (ADP→Uzio, Paycom→Uzio), and the auto-fix rule catalog with code snippets.

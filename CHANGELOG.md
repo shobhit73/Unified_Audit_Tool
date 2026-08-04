@@ -2,6 +2,26 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-08-04] - ADP Prior Payroll Audit: Unmapped-Money Detection (Two Tiers)
+
+### Fixed
+- **Silent skip of incomplete mapping rows** (ADP Prior Payroll Audit / `total_comparison.py`): a mapping row with the source name filled but the UZIO side blank (e.g. `HOPEWELL TWP,`) was silently dropped while loading, so any ADP money under that column vanished from the audit entirely — no mismatch, no warning. **Tier 1:** such rows are now collected separately; when the ADP file(s) carry money under them, real mismatch rows are emitted (`ADP amount` vs `0`, item suffixed **`(MAPPING INCOMPLETE)`**) in Full Comparison, Mismatches Only, and Employee Mismatches, plus a UI banner listing the incomplete rows. Zero-money incomplete rows get an info notice only.
+
+### Added
+- **Tier 2 — "Unmapped Columns" review list**: ADP columns that carry money, *look* mappable (`… - EMPLOYEE/EMPLOYER TAX`, `ADDITIONAL EARNINGS : …`, `VOLUNTARY DEDUCTION : …`, `REGULAR/OVERTIME EARNINGS`), and appear in **no** mapping file are listed informationally (UI expander + new `Unmapped Columns` report tab) — never as mismatch rows. Structural columns (`TAXABLE` wage bases, `TOTAL*`, `HOURS`, `MEMO`, `DIRECT DEPOSIT`, `GROSS`, `NET PAY`, `TAKE HOME`) are excluded by design and can never be flagged.
+
+## [2026-07-31] - Prior Payroll Setup Helper: 401k Loan Mapping + % of Gross for Deferrals
+
+### Fixed
+- **ADP Setup Helper — "401K LOAN1" mis-mapped to `401k`**: the word-boundary keyword matcher rejected `401k loan` inside descriptions like `ADP 401K LOAN1` because of the trailing sequence digit, then fell through to the bare `401k` keyword. Trailing digits are now allowed after a keyword (`LOAN1`, `SUPPORT2`), so 401k loans map to the `401(k) Loan` master (which keeps Method `Fixed $`). Letters still break the match (`dental` ⊄ `accidental`).
+
+### Changed
+- **Both Setup Helpers (ADP + Paycom) — 401k / Roth 401k Method**: deductions mapped to the `401k` or `Roth 401k` masters now get UZIO Method **% of Gross Pay** instead of `Fixed $` (retirement deferrals are percent-of-pay elections in UZIO). `401(k) Loan` remains `Fixed $`.
+
+### Fixed
+- **ADP Setup Helper — informational memos auto-detected as employer contributions**: the value-based match detector (small-%-of-gross + deferral co-occurrence) was pre-selecting hour-balance and wage-tracker memos (`PTO-PTO/SICK`, `BNH-BONUS HOURS`, `$R-FDQOT` Federal Qualified Overtime) as 401k matches — hour counts and OT dollars land in the same ratio band. The value path now skips memo labels containing informational keywords (`PTO`, `SICK`, `VAC`, `HOURS`, `BAL`, `DATE`, `ZONE`, `TAX`, `MAX`, `BONUS`, `OT`, `QOT`, `FDQOT`, ...). Explicit `MATCH` labels and `Roth:` split columns are never filtered. All memo columns remain available in the picker for manual selection.
+- **ADP Setup Helper — duplicate contribution names**: multiple opaque memo codes falling back to the generic "401K Match" name are now suffixed with their source code (`401K Match (N)`, `401K Match (BNH)`) so UZIO never receives identically-named contributions.
+
 ## [2026-07-17] - ADP Prior Payroll Sanity: Auto-add Pay-Period Date Columns
 
 ### Added

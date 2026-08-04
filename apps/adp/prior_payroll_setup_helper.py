@@ -686,6 +686,13 @@ FIXED_DOLLAR_MASTERS = {
     "reverse / reissue",
 }
 
+# Masters that always use % of Gross Pay: 401k / Roth 401k deferrals are
+# percent-of-pay elections in UZIO (the 401(k) Loan master stays Fixed $).
+PCT_GROSS_MASTERS = {
+    "401k",
+    "roth 401k",
+}
+
 # Benefit-type masters show the "Auto-Sync from Uzio Benefits" radio (and, being
 # benefit types, also Track arrears = Yes / Arrears Processing = Total Amount).
 BENEFIT_TYPE_KEYWORDS = (
@@ -777,9 +784,11 @@ SINGLE_KEYWORD_MASTERS = [
 
 def _kw_in(desc, kw):
     """Word-boundary keyword test: `kw` must not be embedded inside a longer
-    alphanumeric run ("dental" ⊄ "accidental"; "401k" ✓ in "401k % retire")."""
+    alphabetic run ("dental" ⊄ "accidental"; "401k" ✓ in "401k % retire").
+    A trailing DIGIT is allowed — ADP appends sequence numbers to descriptions
+    ("401K LOAN1", "SUPPORT2"), which must still match their keyword."""
     return re.search(
-        rf"(?<![a-z0-9]){re.escape(kw)}(?![a-z0-9])", desc) is not None
+        rf"(?<![a-z0-9]){re.escape(kw)}(?![a-z])", desc) is not None
 
 # Canonical column order for the Deductions tab + the UI dataframe.
 DEDUCTION_OUTPUT_COLUMNS = [
@@ -825,12 +834,15 @@ def map_adp_to_uzio_master(type_code, type_description, tax_treatment=""):
 
 def determine_method(uzio_master, type_description):
     """Garnishment masters → % of Disposable Net Pay; fixed-dollar masters →
-    Fixed $; a "%" in the description → % of Gross Pay; else Fixed $."""
+    Fixed $; 401k / Roth 401k → % of Gross Pay; a "%" in the description →
+    % of Gross Pay; else Fixed $."""
     master_l = (uzio_master or "").strip().lower()
     if master_l in DISPOSABLE_INCOME_MASTERS:
         return METHOD_PCT_DISPOSABLE
     if master_l in FIXED_DOLLAR_MASTERS:
         return METHOD_FIXED
+    if master_l in PCT_GROSS_MASTERS:
+        return METHOD_PCT_GROSS
     if "%" in (type_description or ""):
         return METHOD_PCT_GROSS
     return METHOD_FIXED
@@ -1004,6 +1016,19 @@ _CONTRIB_RATIO_MIN = 0.003     # 0.3% of gross
 _CONTRIB_RATIO_MAX = 0.10      # 10% of gross  (gross-equal memos like "J" ~ 1.0)
 _CONTRIB_COOCCUR_MIN = 0.60    # >=60% of the column's rows also have a deferral
 
+# Labels marking a memo as INFORMATIONAL (hour balances, dates, wage trackers
+# like Federal Qualified Overtime). The value-based detector must never flag
+# these as employer match money — hour counts and OT-premium dollars routinely
+# land in the small-%-of-gross band and co-occur with deferrals at any client
+# with high 401k participation. Name-based detection ('MATCH' / 'Roth:') is
+# deliberately NOT filtered: an explicit MATCH label always wins.
+_INFO_MEMO_KEYWORD_RE = re.compile(
+    r"(?<![A-Z0-9])("
+    r"PTO|SICK|VAC|VACATION|HOLIDAY|HOURS|HRS|BAL|BALANCE|DATE|ZONE|TAX|MAX"
+    r"|BONUS|OT|QOT|FDQOT|OVERTIME"
+    r")(?![A-Z0-9])"
+)
+
 
 def _format_formula(tiers):
     """Human-readable formula string, e.g. '100% of first 1%; 50% of next 4%'."""
@@ -1104,7 +1129,9 @@ def build_memo_candidate_rows(df):
         has_money = float(amounts.abs().sum()) > 0
         is_match_kw = bool(_MATCH_WORD_RE.search(label))
         is_roth_split = bool(_ROTH_PREFIX_RE.match(raw))
-        is_value = _looks_like_employer_match(df, c, gross_col, deferral_cols)
+        is_info = bool(_INFO_MEMO_KEYWORD_RE.search(label.upper()))
+        is_value = (not is_info) and _looks_like_employer_match(
+            df, c, gross_col, deferral_cols)
         detected = has_money and (is_match_kw or is_roth_split or is_value)
         kind, code, name = _memo_contribution_name(raw)
         cands.append({
@@ -1117,6 +1144,17 @@ def build_memo_candidate_rows(df):
             "_Detected": detected,
             "_Kind": kind,
         })
+
+    # Opaque memo codes all fall back to the same generic name ("401K Match"),
+    # which would create identically-named contributions in UZIO. Suffix the
+    # source code onto duplicates so each contribution name is unique — and a
+    # false positive that survives detection stays visible at a glance.
+    name_counts = {}
+    for c in cands:
+        name_counts[c["Type Description"]] = name_counts.get(c["Type Description"], 0) + 1
+    for c in cands:
+        if name_counts[c["Type Description"]] > 1 and c["Type Code"]:
+            c["Type Description"] = f'{c["Type Description"]} ({c["Type Code"]})'
     return cands
 
 

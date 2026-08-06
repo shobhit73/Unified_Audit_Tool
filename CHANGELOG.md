@@ -2,6 +2,35 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-08-06] - ADP Prior Payroll Sanity: Consistent 2-Decimal Money Output
+
+### Fixed
+- **Mixed decimal precision in the cleaned CSV**: some values showed 2 decimals, others 5-6 (`13.30056`) or float noise (`769.339999999999`). Two causes, both fixed: (1) the `=ROUND(x, 2)` formula evaluator returned the raw inner literal without applying the rounding — it now honors the formula's digit count exactly as Excel displays it; (2) a new `normalize_money_precision()` pass runs on the final output — floats round to 2 decimals, and strings are reformatted ONLY when they are plain decimal numbers with 3+ decimal places (IDs, SSNs, dates, zips can never match). Applied after all other cleanups, before download.
+
+## [2026-08-06] - ADP Prior Payroll Sanity: 401k/Roth Memo Split Rewritten (Deferral-Driven)
+
+### Fixed
+- **Employer-match memo split picked the wrong 401k column**: `find_retirement_columns` took the *first* column containing "401k" — on files where `28-ADP 401K FLAT$` (or a `401K LOAN` column) precedes `K-ADP 401K`, nearly every employee's match was wrongly shipped to Roth (InnovDel Dec–Mar: $211 kept vs $14,937 mis-sent to Roth; correct split is ~$13,698 vs ~$1,451). It now returns **all** 401k deferral columns and **all** Roth columns, with LOAN columns always excluded.
+
+### Changed
+- **Split logic is now deferral-driven, per row** (`split_memo_column`):
+    1. 401k deferral only → entire match stays in the memo column — no split, even when match > deferral.
+    2. Roth deferral only → entire match moves to the Roth column.
+    3. Both, match ≤ total 401k deferral (sum of all 401k columns, e.g. `K-ADP 401K` + `28-ADP 401K FLAT$`) → entire match stays.
+    4. Both, match > total 401k deferral → keep up to the 401k deferral, move only the excess.
+    - Neither deferral present → match stays in the memo column and the row is flagged for review (Employee IDs listed).
+- **Roth split column renamed `ROTH:<memo col>` (UPPERCASE prefix)**, e.g. `ROTH:MEMO : N` — the UZIO prior-payroll import uppercases file headers but matches mapping source names case-sensitively (`PriorPayrollServiceImpl.normalizeKey` vs `contributionMapBySourceName`), so a mixed-case `Roth:` prefix silently failed to import. Mapping CSVs must carry the uppercase name too.
+
+## [2026-08-05] - ADP Prior Payroll Sanity: Lived-in State / Local Tax Split
+
+### Added
+- **Lived-in State / Local tax split via Tax Validation Report** (ADP Prior Payroll Sanity Check): new optional upload field for the ADP **Tax Validation Report**. When the payroll file has a `LIVED-IN STATE - EMPLOYEE TAX` and/or `LIVED-IN LOCAL - EMPLOYEE TAX` column (one column that may lump several jurisdictions — unmappable downstream), each employee's amount is moved into a per-jurisdiction column by Associate ID: `LIVED-IN STATE (WI) - EMPLOYEE TAX`, `LIVED-IN STATE (IL) - EMPLOYEE TAX`, etc. (locals use the `Lived in Local Jurisdiction Description`). The jurisdiction code sits **before** `- EMPLOYEE TAX` so the new columns still end with `EMPLOYEE TAX` and are recognized as tax columns by the Setup Helper and the audit's unmapped-column scan without any change to those tools. Rules:
+    - Only jurisdictions that actually carry money get a column (inserted right after the base column, alphabetical).
+    - The base column is deleted once it holds no money (everything moved, or it was empty to begin with); it is kept only while unmatched values remain in it. The `... TAXABLE` column stays combined.
+    - Employees with money but missing from the report (or with a blank jurisdiction) keep their value in the base column and are flagged for review — nothing is guessed or lost.
+    - Duplicate Associate IDs in the report resolve to the first non-blank jurisdiction.
+    - The split runs before aggregation, so both Full Quarter and Preserve Pay Periods modes see per-jurisdiction columns.
+
 ## [2026-08-04] - ADP Prior Payroll Audit: Unmapped-Money Detection (Two Tiers)
 
 ### Fixed

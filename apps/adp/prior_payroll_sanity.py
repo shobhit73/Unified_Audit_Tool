@@ -13,14 +13,18 @@ Three independent cleanups are applied as needed:
      smart-merged into one row without double-counting.
   3. Grand-total row removal: the last row of the file, where the last
      employee's ID got bled into the totals row, is detected and dropped.
-  4. 401k / Roth memo split: when the file has K-401K and/or R-Roth
-     deduction columns, the MEMO column carrying the combined employer
-     match is identified (its entry count equals the number of employees
-     having K-401K or R-Roth; 0.00 counts as an entry) and split -- each
-     employee keeps memo money in the original column up to their K-401K
-     amount, the excess moves to a new 'Roth:<memo column>' column
-     inserted immediately to its right. Ties and count mismatches are
-     flagged so the user picks the memo column (or skips) before running.
+  4. 401k / Roth memo split: when the file has 401k and/or Roth deferral
+     columns (LOAN columns never count), the MEMO column carrying the
+     combined employer match is identified (its entry count equals the
+     number of employees having any 401k or Roth deferral; 0.00 counts as
+     an entry) and split per row by the employee's own deferrals:
+     401k-only -> match stays put; Roth-only -> match moves entirely to a
+     new 'ROTH:<memo column>' column (UPPERCASE prefix -- required by the
+     UZIO import's case-sensitive mapping lookup); both -> match stays up
+     to the summed 401k deferral (e.g. K-ADP 401K + 28-ADP 401K FLAT$),
+     only the excess moves to Roth; neither -> match stays and the row is
+     flagged for review. Ties and count mismatches are flagged so the
+     user picks the memo column (or skips) before running.
   5. Pay-period date columns: consolidated quarter files often arrive
      without PERIOD BEGINNING DATE / PERIOD ENDING DATE / PAY DATE, which
      the downstream API requires. When any of the three is missing, the
@@ -31,6 +35,16 @@ Three independent cleanups are applied as needed:
      on every row as MM/DD/YYYY text. If the filename has no parseable
      dates, the user enters the three dates manually in the UI. Columns
      already present are never modified.
+  6. Lived-in State / Local tax split: ADP lumps out-of-jurisdiction
+     residents' withholding into single LIVED-IN STATE / LIVED-IN LOCAL
+     - EMPLOYEE TAX columns, which cannot be mapped to multiple taxes
+     downstream. With the optional Tax Validation Report uploaded, each
+     employee's amount moves into a 'LIVED-IN STATE (<abbr>) - EMPLOYEE TAX'
+     column (state abbreviation / local jurisdiction description) per Associate
+     ID -- only jurisdictions carrying money get a column. The base column
+     is deleted once it holds no money (kept only while unmatched values
+     remain in it); TAXABLE stays combined; unmatched employees keep their
+     value in the base column and are flagged.
 
 Optional Carvan-specific NET PAY <-> TAKE HOME value swap is exposed as
 a checkbox in the UI (default ON) because the API expects them reversed.
@@ -134,15 +148,180 @@ def insert_period_date_columns(df, dates, missing):
     return df, {"added": added, "placement": placement}
 
 
-_ROUND_FORMULA_RE = re.compile(r"^=ROUND\(\s*(-?[\d.]+)\s*,\s*[\d.]+\s*\)\s*$", re.IGNORECASE)
+# ─────────────────────────────────────────────────────────────────────────────
+# Lived-in State / Local tax split (optional Tax Validation Report upload)
+#
+# ADP lumps every out-of-state/local resident's withholding into single
+# LIVED-IN STATE / LIVED-IN LOCAL - EMPLOYEE TAX columns. One column cannot be
+# mapped to multiple taxes downstream, so when a Tax Validation Report is
+# uploaded the tool splits the column: one new column per jurisdiction that
+# actually carries money — named 'LIVED-IN STATE (<code>) - EMPLOYEE TAX'
+# (state abbreviation for states, Lived-in Local Jurisdiction Description for
+# locals; the code sits BEFORE '- EMPLOYEE TAX' so downstream tools still
+# classify the column as a tax) — inserted right
+# after the base column, values moved per Associate ID. The base column is
+# deleted once it holds no money (it survives only while unmatched values
+# remain in it); the TAXABLE column is intentionally NOT split. Employees
+# with money but no jurisdiction in the report keep their value in the base
+# column and are flagged for review.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# kind -> (ADP base column, validation-report lookup column)
+LIVED_IN_SPLIT_CONFIG = {
+    "state": ("LIVED-IN STATE - EMPLOYEE TAX", "Lived in State Code"),
+    "local": ("LIVED-IN LOCAL - EMPLOYEE TAX", "Lived in Local Jurisdiction Description"),
+}
+
+
+def _norm_header(s):
+    """Lowercase and collapse all non-alphanumerics so 'LIVED-IN STATE' and
+    'Lived in State' compare equal — and TAX never matches TAXABLE."""
+    return re.sub(r"[^a-z0-9]+", " ", str(s).strip().lower()).strip()
+
+
+def _find_exact_col(df, target):
+    """Exact (normalized) header match only — no substring fallback, so the
+    LIVED-IN ... TAX column can never accidentally resolve to ... TAXABLE."""
+    want = _norm_header(target)
+    for c in df.columns:
+        if _norm_header(c) == want:
+            return c
+    return None
+
+
+def find_lived_in_columns(df):
+    """{kind: actual_column_name} for the lived-in tax columns present."""
+    out = {}
+    for kind, (base, _lookup) in LIVED_IN_SPLIT_CONFIG.items():
+        col = _find_exact_col(df, base)
+        if col is not None:
+            out[kind] = col
+    return out
+
+
+def _is_movable_value(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return False
+    return str(v).strip() not in ("", "-", "nan", "NaT", "None")
+
+
+def load_tax_validation_report(file):
+    """Parse the ADP Tax Validation Report (.csv/.xlsx) into per-kind lookups:
+    {'state': {associate_id: 'WI', ...}, 'local': {...}}.
+
+    Duplicate Associate IDs are common (re-hires); the first NON-BLANK value
+    per ID wins. Returns (lookups, error_message_or_None)."""
+    file.seek(0)
+    name = (getattr(file, "name", "") or "").lower()
+    if name.endswith(".csv"):
+        df = pd.read_csv(file, dtype=str)
+    else:
+        df = pd.read_excel(file, dtype=str)
+
+    eid_col = _find_exact_col(df, "Associate ID")
+    if eid_col is None:
+        return None, "No 'Associate ID' column found in the Tax Validation Report."
+
+    lookups = {}
+    for kind, (_base, lookup_col) in LIVED_IN_SPLIT_CONFIG.items():
+        col = _find_exact_col(df, lookup_col)
+        table = {}
+        if col is not None:
+            for _, row in df.iterrows():
+                eid = str(row[eid_col]).strip()
+                val = row[col]
+                if not eid or eid.lower() == "nan":
+                    continue
+                if eid in table:
+                    continue  # first non-blank value wins
+                if _is_movable_value(val):
+                    table[eid] = str(val).strip()
+        lookups[kind] = table
+    return lookups, None
+
+
+_LIVED_IN_TAX_SUFFIX_RE = re.compile(r"^(?P<name>.*?)(?P<suffix>\s*-\s*EMPLOY(?:EE|ER)\s+TAX)\s*$",
+                                     re.IGNORECASE)
+
+
+def _jurisdiction_col_name(base_col, code):
+    """'LIVED-IN STATE - EMPLOYEE TAX' + 'IL' -> 'LIVED-IN STATE (IL) - EMPLOYEE TAX'.
+
+    The '(code)' goes BEFORE the '- EMPLOYEE TAX' suffix so the new column still
+    ends with 'EMPLOYEE TAX' — the shape every downstream tool (Setup Helper
+    column classifier, audit unmapped-column scan) recognizes as a tax column."""
+    m = _LIVED_IN_TAX_SUFFIX_RE.match(str(base_col).strip())
+    if m:
+        return f"{m.group('name')} ({code}){m.group('suffix')}"
+    return f"{base_col} ({code})"
+
+
+def split_lived_in_column(df, base_col, lookup):
+    """Move each row's lived-in tax value into a per-jurisdiction column
+    ('LIVED-IN STATE (IL) - EMPLOYEE TAX') per the Associate ID -> jurisdiction
+    lookup. Only jurisdictions that actually receive money get a column
+    (inserted right after base_col, sorted).
+    Unmatched employees keep their value in the base column.
+
+    Once the base column holds no money (everything moved, or it was empty to
+    begin with) it is DELETED — it is kept only while unmatched values remain.
+
+    Returns (new_df, {"created": [cols], "moved": n, "dropped_base": bool,
+                      "unmatched": [{"Associate ID", "Amount"}]})."""
+    df = df.copy()
+    eid_col = _find_col(df, ["Associate ID", "Employee ID", "File #"])
+    if eid_col is None:
+        return df, {"created": [], "moved": 0, "dropped_base": False, "unmatched": []}
+
+    moves = []       # (row_idx, code, value)
+    unmatched = []
+    for idx in df.index:
+        v = df.at[idx, base_col]
+        if not _is_movable_value(v):
+            continue
+        eid = str(df.at[idx, eid_col]).strip()
+        code = lookup.get(eid, "")
+        if code:
+            moves.append((idx, code, v))
+        else:
+            unmatched.append({"Associate ID": eid, "Amount": v})
+
+    created = []
+    if moves:
+        codes = sorted({code for _, code, _ in moves})
+        pos = df.columns.get_loc(base_col) + 1
+        for code in codes:
+            new_col = _jurisdiction_col_name(base_col, code)
+            if new_col not in df.columns:
+                df.insert(pos, new_col, "")
+                created.append(new_col)
+                pos += 1
+            else:
+                pos = df.columns.get_loc(new_col) + 1
+        for idx, code, v in moves:
+            df.at[idx, _jurisdiction_col_name(base_col, code)] = v
+            df.at[idx, base_col] = ""
+
+    dropped_base = False
+    if not df[base_col].map(_is_movable_value).any():
+        df = df.drop(columns=[base_col])
+        dropped_base = True
+
+    return df, {"created": created, "moved": len(moves),
+                "dropped_base": dropped_base, "unmatched": unmatched}
+
+
+_ROUND_FORMULA_RE = re.compile(r"^=ROUND\(\s*(-?[\d.]+)\s*,\s*([\d.]+)\s*\)\s*$", re.IGNORECASE)
 
 
 def _evaluate_cell(value):
     """Resolve =ROUND(x,n) formulas (the only formula style ADP exports use for money cells).
 
-    Returns the literal numeric value when the cell holds such a formula, otherwise
-    returns the cell value unchanged. Pandas read_excel sees these formula cells as
-    None, so we read with openpyxl and feed each cell through this evaluator.
+    Returns the ROUNDED numeric value when the cell holds such a formula --
+    honoring the formula's digit count, exactly as Excel would display it
+    (=ROUND(15.669817, 2.0) -> 15.67, not 15.669817). Otherwise returns the
+    cell value unchanged. Pandas read_excel sees these formula cells as None,
+    so we read with openpyxl and feed each cell through this evaluator.
     """
     if value is None:
         return None
@@ -154,7 +333,8 @@ def _evaluate_cell(value):
     m = _ROUND_FORMULA_RE.match(s)
     if m:
         try:
-            return float(m.group(1))
+            digits = int(float(m.group(2)))
+            return round(float(m.group(1)), digits)
         except ValueError:
             return None
     return None
@@ -210,6 +390,30 @@ def _dedup_headers(headers):
             seen[h_str] = 0
             out.append(h_str)
     return out
+
+
+_EXCESS_DECIMALS_RE = re.compile(r"^-?\d+\.\d{3,}$")
+
+
+def normalize_money_precision(df):
+    """Normalize float noise to 2 decimals for the output CSV.
+
+    Excel stores numbers as binary doubles (769.34 is really
+    769.33999999999997) and older cleaned files carry full-precision tax
+    values -- the CSV should show money the way Excel displays it. Floats
+    round to 2. Strings are touched ONLY when they are a plain decimal number
+    with 3+ decimal places (IDs, dates, zips, SSNs never match that shape).
+    Ints and everything else pass through unchanged."""
+    def fix(v):
+        if isinstance(v, float):
+            return v if pd.isna(v) else round(v, 2)
+        if isinstance(v, str) and _EXCESS_DECIMALS_RE.match(v.strip()):
+            try:
+                return f"{float(v):.2f}"
+            except ValueError:
+                return v
+        return v
+    return df.apply(lambda col: col.map(fix))
 
 
 def read_input_file(file):
@@ -687,82 +891,104 @@ def _is_entry(v):
 
 
 def find_retirement_columns(df):
-    """Locate the K-401K and R-Roth deduction columns (MEMO columns excluded).
+    """Locate ALL 401k deferral columns and ALL Roth deferral columns
+    (MEMO and LOAN columns excluded).
 
     Headers are matched on a lowercase alphanumeric-only normalization so
-    'Voluntary K-401K', 'K-401K' and '401(k)' all hit. Any header containing
-    'roth' is the Roth column and is never picked as the 401k column.
+    'Voluntary K-401K', 'K-401K', '28-ADP 401K FLAT$' and '401(k)' all hit.
+    Any header containing 'roth' goes to the Roth list. LOAN columns
+    ('LN1-ADP 401K LOAN1') are never deferrals and are always skipped.
+    Returns (k_cols, roth_cols) — both lists, possibly empty.
     """
-    k_col = roth_col = None
+    k_cols, roth_cols = [], []
     for c in df.columns:
         cl = str(c).strip().lower()
-        if "memo" in cl:
+        if "memo" in cl or "loan" in cl:
             continue
         norm = re.sub(r"[^a-z0-9]", "", cl)
         if "roth" in norm:
-            if roth_col is None:
-                roth_col = c
-            continue
-        if k_col is None and "401k" in norm:
-            k_col = c
-    return k_col, roth_col
+            roth_cols.append(c)
+        elif "401k" in norm:
+            k_cols.append(c)
+    return k_cols, roth_cols
 
 
 def detect_memo_split(df):
     """Find the MEMO column carrying the combined 401k/Roth employer-match money.
 
-    The target count is the number of rows holding an entry in K-401K OR
-    R-Roth. A memo column whose own entry count equals the target is a match.
-    Returns None when not applicable (no retirement columns or no memo
-    columns), otherwise a dict:
-      k_col, roth_col, target, memo_counts {col: count}, matches [cols]
+    The target count is the number of rows holding an entry in ANY 401k
+    deferral column OR ANY Roth column (loans excluded). A memo column whose
+    own entry count equals the target is a match. Returns None when not
+    applicable (no retirement columns or no memo columns), otherwise a dict:
+      k_cols, roth_cols, target, memo_counts {col: count}, matches [cols]
     """
-    k_col, roth_col = find_retirement_columns(df)
-    if not k_col and not roth_col:
+    k_cols, roth_cols = find_retirement_columns(df)
+    if not k_cols and not roth_cols:
         return None
     memo_cols = [c for c in df.columns if "memo" in str(c).strip().lower()]
     if not memo_cols:
         return None
 
     union = pd.Series(False, index=df.index)
-    for col in (k_col, roth_col):
-        if col:
-            union = union | df[col].map(_is_entry)
+    for col in k_cols + roth_cols:
+        union = union | df[col].map(_is_entry)
     target = int(union.sum())
 
     memo_counts = {c: int(df[c].map(_is_entry).sum()) for c in memo_cols}
     matches = [c for c, n in memo_counts.items() if n == target]
     return {
-        "k_col": k_col,
-        "roth_col": roth_col,
+        "k_cols": k_cols,
+        "roth_cols": roth_cols,
         "target": target,
         "memo_counts": memo_counts,
         "matches": matches,
     }
 
 
-def split_memo_column(df, memo_col, k_col):
+def split_memo_column(df, memo_col, k_cols, roth_cols):
     """Split the matched memo column into 401k vs Roth employer-match portions.
 
-    Per row: the memo value stays in `memo_col` up to the row's K-401K value;
-    the excess moves to a new 'Roth:<memo_col>' column inserted immediately to
-    the right of `memo_col`. Rows with no K-401K value (or when the file has
-    no K-401K column at all) move the entire memo value. Rows whose memo fits
-    inside the K-401K amount are left untouched, Roth cell blank.
+    Per row, the employee's deferrals decide where the match goes (loans are
+    never counted; the 401k deferral is the SUM of all k_cols, e.g.
+    K-ADP 401K + 28-ADP 401K FLAT$):
 
-    Returns (new_df, {"new_col": name, "rows_split": n}).
+      1. 401k deferral only            -> entire match stays in `memo_col`
+                                          (no split, even if match > deferral)
+      2. Roth deferral only            -> entire match moves to `ROTH:<memo_col>`
+      3. Both, match <= 401k deferral  -> entire match stays in `memo_col`
+      4. Both, match >  401k deferral  -> keep up to the 401k deferral,
+                                          move the excess to `ROTH:<memo_col>`
+      -  Neither deferral present      -> match stays in `memo_col` and the
+                                          row is flagged for review
+
+    The new column is 'ROTH:<memo_col>' (UPPERCASE prefix — the UZIO prior
+    payroll import uppercases file headers but matches mapping names
+    case-sensitively, so the header must already be uppercase). Inserted
+    immediately to the right of `memo_col`.
+
+    Returns (new_df, {"new_col", "rows_split", "counts": {...},
+                      "no_deferral": [employee ids]}).
     """
     df = df.copy()
-    new_col = f"Roth:{memo_col}"
+    new_col = f"ROTH:{memo_col}"
     if new_col in df.columns:
         i = 1
         while f"{new_col}.{i}" in df.columns:
             i += 1
         new_col = f"{new_col}.{i}"
 
+    eid_col = _find_col(df, ["Associate ID", "Employee ID", "File #"])
+
+    def _row_sum(idx, cols):
+        return sum((_to_float(df.at[idx, c]) or 0.0) for c in cols)
+
     kept_vals = []
     roth_vals = []
     rows_split = 0
+    counts = {"kept_401k_only": 0, "moved_roth_only": 0,
+              "kept_within_cap": 0, "split_excess": 0, "kept_no_deferral": 0}
+    no_deferral = []
+
     for idx in df.index:
         memo_raw = df.at[idx, memo_col]
         memo_val = _to_float(memo_raw)
@@ -770,20 +996,42 @@ def split_memo_column(df, memo_col, k_col):
             kept_vals.append(memo_raw)
             roth_vals.append("")
             continue
-        k_val = _to_float(df.at[idx, k_col]) if k_col else None
-        roth_amt = round(max(0.0, memo_val - (k_val or 0.0)), 2)
-        if roth_amt > 0:
-            rows_split += 1
-            kept = round(memo_val - roth_amt, 2)
-            kept_vals.append(kept if kept != 0 else "")
-            roth_vals.append(roth_amt)
-        else:
+
+        k_def = _row_sum(idx, k_cols)
+        roth_def = _row_sum(idx, roth_cols)
+
+        if k_def > 0 and roth_def <= 0:
+            counts["kept_401k_only"] += 1
             kept_vals.append(memo_raw)
             roth_vals.append("")
+        elif roth_def > 0 and k_def <= 0:
+            counts["moved_roth_only"] += 1
+            rows_split += 1
+            kept_vals.append("")
+            roth_vals.append(round(memo_val, 2))
+        elif k_def > 0 and roth_def > 0:
+            if memo_val <= k_def + 0.005:
+                counts["kept_within_cap"] += 1
+                kept_vals.append(memo_raw)
+                roth_vals.append("")
+            else:
+                counts["split_excess"] += 1
+                rows_split += 1
+                roth_amt = round(memo_val - k_def, 2)
+                kept = round(memo_val - roth_amt, 2)
+                kept_vals.append(kept if kept != 0 else "")
+                roth_vals.append(roth_amt)
+        else:
+            counts["kept_no_deferral"] += 1
+            kept_vals.append(memo_raw)
+            roth_vals.append("")
+            if eid_col is not None:
+                no_deferral.append(str(df.at[idx, eid_col]).strip())
 
     df[memo_col] = kept_vals
     df.insert(df.columns.get_loc(memo_col) + 1, new_col, roth_vals)
-    return df, {"new_col": new_col, "rows_split": rows_split}
+    return df, {"new_col": new_col, "rows_split": rows_split,
+                "counts": counts, "no_deferral": no_deferral}
 
 
 def render_ui():
@@ -800,15 +1048,21 @@ def render_ui():
            smart-merged into one without double-counting.
         3. **Grand-total row removal** -- the bottom-of-file totals row where the
            previous employee's ID leaked is dropped.
-        4. **401k / Roth memo split** -- when K-401K / R-Roth deductions exist, the
-           MEMO column carrying the combined employer match is identified by entry
-           count and split: each employee keeps memo money up to their K-401K amount,
-           the excess moves to a new `Roth:<memo column>` column.
+        4. **401k / Roth memo split** -- when 401k / Roth deferrals exist (loans never
+           counted), the MEMO column carrying the combined employer match is identified
+           by entry count and split by each employee's own deferrals: 401k-only keeps
+           everything, Roth-only moves entirely, both keeps up to the summed 401k
+           deferral with only the excess moving to a new `ROTH:<memo column>` column.
         5. **Missing pay-period date columns** -- when `PERIOD BEGINNING DATE`,
            `PERIOD ENDING DATE`, or `PAY DATE` is absent (consolidated quarter files),
            the dates are read from the filename (`..._MMDDYYYY_MMDDYYYY_MMDDYYYY...`,
            begin / end / pay order) or entered manually, and the missing columns are
            inserted between `WORKED IN STATE` and `GROSS PAY` on every row.
+        6. **Lived-in State / Local tax split** -- with the optional **Tax Validation
+           Report** uploaded, single `LIVED-IN STATE / LOCAL - EMPLOYEE TAX` columns
+           are split into per-jurisdiction columns (`LIVED-IN STATE (WI) - EMPLOYEE TAX`,
+           `... (IL) ...`) by Associate ID, so each column maps to exactly one tax
+           downstream.
 
         Upload an `.xlsx` / `.xls` / `.csv`. The cleaned output is **always a `.csv`** with
         the **exact same column headers and order** as the input (plus the new Roth
@@ -821,6 +1075,18 @@ def render_ui():
         type=["xlsx", "xls", "csv"],
         accept_multiple_files=False,
         key="pps_input",
+    )
+
+    tax_val_file = st.file_uploader(
+        "Tax Validation Report (optional — needed only to split LIVED-IN STATE / "
+        "LIVED-IN LOCAL tax columns per jurisdiction)",
+        type=["xlsx", "xls", "csv"],
+        accept_multiple_files=False,
+        key="pps_taxval",
+        help="ADP Tax Validation Report with Associate ID, Lived in State Code and "
+             "Lived in Local Jurisdiction columns. When the payroll file has a "
+             "LIVED-IN STATE/LOCAL - EMPLOYEE TAX column, each employee's amount "
+             "is moved into a per-jurisdiction column based on this report.",
     )
 
     if not file:
@@ -932,6 +1198,78 @@ def render_ui():
                 }
                 df_b, date_fix_info = insert_period_date_columns(df_b, manual_dates, date_missing)
 
+    # ------------------------------------------------------------------
+    # Step 2.3: Lived-in State / Local tax split. Runs BEFORE aggregation
+    # so per-row values land in their jurisdiction column first. Only when
+    # the payroll file has a lived-in column AND the Tax Validation Report
+    # is uploaded; unmatched employees stay in the base column + flagged.
+    # ------------------------------------------------------------------
+    lived_cols = find_lived_in_columns(df_b)
+    lived_split_infos = []
+    lived_empty_dropped = []
+    if lived_cols:
+        st.markdown("### Lived-in State / Local tax split")
+        money_counts = {k: int(df_b[c].map(_is_movable_value).sum())
+                        for k, c in lived_cols.items()}
+        # A lived-in column with no money serves no purpose — drop it outright,
+        # report or not.
+        for kind, col in list(lived_cols.items()):
+            if not money_counts[kind]:
+                df_b = df_b.drop(columns=[col])
+                lived_empty_dropped.append(col)
+                del lived_cols[kind]
+        if lived_empty_dropped:
+            st.caption(
+                "Removed empty lived-in column(s): "
+                + ", ".join(f"`{c}`" for c in lived_empty_dropped) + "."
+            )
+        if tax_val_file is None:
+            if lived_cols:
+                counts_txt = "; ".join(
+                    f"`{c}` has money in {money_counts[k]} row(s)"
+                    for k, c in lived_cols.items())
+                st.warning(
+                    f"This file has lived-in tax columns with money: {counts_txt}. "
+                    f"**Upload the Tax Validation Report above** to split them into "
+                    f"per-jurisdiction columns — without it the combined column "
+                    f"cannot be mapped to multiple taxes downstream. "
+                    f"(You can still run without splitting.)"
+                )
+        elif lived_cols:
+            lookups, tv_err = load_tax_validation_report(tax_val_file)
+            if tv_err:
+                st.error(f"Tax Validation Report problem: {tv_err}")
+            else:
+                for kind, col in lived_cols.items():
+                    df_b, sinfo = split_lived_in_column(df_b, col, lookups.get(kind, {}))
+                    lived_split_infos.append((kind, col, sinfo))
+                for kind, col, sinfo in lived_split_infos:
+                    if sinfo["created"]:
+                        base_txt = (
+                            "the emptied base column was removed"
+                            if sinfo["dropped_base"] else
+                            "the base column was kept — it still holds unmatched value(s)"
+                        )
+                        st.success(
+                            f"Split `{col}`: moved {sinfo['moved']} value(s) into "
+                            + ", ".join(f"`{c}`" for c in sinfo["created"])
+                            + f"; {base_txt}. The TAXABLE column is left combined."
+                        )
+                    if sinfo["unmatched"]:
+                        st.warning(
+                            f"**{len(sinfo['unmatched'])} row(s) in `{col}` could not be "
+                            f"matched** — the Associate ID is missing from the Tax "
+                            f"Validation Report (or its jurisdiction is blank there). "
+                            f"Their values stay in the base column; please review."
+                        )
+                        st.dataframe(pd.DataFrame(sinfo["unmatched"]),
+                                     hide_index=True, use_container_width=True)
+    elif tax_val_file is not None:
+        st.caption(
+            "Tax Validation Report uploaded, but this payroll file has no "
+            "LIVED-IN STATE / LIVED-IN LOCAL - EMPLOYEE TAX column — nothing to split."
+        )
+
     st.markdown("### Confirm strategy and run")
     agg_choice = st.radio(
         "Aggregation Strategy (you can override the recommendation)",
@@ -969,30 +1307,34 @@ def render_ui():
 
     chosen_memo = None
     if memo_info and memo_info["target"] > 0:
-        k_col = memo_info["k_col"]
-        roth_col = memo_info["roth_col"]
+        k_cols = memo_info["k_cols"]
+        roth_cols = memo_info["roth_cols"]
         matches = memo_info["matches"]
-        ded_desc = " / ".join(f"`{c}`" for c in (k_col, roth_col) if c)
+        ded_desc = " / ".join(f"`{c}`" for c in (k_cols + roth_cols))
 
         st.markdown("### 401k / Roth memo split")
-        if not roth_col:
+        if not roth_cols:
             if matches:
                 st.info(
                     f"Memo column `{matches[0]}` matches the {memo_info['target']} employees "
-                    f"with {ded_desc}, but this file has no R-Roth column -- all memo money "
+                    f"with {ded_desc}, but this file has no Roth column -- all memo money "
                     f"already belongs to 401k, so no split is needed."
                 )
         elif len(matches) == 1:
             chosen_memo = matches[0]
-            if k_col:
+            if k_cols:
                 action_txt = (
-                    f"each employee keeps memo money up to their `{k_col}` amount, "
-                    f"the excess moves to a new `Roth:{chosen_memo}` column"
+                    f"each employee's match follows their own deferrals "
+                    f"(loans never counted): 401k-only employees keep everything in "
+                    f"`{chosen_memo}`; Roth-only employees move entirely to a new "
+                    f"`ROTH:{chosen_memo}` column; employees with both keep up to their "
+                    f"total 401k deferral ({' + '.join(f'`{c}`' for c in k_cols)}) and "
+                    f"only the excess moves to Roth"
                 )
             else:
                 action_txt = (
-                    f"there is no K-401K column, so each memo value moves entirely "
-                    f"to a new `Roth:{chosen_memo}` column"
+                    f"there are no 401k deferral columns, so each Roth-deferring "
+                    f"employee's match moves entirely to a new `ROTH:{chosen_memo}` column"
                 )
             st.success(
                 f"Matched memo column **`{chosen_memo}`** -- its entry count "
@@ -1054,12 +1396,14 @@ def render_ui():
         with st.spinner("Finalizing..."):
             split_info = None
             if chosen_memo:
-                df_c, split_info = split_memo_column(df_c, chosen_memo, memo_info["k_col"])
+                df_c, split_info = split_memo_column(
+                    df_c, chosen_memo, memo_info["k_cols"], memo_info["roth_cols"])
 
             swapped = False
             if swap_net_take:
                 df_c, swapped = apply_net_take_swap(df_c)
 
+            df_c = normalize_money_precision(df_c)
             final_count = len(df_c)
     except Exception as e:
         st.error(f"Failed to process the file: {e}")
@@ -1089,6 +1433,24 @@ def render_ui():
             f"{_PLACEMENT_TXT[date_fix_info['placement']]}, stamped on every row "
             f"from {date_src} (MM/DD/YYYY)."
         )
+    if lived_empty_dropped:
+        note_lines.append(
+            "Removed empty lived-in column(s): "
+            + ", ".join(f"`{c}`" for c in lived_empty_dropped) + "."
+        )
+    for _kind, _col, _sinfo in lived_split_infos:
+        if _sinfo["created"]:
+            base_txt = ("emptied base column removed" if _sinfo["dropped_base"]
+                        else "base column kept (still holds unmatched values)")
+            note_lines.append(
+                f"Split `{_col}` per the Tax Validation Report: {_sinfo['moved']} value(s) "
+                f"moved into {', '.join('`' + c + '`' for c in _sinfo['created'])}; {base_txt}."
+            )
+        if _sinfo["unmatched"]:
+            note_lines.append(
+                f"{len(_sinfo['unmatched'])} value(s) in `{_col}` left un-split — Associate ID "
+                f"not in the Tax Validation Report (or jurisdiction blank). Review manually."
+            )
     if summary_removed:
         note_lines.append(f"Dropped {summary_removed} interleaved 'Totals For Associate ID' summary rows from the raw file.")
     if gt_info:
@@ -1112,16 +1474,21 @@ def render_ui():
             f"same-day duplicate row pairs." if merge_events else "Preserved distinct pay periods. No same-day duplicates found."
         )
     if split_info:
-        if memo_info["k_col"]:
+        c = split_info["counts"]
+        stayed = c["kept_401k_only"] + c["kept_within_cap"]
+        note_lines.append(
+            f"Split memo column `{chosen_memo}` into `{split_info['new_col']}` by deferral: "
+            f"{stayed} row(s) stayed as 401k match "
+            f"({c['kept_401k_only']} 401k-only, {c['kept_within_cap']} within the 401k cap), "
+            f"{c['moved_roth_only']} row(s) moved fully to Roth (Roth-only employees), "
+            f"{c['split_excess']} row(s) split at the 401k-deferral cap. Loans were never counted."
+        )
+        if c["kept_no_deferral"]:
+            ids = sorted(set(split_info["no_deferral"]))
             note_lines.append(
-                f"Split memo column `{chosen_memo}`: each employee kept memo money up to their "
-                f"`{memo_info['k_col']}` amount; the excess for {split_info['rows_split']} employee(s) "
-                f"moved to the new `{split_info['new_col']}` column."
-            )
-        else:
-            note_lines.append(
-                f"No K-401K column exists, so the memo value for {split_info['rows_split']} employee(s) "
-                f"in `{chosen_memo}` moved entirely to the new `{split_info['new_col']}` column."
+                f"{c['kept_no_deferral']} row(s) had match money but NO 401k or Roth deferral -- "
+                f"kept as 401k match, please review: {', '.join(ids[:15])}"
+                + (" ..." if len(ids) > 15 else "")
             )
     if swapped:
         note_lines.append("Swapped NET PAY and TAKE HOME values.")

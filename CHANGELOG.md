@@ -2,6 +2,11 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-08-07] - ADP Prior Payroll Audit: Parenthesized Columns No Longer Collide
+
+### Fixed
+- **`LIVED-IN STATE (IL)` and `(WI)` columns collided in the audit** (`total_comparison.py`): column matching used `norm_colname`, which strips everything in parentheses (a census-era rule for suffixes like `(Personal Profile)`) — so both per-jurisdiction lived-in columns normalized to the same key, the last one won, and the IL mapping row silently summed the WI column's money. `calculate_totals` now tries an **exact parens-preserving match first** (`_norm_keep_parens`) and only falls back to the paren-stripping norm; the same order applies to top-header (UZIO section) matching.
+
 ## [2026-08-06] - ADP Prior Payroll Sanity: Consistent 2-Decimal Money Output
 
 ### Fixed

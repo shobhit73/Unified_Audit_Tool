@@ -2,6 +2,11 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-08-07] - ADP Prior Payroll Sanity: Fix TypeError on Deployed (Arrow-backed pandas)
+
+### Fixed
+- **Lived-in split crashed with a redacted TypeError on Streamlit Cloud** (`split_lived_in_column`): the new per-jurisdiction column was created from `""` (string dtype) and then float money values were written cell-by-cell with `df.at[...]` — modern pandas with Arrow-backed string columns (Python 3.13 cloud env) raises `TypeError` on that; older local pandas silently allowed it, which is why it never reproduced locally. Both `split_lived_in_column` and `split_memo_column` now build whole columns and assign them once with explicit `object` dtype — version-proof across numpy- and Arrow-backed pandas. Verified against the exact crashing client files and under warnings-as-errors strict mode.
+
 ## [2026-08-07] - ADP Prior Payroll Audit: Parenthesized Columns No Longer Collide
 
 ### Fixed

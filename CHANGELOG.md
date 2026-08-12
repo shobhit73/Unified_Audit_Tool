@@ -2,6 +2,23 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-08-08] - ADP Setup Helper: FLSA Bonus Classifier Rewritten (Blended-Rate, Per-Bonus)
+
+### Changed
+- **Dual-prediction blended-rate math** (`classify_bonus`): for every testable paycheck the tool now computes BOTH possible OT amounts — discretionary (plain `1.5 × regular rate × OT hours`) and non-discretionary (FLSA blended: `Blended = (Regular Rate × Worked Hours + Bonus) ÷ Worked Hours`, `OT = (Blended/2 + Regular Rate) × OT hours`) — and the row's verdict is whichever prediction the actual OVERTIME EARNINGS matches within 1%. Matches neither / predictions indistinguishable → row is "unclear" and isn't evidence. **Worked Hours = Regular + Overtime + Double Overtime + Training** (PTO and Station Closure hours are paid-not-worked and excluded).
+- **Per-bonus verdicts**: every bonus column now gets its own verdict two ways — *individual* (paychecks where only that bonus appears) and *combined* (tested with the sum of all bonuses, matching how ADP computes the rate). Agree → confirmed; disagree → `needs_review` (never guessed); one side untestable → the other side's verdict, noted. New bonus columns are picked up automatically (name contains BONUS / BN* code). Shown as a table in the UI, in the Setup Helper xlsx (Tab 2), and used to pre-fill the "Is the earning Non-Discretionary?" toggles.
+- **Aggregated rows are excluded ROW-BY-ROW, not file-by-file**: uploads may mix consolidated and per-pay-period files (they get concatenated), so a file-level check would let quarter rows slip in as evidence. Each row's own `PERIOD BEGINNING/ENDING` span decides: span > 35 days → aggregated row → never evidence (skipped-count reported); span ≤ 35 days → genuine pay-period row → testable. A single-pay-period file (1 row/employee, ~7-day span) therefore classifies normally; a purely consolidated upload returns indeterminate with an explicit "upload the per-pay-period file" message — on a quarter row the bonus may sit in a pay period with no overtime (and vice versa), so aggregate math would produce a false verdict in either direction.
+
+## [2026-08-08] - ADP Tools: Grand-Total Row Detector Hardened (Both Audit + Sanity)
+
+### Fixed
+- **Grand-total detector silently deleted a real employee row** (First Line Logistics: KZL3QQJ3T's 06/26 stub — $348 Training + 8 tax amounts vanished from the ADP side, producing 10 false mismatch rows and a false pay-stub-count diff). The old heuristic dropped the last row when ANY of the first 5 columns matched the previous row (period dates always match in per-pay-period files) and ONE money column was within a loose 5% of the sum of preceding rows — trivially coincidental in small files. Both `total_comparison.find_header_and_data` and `prior_payroll_sanity.detect_grand_total_row` now require ALL of:
+    1. ≥ 3 data rows (a "sum" over one preceding row is meaningless);
+    2. the true ADP totals-row signature — the last row's employee ID **equals** the previous row's (leaked identity);
+    3. ≥ 3 money columns each equal to the sum of all preceding rows (GROSS PAY / TOTAL EARNINGS mirror each other, so two is one signal);
+    4. 0.5% tolerance (real totals are exact sums ± cent rounding), with at least one matched column > $100.
+    Verified: genuine totals rows still detected (old and new agree), the KZL false positive is gone, and full old-vs-new audit regression on First Line shows exactly the 9 falsely-suppressed items recovering — everything else byte-identical.
+
 ## [2026-08-07] - ADP Prior Payroll Sanity: Fix TypeError on Deployed (Arrow-backed pandas)
 
 ### Fixed

@@ -259,6 +259,7 @@ When you click **Download Corrected Source**, the following corrections are appl
     zip_fixes = validation.get('zip_fixes', pd.DataFrame())
     status_fixes = validation.get('status_fixes', pd.DataFrame())
     manager_hourly_flags = validation.get('manager_hourly_flags', pd.DataFrame())
+    gender_invalid = validation.get('gender_invalid', pd.DataFrame())
 
     # --- VALIDATION RESULTS (plain-English, two-section layout) ---
     render_validation_results(
@@ -274,6 +275,7 @@ When you click **Download Corrected Source**, the following corrections are appl
         zip_fixes=zip_fixes,
         status_fixes=status_fixes,
         manager_hourly_flags=manager_hourly_flags,
+        gender_invalid=gender_invalid,
     )
 
     # --- Persistent Download Section ---

@@ -2,6 +2,14 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-08-17] - ADP Setup Helper: Pre/Post-Tax Classifier Hardened Against Subset-Sum Ambiguity
+
+### Fixed
+- **False pre-tax verdicts from subset-sum coincidences** (`classify_deductions_pretax`): with small weekly amounts, multiple deduction subsets can sum to the same taxable-wage gap — the old rule credited *every member of any matching subset* and locked pre-tax from *one* row, so coincidence combos flagged post-tax deductions as pre-tax (FlashHUB July file: ROTH, ACC-Accidental D&D, and CIL-Critical Illness all wrongly Pre-tax — e.g. `ROTH 23.01 + CIL 4.38 + MED 68.36 + STD 8.77 = 104.52` matched a 104.50 gap within tolerance while the true `DEN + 401K + MED = 104.50` sat right next to it). Three new rules, all verified on FlashHUB (July, Q2, and multi-file uploads — 36/36 verdicts correct, section-125 and 401k signatures intact):
+    1. **Exact-first**: zero-deviation subsets discard 2-cent-tolerance subsets for that row.
+    2. **Requiredness**: a row is pre-tax evidence only for deductions present in EVERY kept subset (no explanation exists without them); absent-from-all is post-tax evidence; in-some is ambiguous and votes for nothing.
+    3. **Multi-row, multi-employee verification**: pre-tax needs ≥ 5 required-rows spanning ≥ 2 distinct employees, outnumbering excluded-rows (files with < 5 testable rows fall back to ≥ 2 rows; a single clean row counts only when it is the deduction's only testable row; the 2-employee bar relaxes only when a single employee ever pays the deduction). All uploaded files are concatenated before classification, so multi-file uploads widen the evidence base automatically.
+
 ## [2026-08-08] - ADP Setup Helper: FLSA Bonus Classifier Rewritten (Blended-Rate, Per-Bonus)
 
 ### Changed

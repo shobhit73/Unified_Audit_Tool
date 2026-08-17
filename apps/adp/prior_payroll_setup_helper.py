@@ -16,12 +16,17 @@ emits an Excel workbook with:
 
 Pre/post-tax algorithm:
   gap_FIT = TOTAL EARNINGS - FEDERAL INCOME - EMPLOYEE TAXABLE.
-  Find any subset of a row's non-zero deductions summing to gap_FIT (within
-  $0.02). Every member of any passing subset is pre-tax for FIT. ONE positive
-  proof anywhere in the file = pre-tax for everyone (the rule never varies
-  per employee). Same logic for FICA / MEDI / SIT taxables to derive the
-  flavor: section_125 (pre-FIT/FICA/MEDI/SIT) vs 401k_traditional
-  (pre-FIT/SIT only, NOT pre-FICA/MEDI).
+  Enumerate every subset of a row's non-zero deductions summing to gap_FIT
+  (within $0.02); zero-deviation subsets beat 2-cent-tolerance ones. A row is
+  pre-tax EVIDENCE for a deduction only when it appears in EVERY kept subset
+  (required — no explanation exists without it); absent from every subset is
+  post-tax evidence; in-some-but-not-all is ambiguous and votes for nothing.
+  Pre-tax needs >= 5 required-rows spanning >= 2 distinct employees and
+  outnumbering excluded-rows (small files fall back to >= 2 rows; one clean
+  row suffices only when it's the deduction's only testable row). Same logic per
+  FICA / MEDI / SIT taxable to derive the flavor: section_125
+  (pre-FIT/FICA/MEDI/SIT) vs 401k_traditional (pre-FIT/SIT, NOT pre-FICA).
+  All uploaded files are concatenated first, so extra files = extra evidence.
 """
 
 import base64
@@ -1659,9 +1664,34 @@ def classify_deductions_pretax(
     df, ded_cols, total_earn_col, fit_taxable_col, fica_taxable_col,
     medi_taxable_col, sit_taxable_col, tol=0.02, max_subset=8,
 ):
-    proven = {c: {"FIT": False, "FICA": False, "MEDI": False, "SIT": False}
-              for c in ded_cols}
+    """Empirical pre/post-tax classification, hardened against subset-sum
+    ambiguity (small weekly amounts collide constantly):
+
+      1. EXACT-FIRST: when any zero-deviation combo matches a row's gap,
+         tolerance-only (2-cent-off) combos are discarded for that row.
+      2. REQUIREDNESS: a row is pre-tax evidence for deduction D only when D
+         sits in EVERY kept combo (no D-free explanation exists). D absent
+         from every kept combo is post-tax evidence. D in some-but-not-all
+         combos is ambiguous — no vote either way.
+      3. MULTI-ROW, MULTI-EMPLOYEE VERIFICATION: pre-tax on an axis needs
+         >= 5 required-rows spanning >= 2 DISTINCT employees, and the
+         required-rows must outnumber the excluded-rows. Small-evidence
+         fallback: with fewer than 5 testable rows, >= 2 required-rows
+         (still >= 2 employees when possible); a single clean row counts
+         only when it is the deduction's ONLY testable row. The distinct-
+         employee requirement relaxes to 1 only when just one employee ever
+         pays the deduction.
+
+    `df` is the concatenation of every uploaded file, so multi-file uploads
+    automatically widen the evidence base."""
+    AXES = ("FIT", "FICA", "MEDI", "SIT")
+    required = {c: {k: 0 for k in AXES} for c in ded_cols}
+    excluded = {c: {k: 0 for k in AXES} for c in ded_cols}
+    testable = {c: {k: 0 for k in AXES} for c in ded_cols}
+    req_emps = {c: {k: set() for k in AXES} for c in ded_cols}
+    test_emps = {c: {k: set() for k in AXES} for c in ded_cols}
     sample = {c: [] for c in ded_cols}
+    EXACT_TOL = 0.005
 
     def _try_axis(taxable_col, key):
         if taxable_col is None:
@@ -1675,24 +1705,56 @@ def classify_deductions_pretax(
                 continue
             cols = [c for c, _ in present]
             amts = [a for _, a in present]
-            for combo in _subset_sum_match(amts, gap, tol):
-                for i in combo:
-                    proven[cols[i]][key] = True
-                if key == "FIT":
-                    eid = row.get("ASSOCIATE ID") or row.get("Associate ID")
-                    for i in combo:
-                        if len(sample[cols[i]]) < 3:
-                            sample[cols[i]].append({
-                                "associate": str(eid) if eid is not None else "",
-                                "gap_fit": round(gap, 2),
-                                "subset": [cols[j] for j in combo],
-                                "subset_sum": round(sum(amts[j] for j in combo), 2),
-                            })
+            combos = _subset_sum_match(amts, gap, tol)
+            if not combos:
+                continue
+            # Exact matches beat tolerance matches (a 2-cent-off combo next to
+            # a perfect one is exactly the coincidence we must not credit).
+            exact = [cb for cb in combos
+                     if abs(sum(amts[i] for i in cb) - gap) <= EXACT_TOL]
+            kept = [set(cb) for cb in (exact if exact else combos)]
+            eid = str(row.get("ASSOCIATE ID") or row.get("Associate ID") or "").strip()
+
+            for i, c in enumerate(cols):
+                testable[c][key] += 1
+                if eid:
+                    test_emps[c][key].add(eid)
+                if all(i in s for s in kept):
+                    required[c][key] += 1
+                    if eid:
+                        req_emps[c][key].add(eid)
+                    if key == "FIT" and len(sample[c]) < 5:
+                        first = sorted(kept[0])
+                        sample[c].append({
+                            "associate": eid,
+                            "gap_fit": round(gap, 2),
+                            "subset": [cols[j] for j in first],
+                            "subset_sum": round(sum(amts[j] for j in first), 2),
+                        })
+                elif all(i not in s for s in kept):
+                    excluded[c][key] += 1
+                # in some but not all combos -> ambiguous, no vote
 
     _try_axis(fit_taxable_col, "FIT")
     _try_axis(fica_taxable_col, "FICA")
     _try_axis(medi_taxable_col, "MEDI")
     _try_axis(sit_taxable_col, "SIT")
+
+    def _is_proven(c, key):
+        r, e, t = required[c][key], excluded[c][key], testable[c][key]
+        if r == 0:
+            return False
+        # Distinct-employee requirement: 2, relaxed to 1 only when a single
+        # employee ever pays this deduction in testable rows.
+        need_emps = min(2, len(test_emps[c][key])) or 1
+        emps_ok = len(req_emps[c][key]) >= need_emps
+        if t >= 5:
+            return r >= 5 and r > e and emps_ok
+        if t == 1:
+            return e == 0        # the deduction's only testable row, cleanly required
+        return r >= 2 and r > e and emps_ok
+
+    proven = {c: {k: _is_proven(c, k) for k in AXES} for c in ded_cols}
 
     rows = []
     for c in ded_cols:
@@ -2552,11 +2614,13 @@ def _render_deduction_setup_section(results, src_name):
         f"deferrals (401k / Roth / 401k Loan / HSA) are included — in UZIO they're "
         f"deduction masters.  \n"
         f"**{len(kept_deds)} deduction(s) to create**. **Pre/Post Tax** is proven "
-        f"empirically: the classifier finds a subset of each row's deductions "
-        f"whose sum exactly explains the gap between Total Earnings and each "
-        f"taxable wage base — one positive proof anywhere in the file locks the "
-        f"verdict (`empirical_subset_sum`); rows with no proof fall back to name "
-        f"heuristics."
+        f"empirically: for each paycheck the classifier enumerates every subset of "
+        f"deductions explaining the gap between Total Earnings and each taxable "
+        f"wage base (exact matches beat 2-cent-tolerance ones). A deduction counts "
+        f"as pre-tax evidence only when it is **required** — no subset explains the "
+        f"gap without it — and the verdict needs that proof on **multiple "
+        f"paychecks** (across ALL uploaded files together). Deductions with no "
+        f"empirical rows fall back to name heuristics."
     )
     if skipped_deds:
         skip_lines = "; ".join(

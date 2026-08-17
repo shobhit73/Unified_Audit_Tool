@@ -245,6 +245,24 @@ def _plain_english_issue(raw_issue):
         return "Same Social Security Number is used by more than one employee"
     if "SSN (blank)" in p:
         return "Missing Social Security Number"
+    if "Employee ID (blank)" in p:
+        return "Missing employee ID"
+    if "First Name (blank)" in p:
+        return "Missing first name"
+    if "Last Name (blank)" in p:
+        return "Missing last name"
+    if "Date of Birth (blank)" in p:
+        return "Missing date of birth"
+    if "Date of Hire (blank)" in p:
+        return "Missing hire date"
+    if "City (blank)" in p:
+        return "Missing city"
+    if "Address Line 1 (blank)" in p:
+        return "Missing street address"
+    if "Official Email (blank" in p:
+        return "Missing email — both work email and personal email are blank"
+    if "State (blank)" in p:
+        return "Missing state"
     if "Employment Status (blank)" in p:
         return "Missing employment status (should be Active or Terminated)"
     if "Non-standard Status" in p:
@@ -280,7 +298,8 @@ def render_validation_results(hard_errors, flsa_corrections, flsa_blanks,
                               anomalies, intern_corrections, email_fallbacks,
                               smart_driver_fixes=None, position_blanks=None,
                               dol_status_blanks=None, zip_fixes=None,
-                              status_fixes=None, manager_hourly_flags=None):
+                              status_fixes=None, manager_hourly_flags=None,
+                              gender_invalid=None):
     """Render census validation results in a plain-English, two-section layout:
       1. 'Needs your attention'  — problems the user should review (red)
       2. 'Fixed automatically'   — corrections applied on download (green)
@@ -300,6 +319,8 @@ def render_validation_results(hard_errors, flsa_corrections, flsa_blanks,
         status_fixes = pd.DataFrame()
     if manager_hourly_flags is None:
         manager_hourly_flags = pd.DataFrame()
+    if gender_invalid is None:
+        gender_invalid = pd.DataFrame()
 
     def _ids_str(df_in):
         if df_in is None or df_in.empty or 'Employee ID' not in df_in.columns:
@@ -325,7 +346,8 @@ def render_validation_results(hard_errors, flsa_corrections, flsa_blanks,
     # still counts as "something to show" and isn't swallowed by the success banner.
     auto_frames = [flsa_corrections, flsa_blanks, anomalies, intern_corrections,
                    email_fallbacks, smart_driver_fixes, position_blanks,
-                   dol_status_blanks, zip_fixes, status_fixes, manager_hourly_flags]
+                   dol_status_blanks, zip_fixes, status_fixes, manager_hourly_flags,
+                   gender_invalid]
     has_auto = any(f is not None and not f.empty for f in auto_frames)
 
     if not has_hard and not has_auto:
@@ -448,6 +470,9 @@ def render_validation_results(hard_errors, flsa_corrections, flsa_blanks,
     if manager_hourly_flags is not None and not manager_hourly_flags.empty:
         n = _n(manager_hourly_flags)
         reviews.append(f"**A manager / non-delivery role is marked Hourly or Non-Exempt** — these roles are usually Salaried and Exempt, so this may be a data error. I left the values unchanged — please double-check each one. {n} employee{'s' if n != 1 else ''}: `{_ids_str(manager_hourly_flags)}`")
+    if gender_invalid is not None and not gender_invalid.empty:
+        n = _n(gender_invalid)
+        reviews.append(f"**Gender value isn't one of Uzio's accepted options** (Male, Female, M, F, Intersex) — Uzio will reject this field and leave it blank if uploaded as-is. I left the value unchanged — please review and correct it if needed. {n} employee{'s' if n != 1 else ''}: `{_ids_str(gender_invalid)}`")
 
     if reviews:
         st.markdown("""

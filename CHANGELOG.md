@@ -2,6 +2,18 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-08-18] - ADP Withholding Audit: Every Employee Reported ACTIVE; W-4 History Over-Flagged
+
+### Fixed
+- **Every employee was labelled ACTIVE, so terminated employees landed in the "act on first" sheet** (`parse_uzio`): the status column was resolved by the single literal `UZIO_STATUS_COL = "status"`, but UZIO's current withholding export names it `employment_status`. The lookup missed, `status_by_emp` came back empty, no ADP column matched the status-like fallback scan, and every employee fell through to `status = "ACTIVE"  # safe default`. On High Distinction (376 employees, **273 of them TERMINATED**) the report claimed `Active 5 / Terminated 0` when the truth was `Active 0 / Terminated 5` — all three flagged employees were ex-employees, `Mismatches (Terminated)` was empty, all 405 Stale UZIO rows were stamped ACTIVE (really 243 TERMINATED / 162 ACTIVE), and `Missing in ADP` showed a blank status. Now resolved via `_find_col(df.columns, UZIO_STATUS_CANDIDATES)`, which accepts `employment_status`, `status`, `employee_status`. This was a UZIO export-format change: older extracts (Innovdel, First Line Logistics) ship `status` and were never affected — both column names now work, verified byte-identical on those two files.
+- **"Has W-4 History" / "Verify In UI First" flagged employees with no W-4 revision** (`parse_adp`): `multi_ids` came from `groupby(id_col).size()` — a **row** count. ADP emits an extra row per state tax jurisdiction, so multi-state employees and rows differing only in `Lived In State Tax Code` were read as W-4 revisions. High Distinction reported 75 employees with W-4 history when only **3** have more than one distinct `Federal/W4 Effective Date` (the other 72 differ solely in `Lived In State Tax Code`, a column the audit does not even read); Innovdel reported 38 vs a true 3, putting a spurious "confirm the latest W-4 in the UZIO UI before changing" on 19 mismatch rows. Now counts distinct W-4 effective dates (`nunique(dropna=True)`, which flags nobody when no date parses rather than everybody). `multi_ids` is computed *after* the dedup and only ever fills two display columns, so no comparison, category, stale, reciprocity or false-positive result moves — confirmed by an old-vs-new run across all three client files: **finding identity lost=0 gained=0** everywhere, with only `EMPLOYMENT_STATUS`/`STATUS`/`HAS_W4_HISTORY`/`VERIFY_IN_UI_FIRST` and the summary metrics differing.
+
+### Changed
+- Summary metric renamed *"Employees with W-4 history (multiple ADP rows)"* → *"(multiple W-4 effective dates)"*, and the UI tile *"ADP rows w/ W-4 history"* → *"ADP rows deduped away"*, since it counts rows dropped by dedup — which are not all superseded W-4s.
+
+### Known issue (not addressed here)
+- **Multi-state employees: only the worked state is audited, and the row picked is order-dependent.** `sit_states` takes just `Worked in State Code` from the single deduped row, so an employee with two `State Tax Code` rows (Innovdel: 36 employees on IA+IL / IA+WI reciprocity pairs) never has the second state compared. Worse, 32 of those employees differ between rows in the compared SIT columns, and the dedup tie-break is arbitrary: reshuffling the input rows of the same file yields 486 / 488 / 491 mismatches with findings flipping between `Mismatch` and `Blank vs Value`. High Distinction and First Line Logistics are unaffected (0 multi-state rows, 0 order sensitivity). Tracked separately.
+
 ## [2026-08-17] - ADP Setup Helper: Pre/Post-Tax Classifier Hardened Against Subset-Sum Ambiguity
 
 ### Fixed

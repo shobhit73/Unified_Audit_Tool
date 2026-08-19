@@ -703,7 +703,7 @@ PCT_GROSS_MASTERS = {
 BENEFIT_TYPE_KEYWORDS = (
     "dental", "medical", "vision", "voluntary life", "critical illness",
     "accident insurance", "cancer insurance", "hospital indemnity",
-    "voluntary std", "ad&d", "whole life",
+    "voluntary std", "voluntary ltd", "ad&d", "whole life",
 )
 
 # Masters whose "Assign to all employees" is FORCED Yes + disabled by UZIO.
@@ -738,6 +738,9 @@ ADP_DEDUCTION_CODE_SEEDS = {
     "PAC": "Earned Wage Access",
     "STD": "Voluntary STD After-tax",
     "SPT": "Voluntary STD After-tax",
+    # Plain string, not a tuple: UZIO's master list carries only the After-tax
+    # LTD variant (there is no "Voluntary LTD Pre-tax"), same as STD.
+    "LTD": "Voluntary LTD After-tax",
     "VEE": "Voluntary Life Employee After-tax",
     "WEE": "Whole Life Insurance After-tax",
     "VCH": ("Voluntary Life Child Pre-tax", "Voluntary Life Child After-tax"),
@@ -2657,7 +2660,7 @@ def _render_deduction_setup_section(results, src_name):
             "No benefit-type deductions detected, so Auto-Sync is `N/A` for "
             "every deduction. (Benefit types: dental, medical, vision, voluntary "
             "life, critical illness, accident/cancer insurance, hospital "
-            "indemnity, STD, AD&D.)"
+            "indemnity, STD, LTD, AD&D.)"
         )
     else:
         def _on_select_all():

@@ -2,6 +2,15 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-08-19] - Setup Helpers (ADP + Paycom): LTD Deductions Now Map to Voluntary LTD After-tax
+
+### Fixed
+- **`LTD` deductions fell through to `<NEEDS REVIEW>`** even though `Voluntary LTD After-tax` has always been in the UZIO Master Deductions List. `LTD` was absent from the code seeds and from every keyword list, so `VOLUNTARY DEDUCTION : LTD-LTD POST TAX` produced no master, kept the raw description as the Deduction Name, and — because `BENEFIT_TYPE_KEYWORDS` had `voluntary std` but not `voluntary ltd` — was not treated as a benefit type: `Auto-Sync = N/A` (no toggle in the UI), `Track arrears = No`, blank `Arrears Processing Method`, `W-2 Box = Not Required`. LTD is a benefit exactly like STD. Added `"LTD": "Voluntary LTD After-tax"` to the code seeds (a plain string, not a Pre/After-tax tuple — UZIO ships no `Voluntary LTD Pre-tax`, same as STD) and `"voluntary ltd"` to `BENEFIT_TYPE_KEYWORDS`. LTD rows now come out byte-identical to STD apart from the master name: `Fixed $`, `Track arrears = Yes`, `Arrears Processing = Total Amount`, W-2 Box locked, and a working Auto-Sync toggle (default Off, Select All covers it). Applied to both `apps/adp/` and `apps/paycom/`, whose Auto-Sync captions now list LTD alongside STD.
+- Deliberately scoped to the **code seed only** — no `ltd` / `long term disability` keyword was added, matching how STD works today. A description-only file (`73-LONG TERM DISABILITY` with a numeric code) still needs review, exactly as `73-SHORT TERM DISABILITY` would. A bare `ltd` keyword was rejected outright: it would collide with company names such as `ABC LTD-GARNISHMENT`.
+
+### Verification
+- A/B over the pre-change module across every code seed and keyword: **ADP 186 (label x tax) probes, 9 changed — all `LTD`**; **Paycom 63 probes, 6 changed — all `LTD`**. `81-LTD`, `ABC LTD-GARNISHMENT` and `('', 'LTD')` are unchanged on both sides, confirming no keyword collision was introduced.
+
 ## [2026-08-18] - ADP Withholding Audit: Every Employee Reported ACTIVE; W-4 History Over-Flagged
 
 ### Fixed

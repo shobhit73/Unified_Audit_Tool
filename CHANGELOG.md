@@ -2,6 +2,23 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-08-20] - ADP Setup Helper: Learned Earning Codes No Longer Overwrite Good Names
+
+### Fixed
+- **A truncated ADP column header silently destroyed a correct catalog entry.** ADP truncates its column labels — `PTO-PAID TIME OFF` arrives as `PTO-PAID TIME O`, `NUR-NURSERY ROUTE` as `NUR-NURSERY ROU` — and `save_learned_earning_codes` merged with `{**existing, **new_codes}`, so the learned (truncated) value won unconditionally. Running the tool on such a file rewrote the tracked `apps/adp/adp_earning_code_catalog.json`, replacing `"PTO": "Paid Time Off"` with `"Paid Time O"`. The catalog is the fallback that names **code-only** columns (`ADDITIONAL EARNINGS : LK2`), so a corrupted entry could later surface as a real UZIO Earning Name — for a different client, since the catalog is shared.
+- `_better_earning_name()` now decides: when one value is a **prefix** of the other the longer one wins (a prefix is a truncation, never an update); a genuine disagreement (`Holiday` vs `Vacation`) keeps the stored value rather than silently flipping. This is self-healing in both directions — a later full-length file repairs an already-truncated entry — and removes the dependence on the order files happen to be analysed in, which previously decided the answer:
+    - before: `PAID TIME OFF` then `PAID TIME O` → `Paid Time O`; reversed → `Paid Time Off`
+    - after: either order → `Paid Time Off`
+- Learning happens in `adp_earnings_to_setup_rows()` (called while the Earning Setup section renders), not during the analysis itself, so it fires during ordinary UI use — which is how the corruption reached the working tree three times in one session.
+
+### Added
+- `save_learned_earning_codes()` returns `{"added": ..., "improved": ...}` and the Earning Setup section shows an info box when this run changed the catalog, naming the codes. `adp_earning_code_catalog.json` is tracked in git but written at runtime, so an analysis leaves the working tree dirty; now that learned values can no longer degrade good ones, whatever lands there is genuinely new and the user is told to commit it instead of finding it in `git status`.
+
+### Notes
+- **No existing output changes.** When a column header carries a description, that description always wins and the catalog is not consulted — verified by running the same file against a good, a corrupted and an empty catalog and getting identical rows. The catalog only decides code-only columns, and codes in `ADP_EARNING_CODE_SEEDS` outrank it either way. Regression across two real client files: setup rows and `Earnings_mapping.csv` byte-identical old vs new.
+- The committed catalog was never corrupted (`"PTO": "Paid Time Off"` is intact in git) — the damage was caught in the working tree each time.
+- A code seen for the **first** time with a truncated header still enters truncated; the rule cannot invent missing letters. It can be healed by a later full-length file, and the new info box surfaces it for manual correction before committing.
+
 ## [2026-08-20] - ADP Setup Helper: Employee Deduction Mapping File (5th Mapping CSV)
 
 ### Added

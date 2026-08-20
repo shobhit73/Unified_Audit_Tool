@@ -435,11 +435,40 @@ def load_earning_code_catalog():
     return catalog
 
 
+def _better_earning_name(stored, incoming):
+    """Pick which of two learned descriptions for the same code to keep.
+
+    ADP truncates its column headers — "PTO-PAID TIME OFF" arrives as
+    "PTO-PAID TIME O", "NUR-NURSERY ROUTE" as "NUR-NURSERY ROU". A value that is
+    a PREFIX of the stored one is therefore a truncation, never an update, and
+    letting it win silently degraded good entries (and made the catalog depend on
+    the order files happened to be analysed in). Keeping the longer side of a
+    prefix pair is self-healing in both directions and order-independent.
+
+    A genuine disagreement ("Holiday" vs "Vacation") is left alone rather than
+    silently flipped — that needs a human, not a coin toss.
+    """
+    a, b = stored.strip(), incoming.strip()
+    if a.lower() == b.lower():
+        return a
+    if a.lower().startswith(b.lower()):
+        return a          # incoming is a truncation of what we already have
+    if b.lower().startswith(a.lower()):
+        return b          # incoming is the fuller name — take it
+    return a              # unrelated names — keep the stored one
+
+
 def save_learned_earning_codes(new_codes):
     """Merge code→description pairs learned from the current file(s) into the
-    catalog JSON. Best-effort: a read-only filesystem must not break analysis."""
+    catalog JSON. Best-effort: a read-only filesystem must not break analysis.
+
+    Returns {"added": {code: name}, "improved": {code: (old, new)}} describing
+    what actually changed on disk, so the UI can tell the user the tracked
+    catalog now differs from git and is worth committing.
+    """
+    changes = {"added": {}, "improved": {}}
     if not new_codes:
-        return
+        return changes
     try:
         try:
             with open(ADP_EARNING_CODE_CATALOG_PATH, encoding="utf-8") as f:
@@ -448,12 +477,27 @@ def save_learned_earning_codes(new_codes):
                 existing = {}
         except (OSError, ValueError):
             existing = {}
-        merged = {**existing, **{str(k).upper(): str(v) for k, v in new_codes.items()}}
+
+        merged = dict(existing)
+        for k, v in new_codes.items():
+            k, v = str(k).upper(), str(v)
+            stored = merged.get(k)
+            if stored is None:
+                merged[k] = v
+                changes["added"][k] = v
+                continue
+            keep = _better_earning_name(str(stored), v)
+            if keep != stored:
+                merged[k] = keep
+                changes["improved"][k] = (str(stored), keep)
+
         if merged != existing:
             with open(ADP_EARNING_CODE_CATALOG_PATH, "w", encoding="utf-8") as f:
                 json.dump(merged, f, indent=2, sort_keys=True)
     except OSError:
-        pass
+        # Nothing reached disk, so report nothing.
+        return {"added": {}, "improved": {}}
+    return changes
 
 
 def adp_earnings_to_setup_rows(earn_catalog_rows):
@@ -504,8 +548,8 @@ def adp_earnings_to_setup_rows(earn_catalog_rows):
             "_Total Hours": r.get("Total Hours"),
             "_Avg Rate ($/hr)": r.get("Avg Rate ($/hr)"),
         })
-    save_learned_earning_codes(learned)
-    return _dedupe_setup_rows(rows)
+    catalog_changes = save_learned_earning_codes(learned)
+    return _dedupe_setup_rows(rows), catalog_changes
 
 
 def _dedupe_setup_rows(rows):
@@ -2663,10 +2707,12 @@ def _render_earning_setup_section(results, src_name):
     earnings, lets the user (a) flag bonuses non-discretionary, (b) override the
     Earning Type, (c) rename each earning, then renders the enriched table and a
     download for the single-tab Earning Setup .xlsx."""
-    setup_rows = adp_earnings_to_setup_rows(results.get("Earnings_Codes", []))
+    setup_rows, catalog_changes = adp_earnings_to_setup_rows(
+        results.get("Earnings_Codes", []))
     kept_earnings, skipped_earnings = filter_default_uzio_earnings(setup_rows)
 
     st.markdown("## UZIO Earning Setup")
+    _render_catalog_change_notice(catalog_changes)
     st.caption(
         f"Discovered from the earnings block between `TOTAL HOURS` and "
         f"`TOTAL EARNINGS` (REGULAR / OVERTIME + additional earnings). Codes are "
@@ -3194,6 +3240,37 @@ def _render_tax_mapping_section(results, src_name):
         )
     st.markdown("---")
     return mapping_rows
+
+
+def _render_catalog_change_notice(catalog_changes):
+    """Say so when this run wrote to the tracked earning-code catalog.
+
+    `adp_earning_code_catalog.json` is checked into git but written at runtime,
+    so an analysis leaves the working tree dirty. Since learned values can no
+    longer overwrite good ones, whatever lands there is genuinely new and worth
+    committing — but the user should hear about it rather than discover it in
+    `git status`.
+    """
+    changes = catalog_changes or {}
+    added, improved = changes.get("added") or {}, changes.get("improved") or {}
+    if not added and not improved:
+        return
+    bits = []
+    if added:
+        bits.append("learned **%d new code(s)**: %s"
+                    % (len(added),
+                       ", ".join(f"`{k}` → {v}" for k, v in sorted(added.items()))))
+    if improved:
+        bits.append("replaced **%d truncated name(s)** with the fuller version: %s"
+                    % (len(improved),
+                       ", ".join(f"`{k}` {old!r} → {new!r}"
+                                 for k, (old, new) in sorted(improved.items()))))
+    st.info(
+        "**Earning-code catalog updated** — this run " + "; and ".join(bits) + ".  \n"
+        "`apps/adp/adp_earning_code_catalog.json` is tracked in git, so commit it "
+        "to share this with the team. It only ever affects columns that carry a "
+        "code with no description."
+    )
 
 
 def _render_ee_deduction_mapping_section(vd_file, enriched_deds, skipped_deds):

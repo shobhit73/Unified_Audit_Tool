@@ -1554,6 +1554,24 @@ EE_MAPPING_EXCLUDED_MASTERS = {
 EE_MAPPING_EXCLUDED_DESC_KEYWORDS = ("checking", "savings")
 
 
+def _decode_vd_csv_bytes(raw):
+    """Decode a Voluntary Deduction CSV exactly the way the onboarding API does.
+
+    `CsvToDtoMapper.decodeCsvContent` tries STRICT UTF-8 and falls back to
+    windows-1252 (`new String(bytes, WINDOWS_1252)`, which replaces rather than
+    throws). ADP exports are frequently cp1252 — a non-breaking space (0xA0) in a
+    description is enough to make strict UTF-8 fail.
+
+    Mirroring that order is not a convenience: the source names we emit have to
+    decode to the SAME string the API reads out of the same file, or its
+    case-sensitive lookup misses. Returns (text, encoding_used).
+    """
+    try:
+        return raw.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        return raw.decode("cp1252", errors="replace"), "windows-1252"
+
+
 def read_voluntary_deduction_file(file):
     """Read an ADP Voluntary Deduction export (.xlsx or .csv) as strings.
 
@@ -1561,15 +1579,22 @@ def read_voluntary_deduction_file(file):
     sheet name varies by client, so sheets are chosen by CONTENT: the first one
     carrying both DEDUCTION CODE and DEDUCTION DESCRIPTION.
 
-    Returns (df, error). Rows with a blank ID/code/description are dropped —
-    that removes ADP's "Report Totals:" footer without pattern-matching it.
+    Returns (df, error, encoding). Rows with a blank ID/code/description are
+    dropped — that removes ADP's "Report Totals:" footer without pattern-matching
+    it. `encoding` is None for workbooks (openpyxl handles that itself).
     """
     name = (getattr(file, "name", "") or "").lower()
     raw = file.getvalue() if hasattr(file, "getvalue") else file.read()
     buf = io.BytesIO(raw)
+    encoding = None
 
     if name.endswith(".csv"):
-        df = pd.read_csv(buf, dtype=str, keep_default_na=True)
+        text, encoding = _decode_vd_csv_bytes(raw)
+        # A BOM would ride along on the first header ("﻿ASSOCIATE ID") and
+        # break the column lookup. Only strip it here, on the way IN — never
+        # write one out.
+        df = pd.read_csv(io.StringIO(text.lstrip("﻿")), dtype=str,
+                         keep_default_na=True)
     else:
         book = pd.read_excel(buf, dtype=str, sheet_name=None, engine="openpyxl")
         df = None
@@ -1582,18 +1607,20 @@ def read_voluntary_deduction_file(file):
             return None, (
                 "No sheet in this workbook has both "
                 f"`{VD_CODE_COL}` and `{VD_DESC_COL}` columns."
-            )
+            ), encoding
 
     df = df.copy()
     df.columns = [str(c).strip().upper() for c in df.columns]
     missing = [c for c in VD_REQUIRED_COLUMNS if c not in df.columns]
     if missing:
-        return None, "Missing required column(s): " + ", ".join(f"`{c}`" for c in missing)
+        return (None,
+                "Missing required column(s): " + ", ".join(f"`{c}`" for c in missing),
+                encoding)
 
     for c in VD_REQUIRED_COLUMNS:
         df[c] = df[c].apply(_clean_cell)
     df = df[(df[VD_ID_COL] != "") & (df[VD_CODE_COL] != "") & (df[VD_DESC_COL] != "")]
-    return df.reset_index(drop=True), None
+    return df.reset_index(drop=True), None, encoding
 
 
 def _clean_cell(x):
@@ -3179,7 +3206,7 @@ def _render_ee_deduction_mapping_section(vd_file, enriched_deds, skipped_deds):
         return []
 
     st.markdown("## Employee Deduction Mapping")
-    vd_df, err = read_voluntary_deduction_file(vd_file)
+    vd_df, err, vd_encoding = read_voluntary_deduction_file(vd_file)
     if err:
         st.error(
             f"**Could not read `{getattr(vd_file, 'name', 'the file')}`** — {err}  \n"
@@ -3198,6 +3225,13 @@ def _render_ee_deduction_mapping_section(vd_file, enriched_deds, skipped_deds):
         "— that lookup is case-sensitive. UZIO names come from the Deduction Setup "
         "above, so renames and Master overrides flow through automatically."
     )
+
+    if vd_encoding == "windows-1252":
+        st.caption(
+            "This CSV is not valid UTF-8, so it was decoded as **windows-1252** — "
+            "the same fallback `CsvToDtoMapper.decodeCsvContent` applies, so the "
+            "names below match what the API will read from the same file."
+        )
 
     if unresolved:
         st.error(

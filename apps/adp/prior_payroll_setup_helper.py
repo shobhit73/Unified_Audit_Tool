@@ -1515,6 +1515,189 @@ def build_deductions_mapping_rows(enriched_deds, skipped_deds=None):
     return rows
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Employee-deduction mapping (5th mapping CSV)
+#
+# Assigning deductions to individual employees is a SEPARATE onboarding-API call
+# that consumes ADP's "Voluntary Deduction" export plus its own mapping CSV. It
+# cannot reuse `_Deductions_mapping.csv`: that file's source name is the prior
+# payroll COLUMN HEADER ("VOLUNTARY DEDUCTION : LTD-LTD POST TAX"), whereas
+# EmployeeDeductionSetUpServiceImpl looks up
+#     mappingBySourceName.get(csvRecord.getDeductionDesc())
+# and ADPConfig fills that from the export's DEDUCTION DESCRIPTION ("LTD Post
+# Tax"). That lookup is a plain HashMap.get — CASE-SENSITIVE and untrimmed — so
+# the source name must be copied VERBATIM from the uploaded file. (The Uzio side
+# is matched with .trim().toLowerCase(), so only this side is fragile.)
+# See docs/superpowers/specs/2026-08-20-adp-ee-deduction-mapping-design.md
+# ─────────────────────────────────────────────────────────────────────────────
+
+VD_ID_COL = "ASSOCIATE ID"
+VD_CODE_COL = "DEDUCTION CODE"
+VD_DESC_COL = "DEDUCTION DESCRIPTION"
+VD_REQUIRED_COLUMNS = [VD_ID_COL, VD_CODE_COL, VD_DESC_COL]
+
+# Never assigned to employees during onboarding. Keyed on the RESOLVED master so
+# the rule holds whatever code the client uses — Support, Garnishment (73 and
+# 93-GARNISHMENT%) and Tax Levy all land in this set.
+EE_MAPPING_EXCLUDED_MASTERS = {
+    "child support",
+    "child support 2",
+    "spousal support order",
+    "creditor garnishment",
+    "federal tax lien",
+    "state tax lien",
+}
+
+# Direct deposits (CK1/CK2/CK3-CHECKING, SV1-SAVINGS) ride in the same export.
+# They resolve to NEEDS_REVIEW rather than a skippable master, so they need
+# their own rule.
+EE_MAPPING_EXCLUDED_DESC_KEYWORDS = ("checking", "savings")
+
+
+def read_voluntary_deduction_file(file):
+    """Read an ADP Voluntary Deduction export (.xlsx or .csv) as strings.
+
+    The workbook ships a second `Report Runtime Settings` sheet and the data
+    sheet name varies by client, so sheets are chosen by CONTENT: the first one
+    carrying both DEDUCTION CODE and DEDUCTION DESCRIPTION.
+
+    Returns (df, error). Rows with a blank ID/code/description are dropped —
+    that removes ADP's "Report Totals:" footer without pattern-matching it.
+    """
+    name = (getattr(file, "name", "") or "").lower()
+    raw = file.getvalue() if hasattr(file, "getvalue") else file.read()
+    buf = io.BytesIO(raw)
+
+    if name.endswith(".csv"):
+        df = pd.read_csv(buf, dtype=str, keep_default_na=True)
+    else:
+        book = pd.read_excel(buf, dtype=str, sheet_name=None, engine="openpyxl")
+        df = None
+        for sheet in book.values():
+            cols = {str(c).strip().upper() for c in sheet.columns}
+            if VD_CODE_COL in cols and VD_DESC_COL in cols:
+                df = sheet
+                break
+        if df is None:
+            return None, (
+                "No sheet in this workbook has both "
+                f"`{VD_CODE_COL}` and `{VD_DESC_COL}` columns."
+            )
+
+    df = df.copy()
+    df.columns = [str(c).strip().upper() for c in df.columns]
+    missing = [c for c in VD_REQUIRED_COLUMNS if c not in df.columns]
+    if missing:
+        return None, "Missing required column(s): " + ", ".join(f"`{c}`" for c in missing)
+
+    for c in VD_REQUIRED_COLUMNS:
+        df[c] = df[c].apply(_clean_cell)
+    df = df[(df[VD_ID_COL] != "") & (df[VD_CODE_COL] != "") & (df[VD_DESC_COL] != "")]
+    return df.reset_index(drop=True), None
+
+
+def _clean_cell(x):
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return ""
+    s = str(x).strip()
+    return "" if s.lower() in ("nan", "none", "null") else s
+
+
+def _base_master(master):
+    """Master name without its tax-treatment suffix ("Dental Pre-tax" → "Dental").
+
+    Lets a Voluntary Deduction row join a prior-payroll row whose Pre/After-tax
+    variant was decided empirically — and lets 88-ADP 401K% reach the deduction
+    created from K1-ADP 401K, since both resolve to the `401k` base.
+    """
+    for suffix in (" Pre-tax", " After-tax"):
+        if master.endswith(suffix):
+            return master[: -len(suffix)]
+    return master
+
+
+def build_ee_deduction_mapping_rows(vd_df, enriched_deds, skipped_deds=None):
+    """Build the employee-deduction mapping rows from a Voluntary Deduction export.
+
+    `enriched_deds` / `skipped_deds` come straight from
+    `_render_deduction_setup_section`, so the UZIO names already carry the
+    empirical Pre/Post-tax verdict, the user's Master override and any rename.
+    They are COPIED, never recomputed — re-running the mapper here would discard
+    all three (the export has no tax-treatment column at all).
+
+    Membership in those lists is also what "was this in the prior payroll?" means:
+    a description that matches neither by code nor by base master was never in the
+    prior payroll, so the deduction does not exist in UZIO to assign against.
+
+    Returns (rows, excluded, unresolved, conflicts) — one row per DISTINCT
+    description in first-appearance order, matching how the API keys its lookup.
+    """
+    known = list(enriched_deds or []) + list(skipped_deds or [])
+    by_code, by_base = {}, {}
+    for r in known:
+        uzio_name = r.get("UZIO Deduction Name") or r.get("Type Description", "")
+        code = str(r.get("Type Code", "")).strip().upper()
+        master = str(r.get("UZIO Master Deductions List", "")).strip()
+        if code:
+            by_code.setdefault(code, uzio_name)
+        if master and master != NEEDS_REVIEW:
+            by_base.setdefault(_base_master(master), uzio_name)
+
+    rows, excluded, unresolved, conflicts = [], [], [], []
+    seen = {}
+
+    for _, r in vd_df.iterrows():
+        code = r[VD_CODE_COL]
+        desc = r[VD_DESC_COL]          # VERBATIM — the API match is case-sensitive
+        if desc in seen:
+            continue
+        master = map_adp_to_uzio_master(code, desc, "")
+
+        if master.strip().lower() in EE_MAPPING_EXCLUDED_MASTERS:
+            excluded.append({"Code": code, "Description": desc,
+                             "Reason": f"Not assigned during onboarding ({master})"})
+            seen[desc] = (code, None)
+            continue
+        if any(_kw_in(desc.lower(), kw) for kw in EE_MAPPING_EXCLUDED_DESC_KEYWORDS):
+            excluded.append({"Code": code, "Description": desc,
+                             "Reason": "Direct deposit, not a deduction"})
+            seen[desc] = (code, None)
+            continue
+
+        uzio_name = by_code.get(code.upper())
+        if not uzio_name and master != NEEDS_REVIEW:
+            uzio_name = by_base.get(_base_master(master))
+        if not uzio_name:
+            unresolved.append({"Code": code, "Description": desc,
+                               "Best guess": master if master != NEEDS_REVIEW else "(none)"})
+            seen[desc] = (code, None)
+            continue
+
+        rows.append({
+            "Source Deduction Code": "",
+            "Source Deduction Code Name": desc,
+            "Uzio Deduction Code": "",
+            "Uzio Deduction Code Name": uzio_name,
+        })
+        seen[desc] = (code, uzio_name)
+
+    # Two codes sharing one description collapse to a single row (the API keeps
+    # whichever it reads first). Harmless when they agree; flag it when they don't.
+    for _, r in vd_df.iterrows():
+        desc, code = r[VD_DESC_COL], r[VD_CODE_COL]
+        kept_code, kept_name = seen.get(desc, (None, None))
+        if kept_name is None or code.upper() == str(kept_code).upper():
+            continue
+        other = by_code.get(code.upper())
+        if other and other != kept_name:
+            entry = {"Description": desc, "Kept": f"{kept_code} → {kept_name}",
+                     "Dropped": f"{code} → {other}"}
+            if entry not in conflicts:
+                conflicts.append(entry)
+
+    return rows, excluded, unresolved, conflicts
+
+
 def build_contributions_mapping_rows(enriched_contribs):
     """One row per created contribution (Uzio name = Contribution Name)."""
     rows = []
@@ -2986,6 +3169,74 @@ def _render_tax_mapping_section(results, src_name):
     return mapping_rows
 
 
+def _render_ee_deduction_mapping_section(vd_file, enriched_deds, skipped_deds):
+    """Employee Deduction Mapping — the 5th mapping CSV.
+
+    No-ops entirely when no Voluntary Deduction export was uploaded. Returns the
+    mapping rows (empty list = nothing to download).
+    """
+    if vd_file is None:
+        return []
+
+    st.markdown("## Employee Deduction Mapping")
+    vd_df, err = read_voluntary_deduction_file(vd_file)
+    if err:
+        st.error(
+            f"**Could not read `{getattr(vd_file, 'name', 'the file')}`** — {err}  \n"
+            "The other mapping files are unaffected."
+        )
+        st.markdown("---")
+        return []
+
+    rows, excluded, unresolved, conflicts = build_ee_deduction_mapping_rows(
+        vd_df, enriched_deds, skipped_deds)
+
+    st.caption(
+        f"`{len(vd_df)}` election row(s) across "
+        f"`{vd_df[VD_ID_COL].nunique()}` employee(s). The API matches each row on "
+        f"its **{VD_DESC_COL}**, so names below are copied from your file verbatim "
+        "— that lookup is case-sensitive. UZIO names come from the Deduction Setup "
+        "above, so renames and Master overrides flow through automatically."
+    )
+
+    if unresolved:
+        st.error(
+            f"**{len(unresolved)} deduction(s) left out** — not found in the prior "
+            "payroll, so they were never created in UZIO. Create them there first, "
+            "then re-run. They are excluded from the CSV rather than guessed: with "
+            "no prior-payroll evidence the Pre-tax/After-tax choice would be a coin "
+            "flip, and a wrong guess assigns the wrong tax variant to every employee."
+        )
+        st.dataframe(pd.DataFrame(unresolved), hide_index=True, use_container_width=True)
+
+    if conflicts:
+        st.warning(
+            f"**{len(conflicts)} description(s) shared by codes that map differently.** "
+            "The API keys on the description alone and keeps the first row it reads, "
+            "so only one survives. Confirm the right one."
+        )
+        st.dataframe(pd.DataFrame(conflicts), hide_index=True, use_container_width=True)
+
+    if rows:
+        st.success(f"**{len(rows)} deduction(s) mapped.**")
+        st.dataframe(pd.DataFrame(rows, columns=MAPPING_DEDUCTION_COLUMNS),
+                     hide_index=True, use_container_width=True)
+    else:
+        st.info("No deductions left to map after exclusions.")
+
+    if excluded:
+        with st.expander(f"Excluded {len(excluded)} deduction(s) — not assigned to employees",
+                         expanded=False):
+            st.caption(
+                "Support, garnishments and tax levies are set up per employee by "
+                "hand; checking/savings rows are direct deposits, not deductions."
+            )
+            st.dataframe(pd.DataFrame(excluded), hide_index=True, use_container_width=True)
+
+    st.markdown("---")
+    return rows
+
+
 def render_ui():
     st.title("ADP - Prior Payroll Setup Helper")
     st.caption(
@@ -2998,6 +3249,14 @@ def render_ui():
         type=["xlsx", "xls", "csv"],
         key="pps_helper_adp",
         accept_multiple_files=True,
+    )
+    vd_file = st.file_uploader(
+        "ADP Voluntary Deduction export (optional)",
+        type=["xlsx", "xls", "csv"],
+        key="adp_ppsh_voldedn",
+        help=("Adds a 5th mapping CSV so employee-level deduction assignment "
+              "stops being a manual mapping step. Everything else works "
+              "unchanged without it."),
     )
     client_name = st.text_input(
         "Client Name",
@@ -3045,9 +3304,13 @@ def render_ui():
     enriched_deds, skipped_deds = _render_deduction_setup_section(results, display_base)
     enriched_contribs = _render_contribution_setup_section(results, enriched_deds)
     tax_mapping_rows = _render_tax_mapping_section(results, display_base)
+    # Runs AFTER the deduction section so the UZIO names it copies already carry
+    # the user's renames and Master overrides (those are written in place).
+    ee_mapping_rows = _render_ee_deduction_mapping_section(
+        vd_file, enriched_deds, skipped_deds)
 
     # ------------------------------------------------------------------
-    # Downloads: the UZIO Setup workbook + the four API mapping CSVs
+    # Downloads: the UZIO Setup workbook + the API mapping CSVs
     # ------------------------------------------------------------------
     st.markdown("## Downloads")
     if enriched_earnings or enriched_deds or enriched_contribs:
@@ -3082,6 +3345,12 @@ def render_ui():
         (f"{safe_name}_Tax_mapping.csv",
          _mapping_csv_bytes(tax_mapping_rows, MAPPING_TAX_COLUMNS)),
     ]
+    # 5th file only when a Voluntary Deduction export was uploaded — without it
+    # the bundle is byte-identical to before this feature existed.
+    if ee_mapping_rows:
+        mapping_files.append(
+            (f"{safe_name}_EE_Deductions_mapping.csv",
+             _mapping_csv_bytes(ee_mapping_rows, MAPPING_DEDUCTION_COLUMNS)))
     files_payload = json.dumps(
         [[fn, base64.b64encode(data).decode("ascii")] for fn, data in mapping_files])
     import streamlit.components.v1 as components

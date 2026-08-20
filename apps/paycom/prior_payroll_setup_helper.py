@@ -269,6 +269,7 @@ PAYCOM_CODE_TO_UZIO_MASTER = {
     "MDC": "Medical Pre-tax",
     "MLP": "Medical After-tax",
     "R4P": "Roth 401k",
+    "LTD": "Voluntary LTD After-tax",
     "STD": "Voluntary STD After-tax",
     "VEE": "Voluntary Life Employee After-tax",
     "VIS": "Vision Pre-tax",
@@ -306,7 +307,7 @@ PCT_GROSS_MASTERS = {
 # UZIO form. Detected by keyword on the mapped Master Deductions List value.
 # Per the implementor's spec: dental, medical, vision, voluntary life (child/
 # spouse/employee), critical illness, accident insurance, cancer insurance,
-# hospital indemnity, STD, AD&D.
+# hospital indemnity, STD, LTD, AD&D.
 # NOTE: Med Claim Reimbursement and Med Plus Premium are NOT benefit types
 # (confirmed by the implementor) — they're custom reimbursement deductions. They
 # still belong to ASSIGN_ALL_LOCKED_MASTERS (Assign-to-all forced Yes), but they
@@ -314,7 +315,7 @@ PCT_GROSS_MASTERS = {
 BENEFIT_TYPE_KEYWORDS = (
     "dental", "medical", "vision", "voluntary life", "critical illness",
     "accident insurance", "cancer insurance", "hospital indemnity",
-    "voluntary std", "ad&d",
+    "voluntary std", "voluntary ltd", "ad&d",
 )
 
 # Masters whose "Assign to all employees" field is FORCED to "Yes" by UZIO and
@@ -2721,7 +2722,7 @@ def render_ui():
             "No benefit-type deductions detected, so Auto-Sync is `N/A` for "
             "every deduction. (Benefit types: dental, medical, vision, voluntary "
             "life, critical illness, accident/cancer insurance, hospital "
-            "indemnity, STD, AD&D.)"
+            "indemnity, STD, LTD, AD&D.)"
         )
     else:
         def _on_select_all():

@@ -2,6 +2,54 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-08-20] - ADP Setup Helper: Learned Earning Codes No Longer Overwrite Good Names
+
+### Fixed
+- **A truncated ADP column header silently destroyed a correct catalog entry.** ADP truncates its column labels — `PTO-PAID TIME OFF` arrives as `PTO-PAID TIME O`, `NUR-NURSERY ROUTE` as `NUR-NURSERY ROU` — and `save_learned_earning_codes` merged with `{**existing, **new_codes}`, so the learned (truncated) value won unconditionally. Running the tool on such a file rewrote the tracked `apps/adp/adp_earning_code_catalog.json`, replacing `"PTO": "Paid Time Off"` with `"Paid Time O"`. The catalog is the fallback that names **code-only** columns (`ADDITIONAL EARNINGS : LK2`), so a corrupted entry could later surface as a real UZIO Earning Name — for a different client, since the catalog is shared.
+- `_better_earning_name()` now decides: when one value is a **prefix** of the other the longer one wins (a prefix is a truncation, never an update); a genuine disagreement (`Holiday` vs `Vacation`) keeps the stored value rather than silently flipping. This is self-healing in both directions — a later full-length file repairs an already-truncated entry — and removes the dependence on the order files happen to be analysed in, which previously decided the answer:
+    - before: `PAID TIME OFF` then `PAID TIME O` → `Paid Time O`; reversed → `Paid Time Off`
+    - after: either order → `Paid Time Off`
+- Learning happens in `adp_earnings_to_setup_rows()` (called while the Earning Setup section renders), not during the analysis itself, so it fires during ordinary UI use — which is how the corruption reached the working tree three times in one session.
+
+### Added
+- `save_learned_earning_codes()` returns `{"added": ..., "improved": ...}` and the Earning Setup section shows an info box when this run changed the catalog, naming the codes. `adp_earning_code_catalog.json` is tracked in git but written at runtime, so an analysis leaves the working tree dirty; now that learned values can no longer degrade good ones, whatever lands there is genuinely new and the user is told to commit it instead of finding it in `git status`.
+
+### Notes
+- **No existing output changes.** When a column header carries a description, that description always wins and the catalog is not consulted — verified by running the same file against a good, a corrupted and an empty catalog and getting identical rows. The catalog only decides code-only columns, and codes in `ADP_EARNING_CODE_SEEDS` outrank it either way. Regression across two real client files: setup rows and `Earnings_mapping.csv` byte-identical old vs new.
+- The committed catalog was never corrupted (`"PTO": "Paid Time Off"` is intact in git) — the damage was caught in the working tree each time.
+- A code seen for the **first** time with a truncated header still enters truncated; the rule cannot invent missing letters. It can be healed by a later full-length file, and the new info box surfaces it for manual correction before committing.
+
+## [2026-08-20] - ADP Setup Helper: Employee Deduction Mapping File (5th Mapping CSV)
+
+### Added
+- **`<Client>_EE_Deductions_mapping.csv`** — the mapping file the onboarding API needs for the *employee deduction assignment* call, which until now was built by hand. A new **optional** upload ("ADP Voluntary Deduction export") sits beside the Prior Payroll uploader; when present, a fifth CSV joins the existing download bundle. With no upload, every existing output is unchanged.
+- It cannot reuse `_Deductions_mapping.csv`: that file's source name is the prior payroll **column header** (`VOLUNTARY DEDUCTION : LTD-LTD POST TAX`), while `EmployeeDeductionSetUpServiceImpl` looks up `mappingBySourceName.get(csvRecord.getDeductionDesc())`, which `ADPConfig.toPaycomDeductionRecord()` fills from the export's `DEDUCTION DESCRIPTION` (`LTD Post Tax`). That lookup is a plain `HashMap.get` — **case-sensitive and untrimmed** — so source names are copied VERBATIM from the uploaded file. (The Uzio side is matched `.trim().toLowerCase()`, so only the source side is fragile; same failure mode as the `ROTH:MEMO : N` uppercase bug.)
+- **Join is code + base master, not code alone.** The export carries `88-ADP 401K%` / `87-ADP ROTH%` while the prior payroll carries `K1-ADP 401K` / `6-ADP ROTH`. Both sides resolve to the `401k` / `Roth 401k` base (`_base_master()` drops the ` Pre-tax` / ` After-tax` suffix), so they join with no alias table. A client running both a percent and a flat-dollar 401k gets one row per description, both pointing at the same Uzio deduction.
+- **UZIO names are copied from `enriched_deds`, never recomputed** — re-running the mapper would discard the empirical Pre/Post-tax verdict and the user's Master-override and rename, none of which the export carries (the API sets `taxTreatment(null)`). Membership in `enriched_deds` / `skipped_deds` is also what "was this in the prior payroll?" means. Verified: renaming `K1` in the UI flows through to the `88-ADP 401K%` row.
+- **Excluded** (never assigned to employees during onboarding): deductions resolving to Child Support / Spousal Support Order / Creditor Garnishment / Federal or State Tax Lien — which covers Support, Garnishment (`73`, `93-GARNISHMENT%`) and Tax Levy — plus descriptions matching `CHECKING` / `SAVINGS`, which are direct deposits riding in the same export. Listed on screen, not silently dropped.
+- **Unresolved rows are left out of the CSV and reported in red.** A description matching neither by code nor base master was not in the prior payroll, so the deduction does not exist in UZIO. Emitting a best-effort master was rejected because it can *succeed with the wrong answer*: with no verdict available the mapper defaults to a paired family's Pre-tax variant, so a coin-flip `Critical Illness Pre-tax` would silently assign the wrong tax variant to every employee if that master happened to exist.
+- Two codes sharing one description collapse to a single row (the API keeps whichever it reads first via `Collectors.toMap(..., (first, second) -> first)`); when they resolve to different Uzio names an amber warning names both.
+- Reading is content-driven: the workbook ships a second `Report Runtime Settings` sheet and the data sheet name varies by client, so the first sheet carrying both `DEDUCTION CODE` and `DEDUCTION DESCRIPTION` wins. Rows with a blank ID/code/description are dropped, which removes ADP's `Report Totals:` footer without pattern-matching it.
+
+### Verification
+- On the real High Distinction files (338 rows -> 337 after the totals row, 118 employees) the generated CSV is **byte-identical** to the hand-built sample, including row order (first appearance in the file): 12 mapped, 5 distinct descriptions excluded, 0 unresolved, 0 conflicts, no BOM.
+- Regression, old module vs new: `run_setup_helper` output, `enrich_deductions_for_uzio`, `enrich_earnings_for_uzio`, `Deductions_mapping.csv` and `Earnings_mapping.csv` all identical; every sheet of `UZIO_Setup.xlsx` identical (the 1-byte size delta is a zip timestamp). The diff is 270 additions and one reworded comment.
+- Edge cases covered: rename propagation through the base-master join, unresolved rows, all six exclusion paths, conflicting duplicate descriptions, `skipped_deds` honoured (`PAC-PAYACTIV` -> `Earned Wage Access`), missing-column error, and totals-row removal.
+
+### Notes
+- ADP only. Paycom's equivalent export is a different shape and is untouched.
+- Design: `docs/superpowers/specs/2026-08-20-adp-ee-deduction-mapping-design.md`.
+- `LTD Post Tax` -> `Voluntary LTD After-tax` depends on the LTD code seed added 2026-08-19.
+
+## [2026-08-19] - Setup Helpers (ADP + Paycom): LTD Deductions Now Map to Voluntary LTD After-tax
+
+### Fixed
+- **`LTD` deductions fell through to `<NEEDS REVIEW>`** even though `Voluntary LTD After-tax` has always been in the UZIO Master Deductions List. `LTD` was absent from the code seeds and from every keyword list, so `VOLUNTARY DEDUCTION : LTD-LTD POST TAX` produced no master, kept the raw description as the Deduction Name, and — because `BENEFIT_TYPE_KEYWORDS` had `voluntary std` but not `voluntary ltd` — was not treated as a benefit type: `Auto-Sync = N/A` (no toggle in the UI), `Track arrears = No`, blank `Arrears Processing Method`, `W-2 Box = Not Required`. LTD is a benefit exactly like STD. Added `"LTD": "Voluntary LTD After-tax"` to the code seeds (a plain string, not a Pre/After-tax tuple — UZIO ships no `Voluntary LTD Pre-tax`, same as STD) and `"voluntary ltd"` to `BENEFIT_TYPE_KEYWORDS`. LTD rows now come out byte-identical to STD apart from the master name: `Fixed $`, `Track arrears = Yes`, `Arrears Processing = Total Amount`, W-2 Box locked, and a working Auto-Sync toggle (default Off, Select All covers it). Applied to both `apps/adp/` and `apps/paycom/`, whose Auto-Sync captions now list LTD alongside STD.
+- Deliberately scoped to the **code seed only** — no `ltd` / `long term disability` keyword was added, matching how STD works today. A description-only file (`73-LONG TERM DISABILITY` with a numeric code) still needs review, exactly as `73-SHORT TERM DISABILITY` would. A bare `ltd` keyword was rejected outright: it would collide with company names such as `ABC LTD-GARNISHMENT`.
+
+### Verification
+- A/B over the pre-change module across every code seed and keyword: **ADP 186 (label x tax) probes, 9 changed — all `LTD`**; **Paycom 63 probes, 6 changed — all `LTD`**. `81-LTD`, `ABC LTD-GARNISHMENT` and `('', 'LTD')` are unchanged on both sides, confirming no keyword collision was introduced.
+
 ## [2026-08-18] - ADP Withholding Audit: Every Employee Reported ACTIVE; W-4 History Over-Flagged
 
 ### Fixed

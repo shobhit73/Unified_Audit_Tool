@@ -363,47 +363,78 @@ def render_ui():
     with col3:
         f_c = st.file_uploader("UZIO Census (optional)", type=["xlsx", "xlsm"], key="at_c")
 
+    # st.download_button triggers a rerun of its own, so results computed inside
+    # the Generate block would vanish the moment the first file is downloaded —
+    # taking the second download button with them. Keep them in session_state and
+    # render the buttons OUTSIDE that block.
+    SKEY = "adp_timeoff_result"
+
+    def _signature(*files):
+        return tuple((f.name, getattr(f, "size", None)) if f is not None else None
+                     for f in files)
+
+    sig = _signature(f_a, f_u, f_c)
+    cached = st.session_state.get(SKEY)
+    if cached and cached.get("signature") != sig:
+        # Different uploads than the ones that produced these files — drop them
+        # rather than let someone download the previous client's data.
+        del st.session_state[SKEY]
+        cached = None
+
     if st.button("Generate Files", key="run_timeoff_adp"):
         if not f_u or not f_a:
             st.error("Please upload both the ADP Balance Summary and the Uzio Template.")
             return
-
         try:
             with st.spinner("Processing..."):
                 filled_bytes, audit_bytes, stats = run_tool(f_a, f_u, f_c)
             if not filled_bytes:
                 return
-
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Employees in ADP", stats["employees"])
-            c2.metric("Balances written", stats["filled"])
-            c3.metric("Missing in UZIO", stats["missing"])
-            c4.metric("Terminated in UZIO", stats["terminated"])
-            if f_c is None:
-                st.caption("Upload the UZIO census to see which of these employees "
-                           "are already terminated.")
-
-            ts = pd.Timestamp.now().strftime("%d_%m_%Y_%H%M")
-            st.success("Both files generated.")
-            d1, d2 = st.columns(2)
-            with d1:
-                st.download_button(
-                    "⬇️ Time Off Import (filled)",
-                    data=filled_bytes,
-                    file_name=f"{client_name}_Time off Import_filled.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary",
-                    key="to_dl_filled",
-                )
-            with d2:
-                st.download_button(
-                    "⬇️ Audit Report",
-                    data=audit_bytes,
-                    file_name=f"{client_name}_Uzio_ADP_TimeOff_Audit_Report_{ts}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="to_dl_audit",
-                )
-
+            st.session_state[SKEY] = {
+                "signature": sig,
+                "filled": filled_bytes,
+                "audit": audit_bytes,
+                "stats": stats,
+                "had_census": f_c is not None,
+                # Stamped once, so the filename does not change on every rerun.
+                "ts": pd.Timestamp.now().strftime("%d_%m_%Y_%H%M"),
+            }
+            cached = st.session_state[SKEY]
         except Exception as e:
             st.error(f"An error occurred: {e}")
             st.exception(e)
+            return
+
+    if not cached:
+        return
+
+    stats = cached["stats"]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Employees in ADP", stats["employees"])
+    c2.metric("Balances written", stats["filled"])
+    c3.metric("Missing in UZIO", stats["missing"])
+    c4.metric("Terminated in UZIO", stats["terminated"])
+    if not cached["had_census"]:
+        st.caption("Upload the UZIO census to see which of these employees are "
+                   "already terminated.")
+
+    st.success("Both files are ready — download them one at a time.")
+    d1, d2 = st.columns(2)
+    with d1:
+        st.download_button(
+            "⬇️ Time Off Import (filled)",
+            data=cached["filled"],
+            file_name=f"{client_name}_Time off Import_filled.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            key="to_dl_filled",
+        )
+    with d2:
+        st.download_button(
+            "⬇️ Audit Report",
+            data=cached["audit"],
+            file_name=(f"{client_name}_Uzio_ADP_TimeOff_Audit_Report_"
+                       f"{cached['ts']}.xlsx"),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="to_dl_audit",
+        )

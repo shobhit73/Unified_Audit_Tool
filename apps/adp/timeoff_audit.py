@@ -288,15 +288,18 @@ def build_audit_sheets(file_uzio, adp_df, census_df):
                 "ADP Balance": r["ADP Balance"],
             })
 
-    sheets["Missing in Uzio"] = (pd.DataFrame(missing) if missing
-                                 else pd.DataFrame({"Message": ["All ADP employees matched"]}))
+    # "Missing in Uzio" and "ADP Grouped Data" are deliberately NOT emitted as
+    # sheets: both were fully contained in "Balance vs UZIO Status". Grouped Data
+    # is its first three columns, and Missing is it filtered to
+    # `In Import Template = No`. The missing employees are still computed above,
+    # because Exception Summary and the UI counters need them.
     sheets["Unassigned Policies"] = (pd.DataFrame(unassigned_rows) if unassigned_rows
                                      else pd.DataFrame({"Message": ["No unassigned policies found"]}))
-    sheets["ADP Grouped Data"] = adp_df.rename(
-        columns={"id": "Employee ID", "name": "Employee Name", "balance": "Total Balance"})
     sheets["Exception Summary"] = (pd.DataFrame(exceptions) if exceptions
                                    else pd.DataFrame({"Message": ["No exceptions found"]}))
-    return sheets
+
+    counts = {"missing": len(missing), "unassigned": len(unassigned_rows)}
+    return sheets, counts
 
 
 def audit_workbook_bytes(sheets):
@@ -331,7 +334,7 @@ def run_tool(file_adp, file_uzio, file_census=None):
         st.error(err)
         return None, None, None
 
-    sheets = build_audit_sheets(file_uzio, adp_df, census_df)
+    sheets, counts = build_audit_sheets(file_uzio, adp_df, census_df)
 
     buf = io.BytesIO()
     wb_filled.save(buf)
@@ -339,9 +342,8 @@ def run_tool(file_adp, file_uzio, file_census=None):
     stats = {
         "employees": len(adp_df),
         "filled": filled,
-        "missing": len(sheets["Missing in Uzio"]) if "Employee ID" in sheets["Missing in Uzio"] else 0,
-        "unassigned": (len(sheets["Unassigned Policies"])
-                       if "Message" not in sheets["Unassigned Policies"] else 0),
+        "missing": counts["missing"],
+        "unassigned": counts["unassigned"],
         "terminated": (int(sheets["Balance vs UZIO Status"]["UZIO Employment Status"]
                            .str.lower().str.startswith("terminated").sum())
                        if "Balance vs UZIO Status" in sheets else 0),

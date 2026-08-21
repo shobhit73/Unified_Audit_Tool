@@ -225,7 +225,20 @@ def build_audit_sheets(file_uzio, adp_df, census_df):
                          header=UZIO_HEADER_ROW - 1)
     c_id = _find(df_u.columns, "employee id")
     c_bal = _find(df_u.columns, "opening balance") or _find(df_u.columns, "operating balance")
-    c_name = _find(df_u.columns, "employee first name")
+    # The template splits the name across two columns; reading only the first
+    # one put "Ryan" and "Caleb" in the Exception Summary instead of full names.
+    c_fn = _find(df_u.columns, "employee first name")
+    c_ln = _find(df_u.columns, "employee last name")
+    c_name = _find(df_u.columns, "employee name")       # single-column fallback
+
+    def template_name(row):
+        parts = [str(row[c]).strip() for c in (c_fn, c_ln)
+                 if c and pd.notna(row[c]) and str(row[c]).strip()]
+        if parts:
+            return " ".join(parts)
+        if c_name and pd.notna(row[c_name]) and str(row[c_name]).strip():
+            return str(row[c_name]).strip()
+        return "N/A"
 
     balance_map = dict(zip(adp_df["id"], adp_df["balance"]))
     name_map = dict(zip(adp_df["id"], adp_df["name"]))
@@ -240,7 +253,7 @@ def build_audit_sheets(file_uzio, adp_df, census_df):
             unassigned_rows.append(row.to_dict())
             exceptions.append({
                 "Employee ID": str(row[c_id]) if pd.notna(row[c_id]) else "",
-                "Employee Name": str(row[c_name]) if c_name and pd.notna(row[c_name]) else "N/A",
+                "Employee Name": template_name(row),
                 "Issue Category": "Unassigned Policy (Blank Balance)",
                 "ADP Balance": "",
             })

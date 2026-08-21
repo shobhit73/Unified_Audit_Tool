@@ -101,13 +101,27 @@ def read_adp_balances(file_adp):
 
     df = pd.DataFrame(rows)
     df["balance"] = pd.to_numeric(df["balance"], errors="coerce")
-    # min_count=1 so an employee with no readable amounts stays NaN instead of
-    # being reported as a real 0.00 balance.
     out = (df.groupby("id")
-             .agg(balance=("balance", lambda s: s.sum(min_count=1)),
-                  name=("name", "first"))
+             .agg(balance=("balance", _sum_money), name=("name", "first"))
              .reset_index())
     return out, None
+
+
+def _sum_money(series):
+    """Total a set of 2-decimal money values back into a 2-decimal money value.
+
+    `min_count=1` keeps an employee with no readable amounts at NaN rather than
+    reporting a real 0.00 balance.
+
+    The rounding matters: the transaction amounts are exact to the cent as
+    decimals, but not in binary floating point, so adding them leaves dust.
+    3.62 + 24.42 - 28.04 is 0.00 on paper and 3.55e-15 in a float. On this
+    client 71 of 132 employees carried such dust; it stayed invisible wherever
+    the total was large (18.709999999999994 renders as 18.71) and surfaced only
+    where the total was exactly zero, which Excel then showed as `3.55271E-15`.
+    """
+    total = series.sum(min_count=1)
+    return total if pd.isna(total) else round(total, 2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

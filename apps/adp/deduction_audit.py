@@ -1,6 +1,10 @@
 import streamlit as st
 import pandas as pd
 import io
+
+from utils.deduction_mapping import (
+    load_deduction_mapping, unmapped_source_deductions, REQUIRED_COLUMNS,
+)
 import re
 from datetime import datetime
 from utils.audit_utils import get_identity_match_map, norm_ssn_canonical
@@ -328,6 +332,9 @@ def _generate_output(results):
     return out_buffer.getvalue(), None, []
 
 
+# Kept for reference only: this used to populate the Uzio side of the manual
+# mapping dropdowns, which the Employee Deduction Mapping upload replaced.
+# Nothing calls it now.
 def get_unique_uzio_deductions_from_excel(file):
     try:
         file.seek(0)
@@ -387,7 +394,8 @@ def render_ui():
     **Instructions**:
     1. Upload **Uzio Deduction Export** (Excel).
     2. Upload **ADP Voluntary Deduction Export** (Excel).
-    3. Map the extracted ADP deductions to Uzio deductions, then click **Run Comparison**.
+    3. Upload the **Employee Deduction Mapping** CSV from the ADP Prior Payroll
+       Setup Helper (`<Client>_EE_Deductions_mapping.csv`), then click **Run Audit**.
     """)
     
     col1, col2 = st.columns(2)
@@ -396,80 +404,94 @@ def render_ui():
     with col2:
         a_file = st.file_uploader("Upload ADP Deduction File", type=["xlsx", "xls"], key="adp_ded_adp")
 
+    m_file = st.file_uploader(
+        "Upload Employee Deduction Mapping (from the Prior Payroll Setup Helper)",
+        type=["csv", "xlsx", "xls"], key="adp_ded_mapping",
+        help="The <Client>_EE_Deductions_mapping.csv the setup helper produces. "
+             "Columns: " + ", ".join(REQUIRED_COLUMNS),
+    )
+
     client_name = st.text_input("Enter Client Name (for Report Filename)", value="Client_Name")
 
-    if u_file and a_file:
+    if u_file and a_file and m_file:
          st.markdown("---")
-         st.subheader("Map Deductions")
-         
-         uzio_deductions = get_unique_uzio_deductions_from_excel(u_file)
-         adp_deductions = get_unique_adp_deductions_from_excel(a_file)
-         
-         if not uzio_deductions:
-              st.error("Could not find any 'Deduction Name' values in the Uzio file.")
-         elif not adp_deductions:
-              st.error("Could not find any Deduction Descriptions or Codes in the ADP file.")
-         else:
-              st.markdown("Please map the ADP Deductions to the corresponding Uzio Deductions below:")
-              
-              ui_mapping = {}
-              
-              # Initialize session state for mappings
-              for a_ded in adp_deductions:
-                  key = f"map_adp_{a_ded}"
-                  if key not in st.session_state:
-                      default_val = "— Ignore / Skip —"
-                      for opt in uzio_deductions:
-                          if opt.lower() == a_ded.lower():
-                              default_val = opt
-                              break
-                      st.session_state[key] = default_val
+         st.subheader("Deduction Mapping")
 
-              
-              for a_ded in sorted(adp_deductions):
-                  col_a, col_b = st.columns([1, 1])
-                  with col_a:
-                       st.write(a_ded)
-                  with col_b:
-                       key = f"map_adp_{a_ded}"
-                       current_val = st.session_state.get(key, "— Ignore / Skip —")
-                       
-                       available_options = ["— Ignore / Skip —"] + sorted(uzio_deductions)
-                               
-                       selected = st.selectbox(
-                           f"Map for {a_ded}", 
-                           available_options,
-                           key=key,
-                           label_visibility="collapsed"
+         adp_deductions = get_unique_adp_deductions_from_excel(a_file)
+
+         try:
+             ui_mapping, mrep = load_deduction_mapping(m_file)
+         except Exception as e:
+             st.error(str(e))
+             ui_mapping, mrep = {}, None
+
+         if mrep is not None:
+             if not ui_mapping:
+                  st.error("The mapping file has no usable rows — every row is missing "
+                           "its Uzio deduction name.")
+             else:
+                  st.success(f"Loaded {len(mrep['pairs'])} mapped deduction(s) from "
+                             f"{m_file.name}.")
+
+                  # The audit skips an unmapped deduction with a bare `continue`,
+                  # so anything the mapping cannot answer has to be shown here or
+                  # it disappears from the comparison with no trace.
+                  unmapped = unmapped_source_deductions(adp_deductions, ui_mapping)
+                  if unmapped:
+                       st.warning(
+                           f"{len(unmapped)} deduction(s) in the ADP file are not in the "
+                           "mapping and will be EXCLUDED from the audit:"
                        )
-                       if selected != "— Ignore / Skip —":
-                            ui_mapping[a_ded] = selected
-              
-              st.markdown("---")
-              if st.button("Run Audit", type="primary"):
-                  with st.spinner("Processing..."):
-                      try:
-                          u_file.seek(0)
-                          a_file.seek(0)
-                          report_data, error_msg, _ = run_audit(u_file, a_file, ui_mapping)
+                       st.write(", ".join(unmapped))
+
+                  if mrep["blank_target"]:
+                       st.info(
+                           f"{len(mrep['blank_target'])} row(s) in the mapping have no Uzio "
+                           "deduction (the setup helper leaves garnishments, child support "
+                           "and tax liens unassigned) — also excluded: "
+                           + ", ".join(mrep["blank_target"])
+                       )
+
+                  if mrep["conflicts"]:
+                       st.warning(
+                           "The mapping points the same source deduction at two different "
+                           "Uzio deductions; the first was kept: "
+                           + "; ".join(f"{k}: kept '{a}', ignored '{b}'"
+                                       for k, a, b in mrep["conflicts"])
+                       )
+
+                  with st.expander(f"View the {len(mrep['pairs'])} mapped deduction(s)"):
+                       st.dataframe(
+                           pd.DataFrame(mrep["pairs"],
+                                        columns=["ADP Deduction", "ADP Code", "Uzio Deduction"]),
+                           use_container_width=True, hide_index=True,
+                       )
+
+                  st.markdown("---")
+                  if st.button("Run Audit", type="primary"):
+                      with st.spinner("Processing..."):
+                          try:
+                              u_file.seek(0)
+                              a_file.seek(0)
+                              report_data, error_msg, _ = run_audit(u_file, a_file, ui_mapping)
                           
-                          if error_msg:
-                              st.error(error_msg)
-                          else:
-                              st.success("Audit Completed Successfully!")
+                              if error_msg:
+                                  st.error(error_msg)
+                              else:
+                                  st.success("Audit Completed Successfully!")
                               
-                              timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
-                              filename = f"{client_name}_Uzio_ADP_Deduction_Audit_Report_{timestamp}.xlsx"
+                                  timestamp = pd.Timestamp.now().strftime('%d_%m_%Y_%H%M')
+                                  filename = f"{client_name}_Uzio_ADP_Deduction_Audit_Report_{timestamp}.xlsx"
                               
-                              st.download_button(
-                                  label="Download Audit Report",
-                                  data=report_data,
-                                  file_name=filename,
-                                  mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                              )
-                      except Exception as e:
-                          st.error(f"An unexpected error occurred: {e}")
-                          st.exception(e)
+                                  st.download_button(
+                                      label="Download Audit Report",
+                                      data=report_data,
+                                      file_name=filename,
+                                      mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                  )
+                          except Exception as e:
+                              st.error(f"An unexpected error occurred: {e}")
+                              st.exception(e)
 
 if __name__ == "__main__":
     st.set_page_config(page_title="ADP Deduction Audit", layout="wide")

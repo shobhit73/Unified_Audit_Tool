@@ -191,33 +191,41 @@ def calculate_totals(df, header_top, column_names):
         mask = df.iloc[:, 0].astype(str).str.lower().str.contains("total|grand", na=False)
         df_clean = df[~mask].copy()
     
-    norm_cols_main = {norm_colname(c).lower(): i for i, c in enumerate(df.columns)}
+    # Column lookup is parens-PRESERVING only. There used to be a second,
+    # paren-stripping pass as a fallback, and it silently resolved a mapping to
+    # a SIBLING column that differed only inside the brackets: with
+    # 'SCHOOL DISTRICT - EMPLOYEE TAX(NORTHWOOD)', '(OTSEGO)' and '(EVERGREEN)'
+    # all collapsing to one key, whichever came last won. On a file that had no
+    # NORTHWOOD column at all, the NORTHWOOD mapping picked up EVERGREEN and
+    # double-counted it (Beck Logistics: 91.52 reported under Northwood, whose
+    # real total is 14.33).
+    #
+    # The fallback has no counterpart in the consumer. The onboarding API looks
+    # its mappings up with a plain HashMap.get on the source name
+    # (PriorPayrollMappingServiceImpl: earning/deduction/contribution maps are
+    # exact and case-sensitive; the tax map only adds trim + upper-case). It
+    # never strips brackets, so a fuzzy match here reports a number the API
+    # would never import. Names that do not resolve are collected and surfaced
+    # instead of being guessed at.
     exact_cols_main = {_norm_keep_parens(c): i for i, c in enumerate(df.columns)}
-    norm_cols_top = {}
     exact_cols_top = {}
     if header_top:
         for i, c in enumerate(header_top):
             if pd.notna(c) and str(c).strip() != "":
-                norm_cols_top[norm_colname(c).lower()] = i
                 exact_cols_top[_norm_keep_parens(c)] = i
 
     cols_to_sum = []
+    matched_names = set()
     for name in column_names:
         e_name = _norm_keep_parens(name)
-        n_name = norm_colname(name).lower()
-        # Exact (parens-preserving) match wins — 'LIVED-IN STATE (IL)' must
-        # never resolve to the (WI) column; the paren-stripping norm is only
-        # the fallback for census-style '(Personal Profile)' suffixes.
         if e_name in exact_cols_main:
             idx = exact_cols_main[e_name]
             cols_to_sum.append(df.columns[idx])
             found_cols.append(df.columns[idx])
-        elif n_name in norm_cols_main:
-            idx = norm_cols_main[n_name]
-            cols_to_sum.append(df.columns[idx])
-            found_cols.append(df.columns[idx])
-        elif e_name in exact_cols_top or n_name in norm_cols_top:
-            start_idx = exact_cols_top.get(e_name, norm_cols_top.get(n_name))
+            matched_names.add(name)
+        elif e_name in exact_cols_top:
+            matched_names.add(name)
+            start_idx = exact_cols_top[e_name]
             end_idx = len(df.columns)
             if header_top:
                 for k in range(start_idx + 1, len(header_top)):
@@ -243,8 +251,8 @@ def calculate_totals(df, header_top, column_names):
             emp_row_counts[key] = 0
         emp_tots[key] += row_tot
         emp_row_counts[key] += 1
-            
-    return sum(emp_tots.values()), found_cols, emp_tots, emp_row_counts
+
+    return sum(emp_tots.values()), found_cols, emp_tots, emp_row_counts, matched_names
 
 def detect_duplicate_pay_periods(df):
     """Find employees with more than one row for the same Start Date / End Date / Pay Date.
@@ -481,10 +489,14 @@ def _sum_adp_for_uzio_name(adp_data_list, adp_names, side):
     for df_adp, adp_top, _ in adp_data_list:
         eid_col = next((c for c in df_adp.columns if any(x in str(c).lower() for x in ["associate id", "employee id", "file #"])), None)
         work = _filter_data_rows(df_adp, eid_col)
-        norm_main = {norm_colname(c).lower(): i for i, c in enumerate(df_adp.columns)}
-        norm_top  = {norm_colname(str(c)).lower(): i for i, c in enumerate(adp_top or []) if pd.notna(c) and str(c).strip() != ""}
+        # Parens-preserving, for the same reason as calculate_totals: the
+        # paren-stripping norm collapses '(NORTHWOOD)', '(OTSEGO)' and
+        # '(EVERGREEN)' onto one key, so a per-jurisdiction tax would verify its
+        # rate against a sibling jurisdiction's wages and amount.
+        norm_main = {_norm_keep_parens(c): i for i, c in enumerate(df_adp.columns)}
+        norm_top  = {_norm_keep_parens(str(c)): i for i, c in enumerate(adp_top or []) if pd.notna(c) and str(c).strip() != ""}
         for name in adp_names:
-            n = norm_colname(name).lower()
+            n = _norm_keep_parens(name)
             if n in norm_main:
                 idx = norm_main[n]
                 total_a += work.iloc[:, idx].apply(clean_money_val).sum()
@@ -644,7 +656,8 @@ def run_comparison(adp_files, uzio_file, mappings, incomplete_mappings=None):
 
     results = []
     employee_mismatches = []
-    
+    unmatched_names = []
+
     unique_uzio_items = {}
     for m in mappings:
         u_name = m["UZIO_Name"]
@@ -660,8 +673,10 @@ def run_comparison(adp_files, uzio_file, mappings, incomplete_mappings=None):
         adp_cols = []
         adp_emp_detail = {}
         adp_emp_counts = {}
+        adp_matched = set()
         for df_a, adp_t, _ in adp_data_list:
-            tot, cols, emp_m, emp_c = calculate_totals(df_a, adp_t, adp_names)
+            tot, cols, emp_m, emp_c, matched = calculate_totals(df_a, adp_t, adp_names)
+            adp_matched |= matched
             adp_total += tot
             for c in cols:
                 if c not in adp_cols:
@@ -673,7 +688,28 @@ def run_comparison(adp_files, uzio_file, mappings, incomplete_mappings=None):
                 if eid not in adp_emp_counts: adp_emp_counts[eid] = {}
                 adp_emp_counts[eid][p_date] = adp_emp_counts[eid].get(p_date, 0) + c_val
         
-        uzio_total, uzio_cols, uzio_emp_m, _ = calculate_totals(df_uzio, uzio_top, [u_name])
+        uzio_total, uzio_cols, uzio_emp_m, _, uzio_matched = calculate_totals(
+            df_uzio, uzio_top, [u_name])
+
+        # A mapping name that resolves in NO uploaded file is not a zero — it is
+        # a name the API will not find either, so that row simply will not
+        # import. Surface it rather than letting it read as a clean 0.00.
+        # (Found in some files but not others is normal: a column only appears
+        # once the client starts using that earning/deduction/jurisdiction.)
+        for nm in adp_names:
+            if nm not in adp_matched:
+                unmatched_names.append({
+                    "Side": "ADP", "Category": cat, "UZIO Item": u_name,
+                    "Mapping Source Name": nm,
+                    "Note": "Not found in any uploaded ADP file — the API will not import it either.",
+                })
+        if u_name not in uzio_matched:
+            unmatched_names.append({
+                "Side": "UZIO", "Category": cat, "UZIO Item": u_name,
+                "Mapping Source Name": u_name,
+                "Note": "Not found in the UZIO register.",
+            })
+
         uzio_emp_detail = {}
         for (eid, p_date), v in uzio_emp_m.items():
             if eid not in uzio_emp_detail: uzio_emp_detail[eid] = {}
@@ -741,7 +777,7 @@ def run_comparison(adp_files, uzio_file, mappings, incomplete_mappings=None):
         adp_emp_detail = {}
         adp_emp_counts = {}
         for df_a, adp_t, _ in adp_data_list:
-            tot, cols, emp_m, emp_c = calculate_totals(df_a, adp_t, [inc["ADP_Name"]])
+            tot, cols, emp_m, emp_c, _ = calculate_totals(df_a, adp_t, [inc["ADP_Name"]])
             adp_total += tot
             for c in cols:
                 if c not in adp_cols:
@@ -814,6 +850,17 @@ def run_comparison(adp_files, uzio_file, mappings, incomplete_mappings=None):
             df_emp_mismatches.to_excel(writer, sheet_name="Employee Mismatches", index=False)
             sheet_names.append("Employee Mismatches")
             dfs_to_format.append(df_emp_mismatches)
+
+        # Mapping source names that resolved to no column at all. These are not
+        # zero-value items — the onboarding API looks names up exactly, so it
+        # will not find them either and that data simply will not import.
+        df_unmatched = pd.DataFrame(unmatched_names)
+        if not df_unmatched.empty:
+            df_unmatched = df_unmatched[["Side", "Category", "UZIO Item",
+                                         "Mapping Source Name", "Note"]]
+            df_unmatched.to_excel(writer, sheet_name="Unmatched Mapping Names", index=False)
+            sheet_names.append("Unmatched Mapping Names")
+            dfs_to_format.append(df_unmatched)
 
         # Unmapped moneyed columns (informational review list, not mismatches)
         if not df_unmapped.empty:

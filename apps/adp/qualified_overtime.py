@@ -79,3 +79,32 @@ def resolve_qot_column(df, chosen=None):
         for name, g in df.groupby("_file"):
             per_file[name] = bool(g[col].notna().any()) if col in g.columns else False
     return col, per_file
+
+
+# UZIO Qualified Overtime template. Headers sit on row 1 of "QOT Details";
+# "Instructions" is a second sheet that must survive into the output untouched.
+TEMPLATE_SHEET = "QOT Details"
+TEMPLATE_HEADERS = ["Employee ID", "First Name", "Last Name", "Employment Status",
+                    "Period Start Date", "Period End Date", "Pay Date", "QOT Premium"]
+
+
+def read_qot_template(file):
+    """Read the template's QOT Details sheet as strings. Returns (df, error)."""
+    file.seek(0)
+    try:
+        book = pd.read_excel(io.BytesIO(file.read()), sheet_name=None, dtype=str)
+    except Exception as e:
+        return None, "Could not read the template: %s" % e
+    if TEMPLATE_SHEET not in book:
+        return None, ("The template has no `%s` sheet. Sheets found: %s."
+                      % (TEMPLATE_SHEET, ", ".join(book) or "none"))
+    df = book[TEMPLATE_SHEET].copy()
+    df.columns = [str(c).strip() for c in df.columns]
+    missing = [h for h in TEMPLATE_HEADERS if h not in df.columns]
+    if missing:
+        return None, ("`%s` is missing column(s): %s."
+                      % (TEMPLATE_SHEET, ", ".join(missing)))
+    df = df[TEMPLATE_HEADERS].copy()
+    df["Employee ID"] = df["Employee ID"].fillna("").astype(str).str.strip()
+    df = df[df["Employee ID"] != ""].reset_index(drop=True)
+    return df.fillna(""), None

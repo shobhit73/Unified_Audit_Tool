@@ -108,3 +108,144 @@ def read_qot_template(file):
     df["Employee ID"] = df["Employee ID"].fillna("").astype(str).str.strip()
     df = df[df["Employee ID"] != ""].reset_index(drop=True)
     return df.fillna(""), None
+
+
+def _money(v):
+    """Parse a premium. Blank / unparseable -> None, which means 'no overtime'."""
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return None
+    s = str(v).strip().replace(",", "").replace("$", "")
+    if s == "" or s.lower() in ("nan", "none"):
+        return None
+    try:
+        return round(float(s), 2)
+    except ValueError:
+        return None
+
+
+def build_qot_rows(payroll_df, template_df, qot_col):
+    """One output row per (employee, pay date) whose premium is non-zero.
+
+    The filter is per ROW, not per employee: an employee keeps every pay period
+    that carries a premium and disappears only when all of theirs are zero or
+    blank. Rule 14 of the template ("omission does not delete") makes dropping
+    the zero rows safe.
+
+    Blank and 0 both mean "no qualified overtime". A NEGATIVE premium is kept —
+    non-zero in either direction is real data.
+    """
+    empty = {"rows": [], "overlaps": [], "missing_dates": [], "not_in_template": [],
+             "employees_emitted": 0, "employees_dropped_zero": 0, "total_qot": 0.0,
+             "pay_years": []}
+    if payroll_df.empty or qot_col not in payroll_df.columns:
+        return empty
+
+    df = payroll_df.copy()
+    df["_qot"] = df[qot_col].apply(_money)
+    all_employees = set(df[ADP_ID_COL]) - {""}
+    kept = df[df["_qot"].notna() & (df["_qot"] != 0)].copy()
+
+    names = template_df.set_index("Employee ID")[
+        ["First Name", "Last Name", "Employment Status"]].to_dict("index")
+
+    # `row_files` runs parallel to `rows` so the overlap report can name the file
+    # each side came from. It cannot live inside the row dicts: those are keyed
+    # strictly by TEMPLATE_HEADERS.
+    rows, row_files, missing_dates, orphan = [], [], {}, {}
+    for _, r in kept.iterrows():
+        eid = r[ADP_ID_COL]
+        start, end, pay = (str(r[c]).strip() if pd.notna(r[c]) else ""
+                           for c in (ADP_START_COL, ADP_END_COL, ADP_PAY_COL))
+
+        # Template rule 5: a row must carry all three dates or none. We always
+        # write dates, so a row short of one is unusable and blocks the run.
+        absent = [lbl for lbl, val in (("Period Start Date", start),
+                                       ("Period End Date", end),
+                                       ("Pay Date", pay)) if not val]
+        if absent:
+            missing_dates.setdefault((eid, pay), {
+                "Employee ID": eid, "Pay Date": pay or "(blank)",
+                "Missing": ", ".join(absent)})
+            continue
+
+        if eid not in names:
+            # UZIO has no such employee to import against, so the row is left
+            # out — but the money is real, so it is reported.
+            o = orphan.setdefault(eid, {"Employee ID": eid, "Rows": 0, "Total QOT": 0.0})
+            o["Rows"] += 1
+            o["Total QOT"] = round(o["Total QOT"] + r["_qot"], 2)
+            continue
+
+        n = names[eid]
+        rows.append({
+            "Employee ID": eid,
+            "First Name": n.get("First Name", ""),
+            "Last Name": n.get("Last Name", ""),
+            "Employment Status": n.get("Employment Status", ""),
+            "Period Start Date": start,
+            "Period End Date": end,
+            "Pay Date": pay,
+            "QOT Premium": r["_qot"],
+        })
+        row_files.append(str(r.get("_file", "")))
+
+    order = sorted(range(len(rows)),
+                   key=lambda i: (rows[i]["Employee ID"],
+                                  pd.to_datetime(rows[i]["Pay Date"], errors="coerce")))
+    rows = [rows[i] for i in order]
+    row_files = [row_files[i] for i in order]
+
+    emitted = {r["Employee ID"] for r in rows}
+    pay_years = sorted({d.year for d in
+                        pd.to_datetime([r["Pay Date"] for r in rows], errors="coerce")
+                        if pd.notna(d)})
+    return {
+        "rows": rows,
+        "overlaps": _find_overlaps(rows, row_files),
+        "missing_dates": list(missing_dates.values()),
+        "not_in_template": sorted(orphan.values(), key=lambda x: x["Employee ID"]),
+        "employees_emitted": len(emitted),
+        "employees_dropped_zero": len(all_employees - emitted - set(orphan)),
+        "total_qot": round(sum(r["QOT Premium"] for r in rows), 2),
+        "pay_years": pay_years,
+    }
+
+
+def _find_overlaps(rows, row_files):
+    """Template rule 9: rows for the same employee must not overlap.
+
+    UZIO rejects an import that contains overlapping periods, so this blocks
+    rather than warns. Two copies of the same paycheck from two uploaded files
+    produce identical periods and are caught here too — the tool cannot know
+    which copy is authoritative, and picking one would be a guess.
+    """
+    by_emp = {}
+    for r, src in zip(rows, row_files):
+        by_emp.setdefault(r["Employee ID"], []).append((r, src))
+
+    out = []
+    for eid, group in by_emp.items():
+        dated = []
+        for r, src in group:
+            s = pd.to_datetime(r["Period Start Date"], errors="coerce")
+            e = pd.to_datetime(r["Period End Date"], errors="coerce")
+            if pd.notna(s) and pd.notna(e):
+                dated.append((s, e, r, src))
+        dated.sort(key=lambda x: (x[0], x[1]))
+        for i in range(1, len(dated)):
+            _, pe, prev, prev_src = dated[i - 1]
+            cs, _, cur, cur_src = dated[i]
+            if cs <= pe:
+                out.append({
+                    "Employee ID": eid,
+                    "Period A": "%s .. %s" % (prev["Period Start Date"], prev["Period End Date"]),
+                    "File A": prev_src,
+                    "Period B": "%s .. %s" % (cur["Period Start Date"], cur["Period End Date"]),
+                    "File B": cur_src,
+                })
+    return out
+
+
+def is_blocked(result):
+    """Overlapping periods or a part-dated row make the file unimportable."""
+    return bool(result["overlaps"] or result["missing_dates"])

@@ -2,6 +2,7 @@ import io
 import os
 import re
 
+import openpyxl
 import pandas as pd
 import streamlit as st
 
@@ -249,3 +250,35 @@ def _find_overlaps(rows, row_files):
 def is_blocked(result):
     """Overlapping periods or a part-dated row make the file unimportable."""
     return bool(result["overlaps"] or result["missing_dates"])
+
+
+def fill_qot_template(template_file, rows):
+    """Write the rows into a copy of the uploaded template. Returns .xlsx bytes.
+
+    Opened through openpyxl so the Instructions sheet and all formatting survive.
+    The template's pre-filled rows are cleared first: left in place they would be
+    DATELESS rows with a blank premium, and template rule 12 makes a dateless row
+    the employee's cumulative total, replacing everything already imported for
+    them. Only the rows this tool fills are written.
+    """
+    template_file.seek(0)
+    wb = openpyxl.load_workbook(io.BytesIO(template_file.read()))
+    ws = wb[TEMPLATE_SHEET]
+
+    if ws.max_row > 1:
+        ws.delete_rows(2, ws.max_row - 1)
+
+    for i, r in enumerate(rows, start=2):
+        for j, h in enumerate(TEMPLATE_HEADERS, start=1):
+            ws.cell(row=i, column=j).value = r[h]
+
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+def output_filename(client_name, template_file):
+    """<Client>_<uploaded template's name>_filled.xlsx"""
+    base = os.path.splitext(getattr(template_file, "name", "") or "template")[0]
+    client = re.sub(r"\s+", " ", str(client_name or "Client")).strip() or "Client"
+    return "%s_%s_filled.xlsx" % (client, base)

@@ -282,3 +282,117 @@ def output_filename(client_name, template_file):
     base = os.path.splitext(getattr(template_file, "name", "") or "template")[0]
     client = re.sub(r"\s+", " ", str(client_name or "Client")).strip() or "Client"
     return "%s_%s_filled.xlsx" % (client, base)
+
+
+def render_ui():
+    st.title(APP_TITLE)
+    st.markdown("""
+    **Upload**
+    1. **ADP Prior Payroll file(s)** — as many as needed (.csv, .xls, .xlsx)
+    2. **UZIO Qualified Overtime template** (.xlsx)
+
+    One row is written per employee per pay period that carries a qualified
+    overtime premium. Pay periods with no premium are left out — template rule 14
+    says omission never deletes anything already in UZIO.
+    """)
+
+    client_name = st.text_input("Client Name", value="Client", key="qot_client")
+    c1, c2 = st.columns(2)
+    with c1:
+        pay_files = st.file_uploader("ADP Prior Payroll file(s)",
+                                     type=["csv", "xls", "xlsx"],
+                                     accept_multiple_files=True, key="qot_pay")
+    with c2:
+        tpl_file = st.file_uploader("UZIO Qualified Overtime template",
+                                    type=["xlsx"], key="qot_tpl")
+
+    if not pay_files or not tpl_file:
+        st.info("Upload the prior payroll file(s) and the UZIO template to begin.")
+        return
+
+    payroll, read_errors = read_payroll_files(pay_files)
+    for e in read_errors:
+        st.warning(e)
+    if payroll.empty:
+        st.error("None of the uploaded payroll files could be used.")
+        return
+
+    template, tpl_err = read_qot_template(tpl_file)
+    if tpl_err:
+        st.error(tpl_err)
+        return
+
+    # The premium column: use ADP's default when it is there, otherwise ask.
+    chosen = None
+    if QOT_DEFAULT_COLUMN not in payroll.columns:
+        options = memo_columns(payroll)
+        if not options:
+            st.error("No `MEMO` columns found in the uploaded payroll files, so the "
+                     "qualified overtime premium cannot be located.")
+            return
+        st.warning("`%s` was not found in any uploaded file. Pick the column that "
+                   "holds the qualified overtime premium." % QOT_DEFAULT_COLUMN)
+        chosen = st.selectbox("Qualified overtime column", options, key="qot_col")
+
+    qot_col, per_file = resolve_qot_column(payroll, chosen)
+    skipped = [f for f, present in per_file.items() if not present]
+    if skipped:
+        st.warning("No `%s` values in: %s. Those files contribute nothing."
+                   % (qot_col, ", ".join(skipped)))
+
+    result = build_qot_rows(payroll, template, qot_col)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Rows to import", len(result["rows"]))
+    m2.metric("Employees", result["employees_emitted"])
+    m3.metric("Total QOT", "%.2f" % result["total_qot"])
+    m4.metric("Dropped (no overtime)", result["employees_dropped_zero"])
+
+    if result["missing_dates"]:
+        st.error("**%d row(s) are missing a date.** The template requires all three "
+                 "dates or none, so no file was produced."
+                 % len(result["missing_dates"]))
+        st.dataframe(pd.DataFrame(result["missing_dates"]),
+                     hide_index=True, use_container_width=True)
+
+    if result["overlaps"]:
+        st.error("**%d overlapping period(s).** UZIO rejects an import whose rows "
+                 "overlap for the same employee, so no file was produced. This "
+                 "usually means a quarterly file and the weekly files covering the "
+                 "same quarter were both uploaded." % len(result["overlaps"]))
+        st.dataframe(pd.DataFrame(result["overlaps"]),
+                     hide_index=True, use_container_width=True)
+
+    if len(result["pay_years"]) > 1:
+        st.warning("Pay dates span %s. The Pay Date decides which W-2 year an "
+                   "amount counts for (template rule 7), so check that every "
+                   "uploaded file belongs to the year you are importing."
+                   % ", ".join(str(y) for y in result["pay_years"]))
+
+    if result["not_in_template"]:
+        st.warning("**%d employee(s) have overtime but no row in the template.** "
+                   "Their rows were left out — UZIO has no such employee to import "
+                   "against." % len(result["not_in_template"]))
+        st.dataframe(pd.DataFrame(result["not_in_template"]),
+                     hide_index=True, use_container_width=True)
+
+    if is_blocked(result):
+        return
+    if not result["rows"]:
+        st.info("No qualified overtime found in the uploaded files.")
+        return
+
+    st.markdown("### Rows to be written")
+    st.dataframe(pd.DataFrame(result["rows"], columns=TEMPLATE_HEADERS),
+                 hide_index=True, use_container_width=True)
+
+    # st.download_button reruns the script, so the bytes are built here (outside
+    # any button block) and the widget simply serves them.
+    st.download_button(
+        "⬇️ Download filled template",
+        data=fill_qot_template(tpl_file, result["rows"]),
+        file_name=output_filename(client_name, tpl_file),
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+        key="qot_dl",
+    )

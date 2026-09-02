@@ -134,6 +134,7 @@ with st.sidebar:
             "ADP - Payroll Setup Agent",
             "ADP - Emergency Contact Audit",
             "ADP - Time Off Tool",
+            "ADP - Qualified Overtime Wages",
             "ADP - License Details Audit"
         ], index=0, label_visibility="collapsed")
         
@@ -206,6 +207,11 @@ elif tool_option == "ADP - Time Off Tool":
     from apps.adp import timeoff_audit
     importlib.reload(timeoff_audit)
     timeoff_audit.render_ui()
+
+elif tool_option == "ADP - Qualified Overtime Wages":
+    from apps.adp import qualified_overtime
+    importlib.reload(qualified_overtime)
+    qualified_overtime.render_ui()
 
 elif tool_option == "ADP - License Details Audit":
     from apps.adp import license_audit

@@ -2,6 +2,19 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-09-02] - ADP Prior Payroll Audit: Column Matching Is Exact, Like the API's
+
+### Fixed
+- **A mapping resolved to a SIBLING column that differed only inside the brackets, inflating a tax total and inventing a mismatch.** `calculate_totals` tried a parens-preserving match first and then fell back to `norm_colname`, which strips bracketed text — so `SCHOOL DISTRICT - EMPLOYEE TAX(NORTHWOOD)`, `(OTSEGO)` and `(EVERGREEN)` all collapsed to one key and whichever column came last won it. Beck Logistics uploaded three ADP files and the oldest has no NORTHWOOD column at all (that employee had not joined yet), so on that file the NORTHWOOD mapping fell through to EVERGREEN and swallowed one employee's `91.52`. The report showed `ADP 105.85 vs UZIO 14.33` and a `-91.52` mismatch; the real ADP total is `14.33`, UZIO was right all along, and the `91.52` was double-counted (it is also inside Evergreen's own correct `336.15`). It also dragged an innocent employee into Employee Mismatches.
+- **The fallback is gone rather than merely guarded**, because it has no counterpart in the consumer. `PriorPayrollMappingServiceImpl` looks mappings up with a plain `HashMap.get` on the source name — earning/deduction/contribution maps are exact and case-sensitive, and the tax map only adds `trim().toUpperCase()`. Nothing there strips brackets, so any fuzzy match here reports a number the onboarding API would never import. Matching is now parens-preserving only (case- and whitespace-insensitive, which is what the tax map does anyway).
+- **`_sum_adp_for_uzio_name` had the same defect and worse** — it used only the paren-stripping norm, with no exact path at all, so Tax Rate Verification could check one jurisdiction's rate against a sibling jurisdiction's wages. Now parens-preserving too.
+
+### Added
+- **`Unmatched Mapping Names` sheet** — mapping source names that resolve to no column in any uploaded file. These are not zero-value items: the API will not find them either, so that row simply will not import. Previously such a row read as a clean `0.00 vs 0.00 — Match`. Verified by planting a typo'd source name (`...TAX(SYLVANIA)`) and a UZIO name absent from the register: both now surface, where before the first showed as a Match. A name found in some files but not others is normal (a column only appears once the client starts using that jurisdiction) and is not listed.
+
+### Verification
+- Old vs new across the two clients that exercise these paths. **Beck Logistics** (school districts): 40 rows compared, **1 changed** — Northwood `ADP 105.85 -> 14.33`, `Mismatch -> Match`, columns found `NORTHWOOD, EVERGREEN -> NORTHWOOD`; mismatches 19 -> 18, Employee Mismatches 132 -> 131, Tax Rate Verification identical. **InnovDel** (PR #51's `LIVED-IN STATE (IL)` / `(WI)`): 43 rows compared, **0 changed** — 30 mismatches, 1318 employee-mismatch rows and the tax-rate sheet all byte-identical, so the earlier paren-collision fix still holds.
+
 ## [2026-08-20] - ADP Setup Helper: Learned Earning Codes No Longer Overwrite Good Names
 
 ### Fixed

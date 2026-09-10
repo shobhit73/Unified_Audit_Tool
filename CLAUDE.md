@@ -168,7 +168,7 @@ The "but Excel needs the BOM to render UTF-8 correctly" rationale that historica
 
 ## Standard Uzio Job Titles (Company Master reference)
 
-The canonical Uzio **Company Master → Job Titles** list for a DSP company. Uzio groups every job title under a **Job Category** (`Owner`, `Overhead Staff`, `Delivery Associates`, `Non-DSP`). This is the source of truth the census tools' `ALLOWED_JOB_TITLES` (in `apps/{adp,paycom}/census_generator.py`) and `HOURLY_ONLY_JOB_TITLES` (in `utils/audit_utils.py`) should align with. **30 titles** total:
+The canonical Uzio **Company Master → Job Titles** list for a DSP company. Uzio groups every job title under a **Job Category** (`Owner`, `Overhead Staff`, `Delivery Associates`, `Non-DSP`). This is the source of truth the census tools' `ALLOWED_JOB_TITLES` (in `apps/{adp,paycom}/census_generator.py`) and `HOURLY_ONLY_JOB_TITLES` (in `utils/audit_utils.py`) should align with. **32 titles** total:
 
 | Code | Job Category | Job Title |
 |---|---|---|
@@ -202,8 +202,10 @@ The canonical Uzio **Company Master → Job Titles** list for a DSP company. Uzi
 | 028 | Delivery Associates | Driver -Major Appliance |
 | 029 | Delivery Associates | E-Biker |
 | 030 | Delivery Associates | TSO-PV Driver |
+| 031 | Delivery Associates | Captain Planet Driver |
+| 032 | Delivery Associates | Box Truck Driver |
 
-**`Delivery Associates` is a Job *Category*, not a job title** — the 12 titles under it (Walker, Driver, Helper, Driver-Lite, Driver-Step Van, Driver-Unscheduled, Lead Driver, DDU Dedicated, DDU Shared, Driver -Major Appliance, E-Biker, TSO-PV Driver) are the ones Uzio treats as Hourly / Non-Exempt. The `HOURLY_ONLY_JOB_TITLES` roster in code is the force-Hourly/Non-Exempt set and matches this category. `E-Biker` and `TSO-PV Driver` were added to the roster. `delivery associate` / `delivery associates` are intentionally **kept** in the roster (even though Uzio uses it only as a category name) because the literal string arrives as an actual Job Title in ADP/Paycom source exports.
+**`Delivery Associates` is a Job *Category*, not a job title** — the 14 titles under it (Walker, Driver, Helper, Driver-Lite, Driver-Step Van, Driver-Unscheduled, Lead Driver, DDU Dedicated, DDU Shared, Driver -Major Appliance, E-Biker, TSO-PV Driver, Captain Planet Driver, Box Truck Driver) are the ones Uzio treats as Hourly / Non-Exempt. The `HOURLY_ONLY_JOB_TITLES` roster in code is the force-Hourly/Non-Exempt set and matches this category. `E-Biker` and `TSO-PV Driver` were added to the roster. `delivery associate` / `delivery associates` are intentionally **kept** in the roster (even though Uzio uses it only as a category name) because the literal string arrives as an actual Job Title in ADP/Paycom source exports.
 
 ### Job titles must match Company Master CHARACTER-FOR-CHARACTER — run the checker
 
@@ -220,9 +222,15 @@ Each of the three repos had a different subset correct. Seven separate lists car
 python utils/check_job_titles.py    # exit 1 and names the file + both spellings on any drift
 ```
 
-`CANONICAL` in that script is transcribed from the live Company Master screen. When Uzio adds a title (e.g. PHIX-99297's *Captain Planet Driver* / *Box Truck Driver*), update `CANONICAL` **from the live screen, not from the ticket** — a ticket can differ in spacing — then run the checker and fix what it reports. Do not add a title to our tools before it is live in Company Master, or every employee mapped to it loses their job title.
+`CANONICAL` in that script is transcribed from the live Company Master screen. When Uzio adds a title (e.g. PHIX-99297's *Captain Planet Driver* / *Box Truck Driver*), update `CANONICAL` **from the live screen, not from the ticket** — a ticket can differ in spacing — then run the checker and fix what it reports. Do not add a title to our tools before it is live in Company Master, or every employee mapped to it loses their job title. (PHIX-99297's two titles went live with neuron-12.4.19 in Sep 2026 as codes 031 / 032 and are now in all seven lists.)
 
 `HOURLY_ONLY_JOB_TITLES` needs no edit for new *Driver*-suffixed titles: its regex already matches whole-word `driver`, so e.g. `Box Truck Driver` is force-set Hourly/Non-Exempt without being listed.
+
+### The job-title mapping must contain every title the Corrected Source WRITES
+
+The Amazon Job Title Mapping is built from the ORIGINAL file, but the sanity tool fills blank job titles on download — with the Department value (`fix_job_title` / `fix_position` / `fix_driver_smart`) or the literal **"Driver"** (`fix_blank_jt_to_driver`, Non-Exempt Hourly rows). The onboarding API looks the CORRECTED title up in the mapping (`EmployeeCensusValidator.validateJobTitle`); if it is absent the employee is skipped with `Job Title 'Driver' has an empty mapping value. This record will be skipped.` — the **same message a blank mapping row gives**, which makes the two easy to confuse. It bit a client whose drivers were not literally titled "Driver" (ADP FEIN 853642271, one employee skipped on five straight runs, Aug 2026).
+
+`titles_written_by_fixes()` in `utils/job_title_mapper.py` returns those titles and the sanity tools pass them as `extra_titles`, so they appear as mapping rows with an on-screen note. It returns a deliberate SUPERSET (FLSA / Pay Type conditions are not re-checked): an extra mapping row is never looked up and costs nothing, a missing one drops an employee. **Any new auto-fix that writes a job title must be added there too.** The MCP side (`audit_fast_api/core/job_title_mapper.py`, `extract_distinct_titles`) still lists titles from the raw file and has the same gap.
 
 **Two opposite job-title rules (don't confuse them):**
 - **Driver rule (auto-fix):** a hourly-only title (Driver/Walker/E-Biker/…) marked Salaried or with blank FLSA is *force-set* to Hourly + Non-Exempt on download.

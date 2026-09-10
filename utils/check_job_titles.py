@@ -28,7 +28,7 @@ import os
 import re
 import sys
 
-# Company Master -> Job Titles, codes 001-030, read off prod (Aug 2026).
+# Company Master -> Job Titles, codes 001-032, read off prod (Sep 2026).
 CANONICAL = [
     "DSP Owner", "Operations Manager", "Operations Lead", "Fleet Manager",
     "Safety Manager", "Performance Manager", "Trainer", "Human Resources",
@@ -37,6 +37,8 @@ CANONICAL = [
     "Driver-Lite", "Driver-Step Van", "Driver-Unscheduled", "Lead Driver",
     "DDU Dedicated", "DDU Shared", "Non-DSP Related", "Driver -Major Appliance",
     "E-Biker", "TSO-PV Driver",
+    # 031 / 032 — PHIX-99297, live on prod since neuron-12.4.19 (Sep 2026).
+    "Captain Planet Driver", "Box Truck Driver",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

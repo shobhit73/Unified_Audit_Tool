@@ -2,6 +2,15 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-09-11] - Dark Mode: Readable in Every Streamlit Theme
+
+### Fixed
+- **In Dark mode the Census Sanity Check title, its description and most body text were invisible**, and an empty white bar sat above the title. The injected CSS forced near-black text (`#1b1c1c` on every markdown paragraph, navy `#050e39` / `#070738` on every heading) and white card backgrounds. CSS cannot see which theme the viewer picked in Streamlit's settings menu, so any hardcoded text colour is wrong in one of the two themes.
+- Text colours are no longer set anywhere in the main area — they inherit the theme. Card, callout, pill and expander backgrounds are translucent tints over whatever the theme paints; the red / green / amber accents (`_TONES` in `utils/ui_components.py`) use CSS `light-dark()`. Streamlit sets `color-scheme` on `.stApp` to the theme the viewer picked, so Light keeps the original deep reds / greens / ambers and Dark gets bright ones.
+- **The white bar** was `st.markdown("<div class='premium-card'>")` … `st.markdown("</div>")`. Streamlit renders each call as its own element and closes the div at once, so it never wrapped the title — it was an empty card (a faint one in Light mode too). Removed from both Census Sanity Checks.
+- Prior Payroll Audit's Match / Mismatch cell highlights were pastel fills under the theme's text colour — light text on a light fill in Dark mode. Now translucent.
+- Paycom Payment Audit's step pills and metric / action / all-good cards: same treatment.
+
 ## [2026-09-02] - ADP Prior Payroll Audit: Column Matching Is Exact, Like the API's
 
 ### Fixed

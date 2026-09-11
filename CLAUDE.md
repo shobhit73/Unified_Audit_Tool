@@ -156,6 +156,7 @@ The "but Excel needs the BOM to render UTF-8 correctly" rationale that historica
 - Wrap long result lists in `st.container(height=400, border=True)` to prevent infinite scroll.
 - Consolidate duplicate findings by regex-stripping parenthesized details before grouping: `re.sub(r'\(.*?\)', '', issue)`.
 - Every error row must carry the affected Employee IDs — no orphan findings.
+- Never hardcode a text colour, or a solid light background, in the main area — it breaks Dark mode (Sep 2026: the Census Sanity title and body text were invisible). Use translucent tints and `_TONES` / `_callout()` from `utils/ui_components.py`; see frontend.md §5.
 
 ## Gitignore gotchas
 

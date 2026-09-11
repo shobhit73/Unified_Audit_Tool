@@ -40,6 +40,18 @@ Audit results must be **Actionable** and **Clean**.
 ## 4. Crash Prevention
 - **Streamlit Version**: Ensure compatibility with `v1.30+` for `st.container(height=...)`.
 - **Minified HTML**: When using `render_finding_card` (custom utils), ensure the HTML string is minified (no literal newlines) to prevent rendering breaks.
+- **No wrapper divs across calls**: `st.markdown("<div class='x'>")` … `st.markdown("</div>")` does NOT wrap what is rendered in between — each `st.markdown` is its own element and the div closes immediately, leaving an empty box. Use `st.container(border=True)`.
+
+## 5. Light and dark theme
+Viewers switch Light / Dark / System from Streamlit's ⋮ → Settings menu. `prefers-color-scheme` reports only the OS, and `st.context.theme` can be stale right after a switch — but Streamlit sets `color-scheme` on `.stApp` to the theme actually showing, so CSS `light-dark(<light>, <dark>)` DOES follow the viewer's choice (verified Sep 2026, both themes). Everything else must work on both backgrounds without knowing which one is showing.
+
+- **🔴 NEVER** set a text `color` on generic elements (`p`, `li`, `label`, `h1`–`h6`, expander titles, radio labels). It was done once (`#1b1c1c` body, navy headings) and made the Census Sanity Check title and text invisible in Dark mode.
+- **🔴 NEVER** give a card, callout or table cell a solid light background (`#ffffff`, `#fff5f5`, `#FFE5E5`, …). The theme's text colour stays on top of it — white on pale pink in Dark mode.
+- **🟢 Tints**: translucent backgrounds — e.g. `rgba(229, 72, 77, 0.10)` for an error box, `rgba(128, 128, 128, 0.06)` for a neutral card.
+- **🟢 Accents** (coloured headings, pills): `light-dark(<deep shade>, <bright shade>)` — `_TONES` in `utils/ui_components.py`, e.g. red `light-dark(#ba1a1a, #ff7b72)`; use `_callout()` for a coloured header box. A single mid-tone hex was tried first and fell to 2.8:1 on the light theme.
+- **🟢 Secondary text**: `opacity: 0.75`, not a grey hex.
+- A self-contained block that paints BOTH its own background and its own text (the navy sidebar, the Payment Audit hero banner) is fine — it looks the same in either theme.
+- **Check both themes** before pushing a UI change: ⋮ → Settings → Dark, then Light.
 
 ---
 > [!IMPORTANT]

@@ -10,13 +10,17 @@ The push response only carries COUNTS (TotalMap / SuccessMap / FailureMap). The
 per-employee errors and warnings are written to that run's row in
 onboarding_automation_history, so after a push we read that one row back through
 the read-only /app/onboarding/query endpoint (PHIX-98714) with the same JWT.
+When the push gets no answer at all (a big census outlasts the request timeout
+while Uzio keeps processing), the run is found by FEIN + user + start time instead.
 
 Credentials are never persisted: login() takes them as plain arguments and the
-JWT lives only for the duration of the button click. session_state keeps the
-push response and the run's error rows so they survive reruns -- nothing else.
+JWT lives only for the duration of a button click. session_state keeps the push
+response and the run's error rows so they survive reruns -- nothing else.
 """
 import json
+import re
 import time
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import requests
@@ -25,10 +29,18 @@ import streamlit as st
 from utils.ui_components import _callout
 
 DEFAULT_PROD_HOST = "https://app.uzio.com"
+IST = timezone(timedelta(hours=5, minutes=30))
 
+RUN_LOG_COLS = "id, start_time, end_time, error_messages, optional_validations"
 # Only the id is interpolated, and only after int() -- this is never free-form SQL.
-RUN_LOG_SQL = ("select id, start_time, end_time, error_messages, optional_validations "
-               "from onboarding_automation_history where id = {run_id:d}")
+RUN_LOG_SQL = "select " + RUN_LOG_COLS + " from onboarding_automation_history where id = {run_id:d}"
+
+# A gateway that gives up on a long request answers with one of these while the
+# onboarding service carries on processing behind it.
+GATEWAY_TIMEOUTS = {502, 503, 504}
+# Allowance for clock drift between this machine and the onboarding DB when
+# looking a run up by its start time.
+LOOKUP_SKEW = timedelta(seconds=60)
 
 
 class OnboardingAPIError(Exception):
@@ -102,35 +114,98 @@ def automation_id(resp) -> int | None:
         return None
 
 
+def _query(jwt_token: str, sql: str, prod_host: str = DEFAULT_PROD_HOST, timeout: int = 60) -> list[dict]:
+    """One SELECT against the read-only /app/onboarding/query endpoint (first page)."""
+    url = f"{prod_host.rstrip('/')}/app/onboarding/query"
+    headers = {"Accept": "application/json", "AuthorizationHeader": jwt_token}
+    try:
+        resp = requests.post(url, json={"sql": sql, "page": 0, "size": 1}, headers=headers, timeout=timeout)
+    except requests.RequestException as e:
+        raise OnboardingAPIError(f"Could not reach {url}: {e}") from e
+    if not resp.ok:
+        raise OnboardingAPIError(f"Run log lookup failed (HTTP {resp.status_code}): {resp.text[:300]}")
+    try:
+        return resp.json().get("data") or []
+    except (ValueError, AttributeError):
+        raise OnboardingAPIError(f"Run log lookup returned something that isn't JSON: {resp.text[:300]}")
+
+
 def fetch_run_log(jwt_token: str, run_id: int, prod_host: str = DEFAULT_PROD_HOST,
-                  timeout: int = 60, wait_seconds: int = 15) -> dict:
-    """One run's row from onboarding_automation_history, via /app/onboarding/query.
+                  wait_seconds: int = 15) -> dict:
+    """One run's row from onboarding_automation_history.
 
     The API writes error_messages / optional_validations together with end_time as
     its last step before answering the push, so they are normally there already;
     the short wait only covers a row read back before that write is visible.
     Returns the row even if end_time is still empty -- the caller says so.
     """
-    url = f"{prod_host.rstrip('/')}/app/onboarding/query"
-    body = {"sql": RUN_LOG_SQL.format(run_id=int(run_id)), "page": 0, "size": 1}
-    headers = {"Accept": "application/json", "AuthorizationHeader": jwt_token}
     deadline = time.time() + wait_seconds
     while True:
-        try:
-            resp = requests.post(url, json=body, headers=headers, timeout=timeout)
-        except requests.RequestException as e:
-            raise OnboardingAPIError(f"Could not reach {url}: {e}") from e
-        if not resp.ok:
-            raise OnboardingAPIError(f"Run log lookup failed (HTTP {resp.status_code}): {resp.text[:300]}")
-        try:
-            rows = resp.json().get("data") or []
-        except (ValueError, AttributeError):
-            raise OnboardingAPIError(f"Run log lookup returned something that isn't JSON: {resp.text[:300]}")
+        rows = _query(jwt_token, RUN_LOG_SQL.format(run_id=int(run_id)), prod_host)
         if not rows:
             raise OnboardingAPIError(f"No run with id {run_id} in the onboarding log.")
         if rows[0].get("end_time") or time.time() >= deadline:
             return rows[0]
         time.sleep(3)
+
+
+def find_run_since(jwt_token: str, fein: str, username: str, since_utc: datetime,
+                   prod_host: str = DEFAULT_PROD_HOST) -> dict | None:
+    """The FIRST run this user started for this FEIN since `since_utc`, or None.
+
+    Used when a push gets no answer: a big census outlasts the request timeout
+    (run 1376 -- 873 employees -- took 8 minutes) but Uzio keeps processing, and
+    its row exists from the moment processing starts. First rather than newest,
+    because a later run by the same user (another module) must not be taken for it.
+    FEIN and username are checked against a strict character set before they go
+    into the SQL, so no quote can reach the query.
+    """
+    digits = re.sub(r"\D", "", fein or "")
+    user = (username or "").strip().lower()
+    if not digits or not re.fullmatch(r"[a-z0-9._%+@-]+", user):
+        raise OnboardingAPIError("Can't look up the run: the FEIN or username has unexpected characters.")
+    since = (since_utc - LOOKUP_SKEW).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    rows = _query(jwt_token,
+                  f"select {RUN_LOG_COLS} from onboarding_automation_history "
+                  f"where fein = '{digits}' and lower(created_by) = '{user}' and start_time >= '{since}' "
+                  f"order by id asc limit 1", prod_host)
+    return rows[0] if rows else None
+
+
+def _lost_answer(result: dict) -> bool:
+    """The push got no usable answer, so Uzio may still be processing it."""
+    return result.get("push_error") is not None or result.get("status") in GATEWAY_TIMEOUTS
+
+
+def attach_run_log(result: dict, jwt_token: str, prod_host: str = DEFAULT_PROD_HOST) -> dict:
+    """Fill result["run"] -- and result["run_id"] when the push gave no answer."""
+    try:
+        if result.get("run_id") is not None:
+            wait = 0 if result.get("found_by_lookup") else 15
+            result["run"] = fetch_run_log(jwt_token, result["run_id"], prod_host, wait_seconds=wait)
+        elif _lost_answer(result):
+            row = find_run_since(jwt_token, result["fein"], result["user"],
+                                 datetime.fromisoformat(result["pushed_at"]), prod_host)
+            if row:
+                result.update(run_id=int(row["id"]), run=row, found_by_lookup=True)
+        result["run_error"] = None
+    except OnboardingAPIError as e:
+        result["run_error"] = str(e)
+    return result
+
+
+def _parse_ts(value):
+    """DB timestamps come back as ISO strings; the column is UTC without a zone."""
+    try:
+        d = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def _ist(value) -> str:
+    d = _parse_ts(value)
+    return d.astimezone(IST).strftime("%d-%b %H:%M") if d else "?"
 
 
 def run_issues(blob) -> list[dict]:
@@ -179,26 +254,49 @@ def _render_issue_groups(issues, label):
 
 def render_push_result(result: dict, key_prefix: str):
     """The push outcome plus what the API logged for that run (errors / warnings)."""
-    if result["ok"]:
+    lost = _lost_answer(result)
+    if result.get("push_error"):
+        st.warning(f"⏳ Uzio didn't answer before the connection closed ({result['push_error']}).\n\n"
+                   "A large census keeps processing on Uzio's side after that, so the tool looks "
+                   "for the run this push started instead.")
+    elif result["ok"]:
         st.success(f"✅ Census pushed successfully (HTTP {result['status']}).")
+    elif lost:
+        st.warning(f"⏳ The gateway stopped waiting (HTTP {result['status']}). A large census keeps "
+                   "processing on Uzio's side, so the tool looks for the run this push started instead.")
     else:
         st.error(f"❌ API returned HTTP {result['status']}")
     if result.get("text"):
-        with st.expander("Response details", expanded=not result["ok"]):
+        with st.expander("Response details", expanded=not (result["ok"] or lost)):
             st.code(result["text"])
 
     run_id = result.get("run_id")
     if run_id is None:
+        if result.get("run_error"):
+            st.warning(f"Couldn't look up the run: {result['run_error']}")
+        elif lost:
+            st.error(f"No run was found for FEIN {result['fein']} started by {result['user']} since "
+                     f"{_ist(result['pushed_at'])} IST, so this census most likely never reached Uzio. "
+                     "Check the onboarding logs before pushing again.")
         return
+
     st.markdown(f"#### 📋 What the API logged for run {run_id}")
+    if result.get("found_by_lookup"):
+        st.caption("Found by looking up your first run for this FEIN since the push started — "
+                   "the push itself got no answer.")
     if result.get("run_error"):
         st.warning(f"Couldn't read the log for this run: {result['run_error']}\n\n"
                    f"The push itself is finished — its errors are stored under run **{run_id}**.")
         return
     row = result.get("run") or {}
     if not row.get("end_time"):
-        st.info("Uzio is still processing this run, so its errors aren't written yet. "
-                "Click **Check the run log again** in a moment.")
+        started = _parse_ts(row.get("start_time"))
+        since = ""
+        if started:
+            mins = int((datetime.now(timezone.utc) - started).total_seconds() // 60)
+            since = f" — started {_ist(row.get('start_time'))} IST, {mins} min ago"
+        st.info(f"Uzio is still processing this run{since}. Its errors are written when it finishes — "
+                "click **Check the run log again** in a minute or two.")
         return
 
     errors = run_issues(row.get("error_messages"))
@@ -230,6 +328,15 @@ def render_push_result(result: dict, key_prefix: str):
         file_name=f"onboarding_run_{run_id}_issues.csv", mime="text/csv",
         key=f"{key_prefix}_issues_dl",
     )
+
+
+def needs_recheck(result: dict) -> bool:
+    """Something is still missing that a later look could fill in."""
+    if result.get("run_error"):
+        return True
+    if result.get("run_id") is None:
+        return _lost_answer(result)
+    return not (result.get("run") or {}).get("end_time")
 
 
 def render_push_to_uzio_section(vendor: str, data_key: str, jt_key_prefix: str, key_prefix: str):
@@ -297,7 +404,17 @@ def render_push_to_uzio_section(vendor: str, data_key: str, jt_key_prefix: str, 
         try:
             with st.spinner("Logging in to Uzio..."):
                 token = login(username.strip(), password, fein.strip(), vendor)
-            with st.spinner("Uploading census..."):
+        except OnboardingAPIError as e:
+            st.session_state.pop(result_key, None)
+            st.error(f"❌ {e}")
+            return
+
+        result = {"ok": False, "status": None, "text": "", "push_error": None,
+                  "run_id": None, "run": None, "run_error": None, "found_by_lookup": False,
+                  "fein": fein.strip(), "user": username.strip(),
+                  "pushed_at": datetime.now(timezone.utc).isoformat()}
+        try:
+            with st.spinner("Uploading census... (a large file can take a few minutes)"):
                 lic_bytes = lic_file.getvalue() if lic_file else None
                 lic_name = lic_file.name if lic_file else None
                 resp = push_employee_census(
@@ -306,18 +423,13 @@ def render_push_to_uzio_section(vendor: str, data_key: str, jt_key_prefix: str, 
                     jt_mapping["csv"], jt_mapping["filename"],
                     lic_bytes, lic_name,
                 )
+            result.update(ok=resp.ok, status=resp.status_code, text=resp.text[:3000],
+                          run_id=automation_id(resp))
         except OnboardingAPIError as e:
-            st.session_state.pop(result_key, None)
-            st.error(f"❌ {e}")
-            return
-        result = {"ok": resp.ok, "status": resp.status_code, "text": resp.text[:3000],
-                  "run_id": automation_id(resp), "run": None, "run_error": None}
-        if result["run_id"] is not None:
-            with st.spinner(f"Reading the API's log for run {result['run_id']}..."):
-                try:
-                    result["run"] = fetch_run_log(token, result["run_id"])
-                except OnboardingAPIError as e:
-                    result["run_error"] = str(e)
+            result["push_error"] = str(e)
+        if result["run_id"] is not None or _lost_answer(result):
+            with st.spinner("Reading the API's log for this run..."):
+                attach_run_log(result, token)
         st.session_state[result_key] = result
 
     result = st.session_state.get(result_key)
@@ -325,14 +437,12 @@ def render_push_to_uzio_section(vendor: str, data_key: str, jt_key_prefix: str, 
         return
     render_push_result(result, key_prefix)
 
-    unfinished = result.get("run_id") is not None and (
-        result.get("run_error") or not (result.get("run") or {}).get("end_time"))
-    if unfinished and st.button("🔄 Check the run log again", key=f"{key_prefix}_recheck"):
+    if needs_recheck(result) and st.button("🔄 Check the run log again", key=f"{key_prefix}_recheck"):
         try:
             token = login(username.strip(), password, fein.strip(), vendor)
-            result["run"] = fetch_run_log(token, result["run_id"])
-            result["run_error"] = None
         except OnboardingAPIError as e:
             result["run_error"] = str(e)
+        else:
+            attach_run_log(result, token)
         st.session_state[result_key] = result
         st.rerun()

@@ -2,6 +2,17 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-09-11] - Push to Uzio: Show the Run's Errors and Warnings
+
+### Added
+- **After Push to Uzio, the Census Sanity Check now shows what the onboarding API logged for that run.** The push response only carries counts (`TotalMap` / `SuccessMap` / `FailureMap`); the per-employee errors and warnings live in that run's `onboarding_automation_history` row. The tool takes `OnboardingAutomationId` from the response and reads that one row back through the read-only `/app/onboarding/query` endpoint (PHIX-98714) with the same login token. The SQL is fixed — only the integer run id changes.
+- Errors (red — records the API skipped) and warnings (amber — records that went through with something flagged) are grouped by reason with their Employee IDs, with a full-row table and a CSV download (plain UTF-8, no BOM).
+- Found because run 1383 answered `FailureMap: 0` yet logged 2 warnings (`Reporting Manager ID '2SGPCAJUP' not found`) that were visible nowhere in the tool.
+- The result is kept in `session_state` — never the password or token — so it survives the rerun a download click triggers. **Check the run log again** appears when the row is not finished yet or the lookup failed (e.g. a login that may not read the log).
+
+### Verification
+- Read back real prod runs: 1383 (0 errors, 2 warnings) and 1376 (19 error rows, 719 warnings) — counts and grouped reasons match the onboarding-logs skill. A missing run id and a bad token surface as plain messages instead of a stack trace.
+
 ## [2026-09-11] - Dark Mode: Readable in Every Streamlit Theme
 
 ### Fixed

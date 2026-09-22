@@ -159,8 +159,9 @@ def group_baseline():
     import tempfile
     from streamlit.testing.v1 import AppTest
 
+    # ec5dda2 = main just before this fix (the merge of PR #63).
     src = subprocess.run(
-        ["git", "-C", ROOT, "show", "HEAD:apps/adp/prior_payroll_setup_helper.py"],
+        ["git", "-C", ROOT, "show", "ec5dda2:apps/adp/prior_payroll_setup_helper.py"],
         capture_output=True, text=True, encoding="utf-8", check=True).stdout
     path = os.path.join(tempfile.gettempdir(), "ppsh_baseline.py")
     open(path, "w", encoding="utf-8").write(src)

@@ -1158,11 +1158,14 @@ def _memo_contribution_name(raw_col):
         name = desc
     else:
         name = default_name
-    if kind == "roth" and "roth" not in name.lower():
+    if _ROTH_PREFIX_RE.match(raw) and "roth" not in name.lower():
         # The Sanity check's ROTH:<col> split carries the PARENT column's label,
-        # so a descriptive one ("K-401K MATCH") would otherwise name the Roth
+        # so a descriptive one ("K-401K ER MATCH") would otherwise name the Roth
         # half exactly like the 401k half — same name, same code, and it would
         # auto-link to the 401k deduction instead of Roth 401k.
+        # Only the split column is renamed. A column ADP itself labels
+        # "Roth-401K ER MATCH" already carries its own code, has always been
+        # distinct, and is left exactly as it was.
         name = f"Roth {name}"
     return kind, (code or label or name), name
 

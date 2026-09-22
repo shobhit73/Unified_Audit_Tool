@@ -1158,6 +1158,12 @@ def _memo_contribution_name(raw_col):
         name = desc
     else:
         name = default_name
+    if kind == "roth" and "roth" not in name.lower():
+        # The Sanity check's ROTH:<col> split carries the PARENT column's label,
+        # so a descriptive one ("K-401K MATCH") would otherwise name the Roth
+        # half exactly like the 401k half — same name, same code, and it would
+        # auto-link to the 401k deduction instead of Roth 401k.
+        name = f"Roth {name}"
     return kind, (code or label or name), name
 
 
@@ -1217,6 +1223,20 @@ def build_contributions_from_memo_cols(candidates, selected_cols):
     return [by_col[col] for col in (selected_cols or []) if col in by_col]
 
 
+def contrib_row_key(row):
+    """Stable, unique key for a CONTRIBUTION row: the memo column it came from.
+
+    (Type Code, Type Description) is unique for earnings and deductions, but NOT
+    here. The Sanity check splits a combined employer-match memo into `MEMO : X`
+    plus `ROTH:MEMO : X` and keeps both; with a descriptive label both halves
+    carried the same code and name, so widgets keyed on that pair raised
+    StreamlitDuplicateElementKey and the whole tool died. Memo columns come from
+    `df.columns`, so the source column is unique by construction.
+    """
+    return str(row.get("_Source Column")
+               or autosync_row_key(row.get("Type Code"), row.get("Type Description")))
+
+
 def map_contribution_to_deduction(type_code, type_description, available_deduction_masters):
     """Default UZIO deduction to link a contribution to (only when that deduction
     is actually being created for this client): Roth match → Roth 401k,
@@ -1251,11 +1271,11 @@ def is_formula_contribution(type_description):
 
 def enrich_contributions_for_uzio(rows, link_map=None):
     """Add the UZIO Add-Contribution form fields to each contribution row.
-    `link_map`: optional {autosync_row_key -> linked deduction display name}."""
+    `link_map`: optional {contrib_row_key -> linked deduction display name}."""
     link_map = link_map or {}
     out = []
     for r in rows:
-        key = autosync_row_key(r.get("Type Code"), r.get("Type Description"))
+        key = contrib_row_key(r)
         linked = (link_map.get(key) or "").strip()
         if linked in ("", CONTRIB_LINK_NONE):
             linked, link_yn = "", "No"
@@ -2669,13 +2689,17 @@ def _deduction_reason(row):
 
 # ---------- Streamlit UI ----------
 
-def _render_name_editor(title, rows, name_field, key_prefix, caption=None):
+def _render_name_editor(title, rows, name_field, key_prefix, caption=None, key_of=None):
     """Collapsible accordion of editable UZIO-name text boxes — one per row.
 
     Writes the chosen name back into each row[name_field] IN PLACE so the edit
     flows into the on-screen table AND the setup Excel. Each box pre-fills with
     the computed name and keeps following it on reruns until the user types a
-    custom value, after which the user's value sticks."""
+    custom value, after which the user's value sticks.
+
+    `key_of`: how to key a row's widget. Defaults to the (code, description)
+    pair, which is unique for earnings and deductions; contributions pass
+    `contrib_row_key` because two memo columns can share that pair."""
     if not rows:
         return
     with st.expander(title, expanded=False):
@@ -2685,7 +2709,7 @@ def _render_name_editor(title, rows, name_field, key_prefix, caption=None):
             code = r.get("Type Code", "")
             td = r.get("Type Description", "")
             default = str(r.get(name_field, td) or td)
-            wkey = f"{key_prefix}::{autosync_row_key(code, td)}"
+            wkey = f"{key_prefix}::{key_of(r) if key_of else autosync_row_key(code, td)}"
             defkey = wkey + "::__def__"
             prev_def = st.session_state.get(defkey)
             if wkey not in st.session_state or st.session_state.get(wkey) == prev_def:
@@ -3083,7 +3107,8 @@ def _render_contribution_setup_section(results, enriched_deds):
             f"({_format_formula(CONTRIB_FORMULA_TIERS)}); all others use "
             f"**{CONTRIB_METHOD_FIXED}**."
         )
-        for code, td in [(c["Type Code"], c["Type Description"]) for c in contrib_rows]:
+        for c in contrib_rows:
+            code, td = c["Type Code"], c["Type Description"]
             default_master = map_contribution_to_deduction(code, td, available_masters)
             default_opt = master_to_display.get(default_master, CONTRIB_LINK_NONE)
             if default_opt not in link_options:
@@ -3095,10 +3120,10 @@ def _render_contribution_setup_section(results, enriched_deds):
                 sel = st.selectbox(
                     f"Link {code or td}", options=link_options,
                     index=link_options.index(default_opt),
-                    key=f"adp_ppsh_contriblink::{autosync_row_key(code, td)}",
+                    key=f"adp_ppsh_contriblink::{contrib_row_key(c)}",
                     label_visibility="collapsed",
                 )
-            link_map[autosync_row_key(code, td)] = "" if sel == CONTRIB_LINK_NONE else sel
+            link_map[contrib_row_key(c)] = "" if sel == CONTRIB_LINK_NONE else sel
 
     enriched_contribs = enrich_contributions_for_uzio(contrib_rows, link_map)
 
@@ -3109,6 +3134,7 @@ def _render_contribution_setup_section(results, enriched_deds):
             "Set the exact name each contribution should have in UZIO. Flows "
             "into the setup table below and the setup Excel."
         ),
+        key_of=contrib_row_key,
     )
 
     st.markdown("### UZIO Contribution Setup (all form fields)")

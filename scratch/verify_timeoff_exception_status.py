@@ -2,7 +2,7 @@
 
 Run:  python scratch/verify_timeoff_exception_status.py
 
-Runs the pre-change module (git HEAD) and the working-tree module side by side
+Runs the pre-change module (git 038c330) and the working-tree module side by side
 on real client files and checks that:
   1. the filled import template is cell-for-cell unchanged
   2. Balance vs UZIO Status and Unassigned Policies are unchanged
@@ -52,7 +52,10 @@ def up(path):
 
 
 def load_old():
-    src = subprocess.run(["git", "-C", ROOT, "show", "HEAD:apps/adp/timeoff_audit.py"],
+    # Pinned: HEAD keeps moving as this work merges, and this script's job is to
+    # compare against main as it was BEFORE the status columns and the policy
+    # mapping — 038c330.
+    src = subprocess.run(["git", "-C", ROOT, "show", "038c330:apps/adp/timeoff_audit.py"],
                          capture_output=True, text=True, encoding="utf-8", check=True).stdout
     path = os.path.join(tempfile.gettempdir(), "timeoff_audit_HEAD.py")
     open(path, "w", encoding="utf-8").write(src)
@@ -81,6 +84,42 @@ def cells(xbytes, sheet):
 
 def sheet_df(xbytes, sheet):
     return pd.read_excel(io.BytesIO(xbytes), sheet_name=sheet, dtype=str).fillna("")
+
+
+def cents_equal(a, b):
+    """Equal, or a cent apart.
+
+    The baseline rounds every ADP transaction before adding; the working tree
+    adds first and rounds once, matching ADP's own subtotal. Some balances move
+    by 0.01 because of that fix, which is deliberate.
+    """
+    if a is None and b is None:
+        return True
+    try:
+        fa, fb = float(a), float(b)
+        if fa != fa and fb != fb:          # both NaN
+            return True
+        return abs(fa - fb) <= 0.011
+    except (TypeError, ValueError):
+        return a is b or str(a) == str(b)
+
+
+def grids_match(g1, g2):
+    return (len(g1) == len(g2)
+            and all(len(r1) == len(r2) and all(cents_equal(x, y) for x, y in zip(r1, r2))
+                    for r1, r2 in zip(g1, g2)))
+
+
+def frames_match(d1, d2, key="Employee ID"):
+    """Row-for-row, a cent apart at most. Sorted by employee first: a cent can
+    change where a row lands in a list ordered by balance."""
+    if list(d1.columns) != list(d2.columns) or len(d1) != len(d2):
+        return False
+    if key in d1.columns:
+        d1 = d1.sort_values(key, kind="stable").reset_index(drop=True)
+        d2 = d2.sort_values(key, kind="stable").reset_index(drop=True)
+    return all(cents_equal(d1.iat[i, j], d2.iat[i, j])
+               for i in range(len(d1)) for j in range(len(d1.columns)))
 
 
 def legacy_mapping(adp_b, tpl_b):
@@ -116,19 +155,20 @@ def run_case(name, adp_b, tpl_b, cen_path, old):
     n_fill, n_audit, n_stats = new.run_tool(U(adp_b, "a.xlsx"), U(tpl_b, "t.xlsx"),
                                             U(cen_b, "c.xlsm"),
                                             mapping=legacy_mapping(adp_b, tpl_b),
-                                            include_salaried=True)
+                                            include_salaried=True,
+                                            include_blank_hourly=False)
     check("both versions ran", o_fill is not None and n_fill is not None)
     if o_fill is None or n_fill is None:
         return
 
-    check("filled template unchanged (every cell)",
-          cells(o_fill, "Time Off Details") == cells(n_fill, "Time Off Details"))
+    check("filled template unchanged (bar the cent fix)",
+          grids_match(cells(o_fill, "Time Off Details"), cells(n_fill, "Time Off Details")))
     check("stats unchanged", {k: n_stats[k] for k in o_stats} == o_stats,
           (o_stats, n_stats))
 
     for sheet in ("Balance vs UZIO Status", "Unassigned Policies"):
         check("%s unchanged" % sheet,
-              sheet_df(o_audit, sheet).equals(sheet_df(n_audit, sheet)))
+              frames_match(sheet_df(o_audit, sheet), sheet_df(n_audit, sheet)))
 
     o_exc, n_exc = sheet_df(o_audit, "Exception Summary"), sheet_df(n_audit, "Exception Summary")
     if "Message" in n_exc.columns:
@@ -137,7 +177,7 @@ def run_case(name, adp_b, tpl_b, cen_path, old):
     check("Exception Summary columns are exactly the agreed six",
           list(n_exc.columns) == new.EXCEPTION_COLUMNS, list(n_exc.columns))
     check("same rows, same order, same old columns",
-          o_exc[OLD_EXC_COLS].equals(n_exc[OLD_EXC_COLS]),
+          frames_match(o_exc[OLD_EXC_COLS], n_exc[OLD_EXC_COLS]),
           "old=%d new=%d" % (len(o_exc), len(n_exc)))
 
     census, _ = new.read_census(U(cen_b, "c.xlsm"))

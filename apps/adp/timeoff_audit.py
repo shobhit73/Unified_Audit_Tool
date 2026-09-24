@@ -128,7 +128,7 @@ def read_adp_balances(file_adp):
             "name": ws.cell(row=r, column=c_name).value if c_name else "N/A",
             "policy": (str(ws.cell(row=r, column=c_pol).value or "").strip()
                        if c_pol else "") or "(no policy name)",
-            "balance": _evaluate_cell(ws.cell(row=r, column=c_bal).value),
+            "balance": _raw_amount(ws.cell(row=r, column=c_bal).value),
         })
     if not rows:
         return None, "No valid Employee IDs found in ADP file."
@@ -139,6 +139,30 @@ def read_adp_balances(file_adp):
              .agg(balance=("balance", _sum_money), name=("name", "first"))
              .reset_index())
     return out, None
+
+
+_ROUND_FORMULA = re.compile(r"^\s*=\s*ROUND\(\s*(-?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*,", re.I)
+
+
+def _raw_amount(cell):
+    """The amount ADP stored, BEFORE its own per-row rounding.
+
+    Each transaction is written as `=ROUND(x, 2.0)`, and ADP's own
+    "Totals For ... -- Balance Amount:" row holds round(sum of x). Rounding
+    every row first and adding afterwards loses the dropped fractions, which
+    add up to a cent often enough to matter: 281 of 2504 employee/policy
+    totals across the client files on this machine came out 0.01 away from
+    what the client's own ADP report says. So the inner x is summed and
+    `_sum_money` rounds once, the way ADP does.
+
+    Anything that is not a plain `=ROUND(number, n)` falls back to the
+    evaluator.
+    """
+    if isinstance(cell, str):
+        m = _ROUND_FORMULA.match(cell)
+        if m:
+            return float(m.group(1))
+    return _evaluate_cell(cell)
 
 
 def _sum_money(series):
@@ -284,7 +308,7 @@ def auto_map(adp_policies, uzio_policies):
             for a in adp_policies}
 
 
-def plan_fill(tpl, adp_df, mapping, include_salaried):
+def plan_fill(tpl, adp_df, mapping, include_salaried, include_blank_hourly=True):
     """Decide what happens to every template row.
 
     Row (employee E, UZIO policy P) is written with the sum of E's balances
@@ -293,9 +317,17 @@ def plan_fill(tpl, adp_df, mapping, include_salaried):
     P, when E has no balance in any policy mapped to P, or when E is Salaried
     and `include_salaried` is off.
 
+    `include_blank_hourly` (on by default) fills a BLANK row when the employee
+    is Hourly and has a balance — a balance of 0.00 included. That ASSIGNS the
+    policy in UZIO, so the screen says how many rows it filled and the audit
+    names them. A Salaried blank row is never filled, whatever
+    `include_salaried` says: that switch is for Salaried rows which already
+    carry a value.
+
     Returns {"decisions": [(row, action, amount)], "mapped": {(E, P): amount},
              "emp_total": {E: amount}, "targets": {mapped UZIO policies}}.
-    action is one of "write", "blank", "no_mapping", "no_balance", "salaried".
+    action is one of "write", "write_blank", "blank", "no_mapping",
+    "no_balance", "salaried".
     """
     targets = {p for p in mapping.values() if p != DO_NOT_IMPORT}
     df = adp_df.assign(uzio=adp_df["policy"].map(lambda p: mapping.get(p, DO_NOT_IMPORT)))
@@ -306,8 +338,12 @@ def plan_fill(tpl, adp_df, mapping, include_salaried):
     decisions = []
     for t in tpl["rows"]:
         amount = mapped.get((t["id"], t["policy"]))
+        has_amount = amount is not None and not pd.isna(amount)
         if _is_blank(t["opening"]):
-            action = "blank"
+            action = ("write_blank"
+                      if (include_blank_hourly and not t["salaried"]
+                          and t["policy"] in targets and has_amount)
+                      else "blank")
         elif t["policy"] not in targets:
             action = "no_mapping"
         elif amount is None or pd.isna(amount):
@@ -352,7 +388,7 @@ def fill_import_template(file_uzio, decisions):
                          f"in row {UZIO_HEADER_ROW} of the Uzio template.")
     filled = 0
     for t, action, amount in decisions:
-        if action == "write":
+        if action in ("write", "write_blank"):
             ws.cell(row=t["row"], column=pos[h_bal]).value = amount
             filled += 1
     return wb, filled, None
@@ -396,6 +432,13 @@ def build_audit_sheets(file_uzio, tpl, adp_df, census_df, plan, mapping, auto):
     balance_map = plan["emp_total"]                      # mapped policies only
     name_map = adp_df.groupby("id")["name"].first().to_dict()
 
+    # A blank row we filled is no longer unassigned — we just assigned it. It
+    # leaves the Unassigned sheet and is named, with its amount, as a policy
+    # the client is about to gain in UZIO.
+    c_pol_u = _find(df_u.columns, "policy")
+    filled_blanks = {(t["id"], t["policy"]): amount
+                     for t, action, amount in plan["decisions"] if action == "write_blank"}
+
     template_ids, unassigned_rows, exceptions = set(), [], []
     for _, row in df_u.iterrows():
         eid = clean_id(row[c_id])
@@ -403,6 +446,16 @@ def build_audit_sheets(file_uzio, tpl, adp_df, census_df, plan, mapping, auto):
             template_ids.add(eid)                       # present, filled or not
         val = row[c_bal]
         if pd.isna(val) or str(val).strip() == "":
+            policy = (str(row[c_pol_u]).strip() if c_pol_u and pd.notna(row[c_pol_u])
+                      else "")
+            if (eid, policy) in filled_blanks:
+                exceptions.append({
+                    "Employee ID": str(row[c_id]) if pd.notna(row[c_id]) else "",
+                    "Employee Name": template_name(row),
+                    "Issue Category": f"Blank filled — policy assigned ({policy})",
+                    "ADP Balance": filled_blanks[(eid, policy)],
+                })
+                continue
             unassigned_rows.append(row.to_dict())
             exceptions.append({
                 "Employee ID": str(row[c_id]) if pd.notna(row[c_id]) else "",
@@ -503,6 +556,7 @@ def build_audit_sheets(file_uzio, tpl, adp_df, census_df, plan, mapping, auto):
         "missing": len(missing),
         "unassigned": len(unassigned_rows),
         "salaried": sum(1 for _, a, _ in plan["decisions"] if a == "salaried"),
+        "blank_filled": sum(1 for _, a, _ in plan["decisions"] if a == "write_blank"),
         "not_imported": [(pol, int(g["id"].nunique()), _sum_money(g["balance"]))
                          for pol, g in left_out.groupby("policy")],
         "unmapped_uzio": [p for p in tpl["policies"] if p not in plan["targets"]],
@@ -538,7 +592,8 @@ def audit_workbook_bytes(sheets):
     return out.getvalue()
 
 
-def run_tool(file_adp, file_uzio, file_census, mapping=None, include_salaried=False):
+def run_tool(file_adp, file_uzio, file_census, mapping=None, include_salaried=False,
+             include_blank_hourly=True):
     """Returns (filled_template_bytes, audit_bytes, stats) or (None, None, None).
 
     The census is required: the Balance vs UZIO Status sheet and the Exception
@@ -570,7 +625,7 @@ def run_tool(file_adp, file_uzio, file_census, mapping=None, include_salaried=Fa
     auto = auto_map([p for p, _, _ in policy_summary(adp_df)], tpl["policies"])
     if mapping is None:
         mapping = auto
-    plan = plan_fill(tpl, adp_df, mapping, include_salaried)
+    plan = plan_fill(tpl, adp_df, mapping, include_salaried, include_blank_hourly)
 
     wb_filled, filled, err = fill_import_template(file_uzio, plan["decisions"])
     if err:
@@ -592,6 +647,7 @@ def run_tool(file_adp, file_uzio, file_census, mapping=None, include_salaried=Fa
                            .str.lower().str.startswith("terminated").sum())
                        if "Balance vs UZIO Status" in sheets else 0),
         "salaried": counts["salaried"],
+        "blank_filled": counts["blank_filled"],
         "not_imported": counts["not_imported"],
         "unmapped_uzio": counts["unmapped_uzio"],
         "has_pay_type": tpl["has_pay_type"],
@@ -650,9 +706,45 @@ def _render_mapping(ctx):
         "Fill balances for Salaried employees too", value=False, key=f"to_sal_{tag}",
         help="Unticked, rows whose Pay Type is Salaried are left exactly as the "
              "template has them.")
+    include_blank_hourly = st.checkbox(
+        "Fill blank Opening Balance for Hourly employees (assigns the policy in UZIO)",
+        value=True, key=f"to_blank_{tag}",
+        help="A blank Opening Balance means the policy is not assigned to that "
+             "employee. Ticked, an Hourly employee's blank row is filled from ADP, "
+             "which assigns the policy. Salaried blank rows are never filled.")
     if not ctx["has_pay_type"]:
         st.caption("This template has no Pay Type column, so nobody is treated as Salaried.")
-    return mapping, include_salaried
+    return mapping, include_salaried, include_blank_hourly
+
+
+def _render_outcome(stats):
+    """Green when something was written; red, with the reason, when nothing was."""
+    if stats["blank_filled"]:
+        st.info("**%d blank row(s) filled** — those employees will have the policy "
+                "assigned in UZIO. They are listed in the audit report."
+                % stats["blank_filled"])
+    if stats["filled"]:
+        st.success("Both files are ready — download them one at a time.")
+        return
+    reasons = []
+    if stats["unassigned"]:
+        reasons.append("%d template row(s) have a blank Opening Balance, so no policy "
+                       "is assigned to them" % stats["unassigned"])
+    if stats["salaried"]:
+        reasons.append("%d Salaried row(s) were skipped" % stats["salaried"])
+    if stats["unmapped_uzio"]:
+        reasons.append("no ADP policy is mapped to "
+                       + ", ".join("**%s**" % p for p in stats["unmapped_uzio"]))
+    if stats["not_imported"]:
+        reasons.append("these ADP policies are set to Do not import: "
+                       + ", ".join("**%s**" % p for p, _, _ in stats["not_imported"]))
+    if stats["missing"]:
+        reasons.append("%d employee balance(s) have no matching row in the template"
+                       % stats["missing"])
+    st.error("**No balance was written — the filled template is the same as the one "
+             "you uploaded.**\n\n"
+             + ("\n".join("- %s" % r for r in reasons) if reasons
+                else "- nothing in the ADP file matched this template"))
 
 
 def _render_left_out(stats):
@@ -704,13 +796,13 @@ def render_ui():
     with col3:
         f_c = st.file_uploader("UZIO Census", type=["xlsx", "xlsm"], key="at_c")
 
-    mapping, include_salaried = None, False
+    mapping, include_salaried, include_blank_hourly = None, False, False
     if f_a is not None and f_u is not None:
         ctx = _mapping_context(f_a, f_u)
         if ctx["error"]:
             st.error(ctx["error"])
             return
-        mapping, include_salaried = _render_mapping(ctx)
+        mapping, include_salaried, include_blank_hourly = _render_mapping(ctx)
 
     # st.download_button triggers a rerun of its own, so results computed inside
     # the Generate block would vanish the moment the first file is downloaded —
@@ -724,7 +816,8 @@ def render_ui():
 
     # The mapping and the checkbox are part of what produced a result, so
     # changing either discards it — a download always matches the screen.
-    settings = (tuple(sorted(mapping.items())) if mapping else None, include_salaried)
+    settings = (tuple(sorted(mapping.items())) if mapping else None,
+                include_salaried, include_blank_hourly)
     sig = (_signature(f_a, f_u, f_c), settings)
     cached = st.session_state.get(SKEY)
     if cached and cached.get("signature") != sig:
@@ -743,7 +836,8 @@ def render_ui():
         try:
             with st.spinner("Processing..."):
                 filled_bytes, audit_bytes, stats = run_tool(f_a, f_u, f_c, mapping,
-                                                            include_salaried)
+                                                            include_salaried,
+                                                            include_blank_hourly)
             if not filled_bytes:
                 return
             st.session_state[SKEY] = {
@@ -771,7 +865,7 @@ def render_ui():
     c4.metric("Terminated in UZIO", stats["terminated"])
     _render_left_out(stats)
 
-    st.success("Both files are ready — download them one at a time.")
+    _render_outcome(stats)
     d1, d2 = st.columns(2)
     with d1:
         st.download_button(

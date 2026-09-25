@@ -2,6 +2,23 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-09-25] - census-migration Skill: The Whole Migration, With Claude in the Loop
+
+### Added
+- **`.claude/skills/census-migration/`** — a skill that runs the migration end to end: sanity check, job title mapping, preflight, push, read the run's log, triage every error, fix, re-push. It ships in this repo, so `git pull` is all a teammate needs.
+- **Two read-only subagents** (`.claude/agents/`): `census-preflight` checks the corrected file against the rules the onboarding API actually enforces (one agent per area, run together) *before* a production push is spent; `census-error-triage` takes one error reason, finds the validator that raised it in the onboarding source, and returns a bucket — `source-fix` / `uzio-setup` / `client-data` / `transient` — with the exact change. Neither can push or edit: a subagent cannot ask the user anything, so every decision stays in the main conversation.
+- **`push_census.py`** — dry run, then push only when `--confirm <FEIN>` repeats the FEIN. Credentials come from the environment or `~/.uzio/onboarding-creds.json`, never the command line, never the repo. Exit codes: 0 clean, 1 errors logged, 2 not confirmed / usage, 3 API failure.
+- **`run_log.py`** — read any run by id, or find it by FEIN + start time. `--json` for subagents, `--csv` for the user.
+- **`references/error_catalog.md`** — every error reason seen on prod so far, with its bucket and fix, including the two traps that cost the most: `Job Title 'X' has an empty mapping value` (identical message whether the row is blank or missing entirely) and a title that differs from Company Master by one character (dropped with no error row at all).
+
+### Changed
+- **`utils/onboarding_core.py`** — login / push / run-log lookup, with no Streamlit import. `utils/onboarding_api_client.py` now only draws; the skill's scripts and the app's **Push to Uzio** button run the same code instead of two copies that would drift.
+- **The no-answer lookup now closes its window after 30 minutes.** It already took the FIRST run since the push rather than the newest; with no upper bound, a push that never arrived could be reported with an unrelated later run's errors — caught in testing when a fixture from 11-Sep started matching a run from days later.
+
+### Verification
+- Against real prod runs: 1383 (0 errors, 2 warnings), 1376 (19 errors, 719 warnings, 739-row CSV) — counts and grouped reasons match the onboarding-logs skill. Lookup still resolves 1376 (not the Payment run 1377 that followed) with a dashed FEIN, a capitalised e-mail and a stray space; a run outside the window is ignored; a quote in the username is refused before it reaches the query.
+- `push_census.py` refuses to push with no `--confirm` and with a mismatched one (exit 2), and `--dry-run` prints what would be sent without sending it. No test push was made to production.
+
 ## [2026-09-11] - Push to Uzio: Show the Run's Errors and Warnings
 
 ### Added

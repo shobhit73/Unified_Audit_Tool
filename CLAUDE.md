@@ -265,6 +265,7 @@ Useful entry points under that path:
 - [docs/SOP.md](docs/SOP.md) — end-user operating procedure; useful when a bug report describes the workflow in user terms.
 - [frontend.md](frontend.md) — mandatory before UI work (see above).
 - [CHANGELOG.md](CHANGELOG.md) — record of all functional changes and standardizations.
+- [.claude/skills/census-migration/SKILL.md](.claude/skills/census-migration/SKILL.md) — the end-to-end migration workflow (sanity → mapping → preflight → push → triage), its two read-only subagents in [.claude/agents/](.claude/agents/), and [references/error_catalog.md](.claude/skills/census-migration/references/error_catalog.md), which maps every onboarding error seen on prod to its cause and fix. The push itself is `utils/onboarding_core.py`, shared with the Streamlit **Push to Uzio** button.
 
 ## Recent Platform Evolution (May 2026)
 

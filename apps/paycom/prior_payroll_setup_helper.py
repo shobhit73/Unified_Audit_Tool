@@ -410,6 +410,13 @@ DEFAULT_EARNING_RULES = [
     # "Makeup Pay" earning must be CREATED (it falls through to Earning Type
     # "Other"). Do not re-add it to the skip rules.
     (lambda d: "pto" in d and ("balance" in d or "payout" in d),    "PTO Balance Payout"),
+    # UZIO auto-creates "Paid PTO" on every company now, so a plain PTO earning
+    # is a default: never created, still carried into the earnings mapping file,
+    # exactly like Regular Wage and Overtime. Matched on the whole name only —
+    # "PTO/SIC AVAIL" and "PTO Management" are different earnings that must
+    # still be created, and "unpaid time off" contains "paid time off".
+    (lambda d: d in ("pto", "paid time off", "pto hours", "pto earnings",
+                     "paid time off hours", "paid time off earnings"), "Paid PTO"),
     # Plain "Reimbursements" only — NOT Expense/Mileage/Tuition reimbursement
     # (those are their own creatable Earning Types).
     (lambda d: d in ("reimbursements", "reimbursement"),            "Reimbursements"),

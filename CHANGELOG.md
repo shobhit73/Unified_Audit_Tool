@@ -2,6 +2,22 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-10-02] - CSV Uploads Wherever a Tool Reads an Export
+
+### Added
+- **Tools now accept `.csv` as well as Excel wherever the uploaded file is a report the client exports**: ADP Deduction Audit (Uzio and ADP files), ADP and Paycom Emergency Contact Audit (Uzio file), ADP Payroll Setup Agent, ADP Time Off (ADP Balance Summary, UZIO Census) and Paycom Time Off (Paycom report). The same export arrives as `.xlsx` one day and `.csv` the next, and the tools refused the CSV.
+- **`utils/file_io.py`** — `read_table()` reads a workbook or a CSV through one call shape (Excel-only arguments dropped, `sheet_name=None` returns a one-entry dict so sheet loops keep working, a non-UTF-8 CSV retried as latin-1), and `as_excel_stream()` re-packs a CSV as an in-memory `.xlsx` so readers built on openpyxl work unchanged — ADP writes `=ROUND()` money cells as formulas, which is why those readers cannot use pandas.
+- The ADP Deduction Audit finds its header row in a CSV the same way it does in Excel (the export carries report preamble rows above the header).
+
+### Fixed
+- **A blank line shifted the detected CSV header row by one.** `csv.reader` yields blank lines, pandas skips them, so `header=<index>` pointed one row too far and the first data row became the header. The index now counts only the rows pandas will see. Caught by a test that puts preamble rows — including an empty one — above the header, exactly like a real ADP export.
+
+### Deliberately unchanged
+- Files a tool fills in and saves back out stay Excel-only: the Uzio census `.xlsm` (Census Audit, Census Generator, Selective Sync), the time-off templates, and the Qualified Overtime template. A CSV cannot carry the sheets and formatting the tools write into them.
+
+### Mirror
+- `implementors_repo` was still on the **old 30-dropdown Deduction Audit** for both vendors — the Employee Deduction Mapping upload (Sep 2026) had never been mirrored. It now carries the current build plus `utils/deduction_mapping.py`. Its ADP Time Off is an older build than the root's, so CSV support was patched into it in place rather than overwriting it; that mirror is still pending.
+
 ## [2026-09-25] - census-migration Skill: The Whole Migration, With Claude in the Loop
 
 ### Added

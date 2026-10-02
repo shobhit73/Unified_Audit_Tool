@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import csv
 import io
 
 from utils.deduction_mapping import (
@@ -22,6 +23,60 @@ def norm_col(c):
     if c is None: return ""
     return str(c).strip().replace("\n", " ").strip()
 
+def read_tabular(file, matcher, preview_rows=20):
+    """Read an uploaded Excel OR CSV and return the sheet whose header row matches.
+
+    `matcher` is given the lower-cased, non-empty cell values of a candidate row and
+    says whether that row is the header. Excel is tried first (every sheet), then CSV.
+    Returns None when nothing matches, so the caller can fall back or raise.
+    """
+    data = file.getvalue()
+    try:
+        xls = pd.ExcelFile(io.BytesIO(data), engine='openpyxl')
+        for sheet in xls.sheet_names:
+            peek = pd.read_excel(xls, sheet_name=sheet, header=None, nrows=preview_rows)
+            for idx, row in peek.iterrows():
+                vals = [str(v).strip().lower() for v in row.values if pd.notna(v)]
+                if matcher(vals):
+                    df = pd.read_excel(xls, sheet_name=sheet, header=idx, dtype=str)
+                    df.columns = [norm_col(c) for c in df.columns]
+                    return df
+    except Exception:
+        pass   # not an Excel file (or no sheet matched) -- fall through to CSV
+
+    try:
+        text = data.decode("utf-8-sig", errors="replace")
+        row_index = 0     # counts the rows pandas will see, so `header=` lines up
+        for raw_row in csv.reader(io.StringIO(text)):
+            if not raw_row:
+                continue  # a wholly blank line: csv.reader yields it, pandas skips it
+            vals = [str(v).strip().lower() for v in raw_row if str(v).strip()]
+            if matcher(vals):
+                df = pd.read_csv(io.BytesIO(data), header=row_index, dtype=str)
+                df.columns = [norm_col(c) for c in df.columns]
+                return df
+            row_index += 1
+            if row_index >= preview_rows:
+                break
+    except Exception:
+        pass
+    return None
+
+
+def read_adp_deduction(file):
+    """ADP Voluntary Deduction export, Excel or CSV. Falls back to the first row
+    as the header when none of the expected labels is found."""
+    tokens = ("employee name", "associate id", "deduction code", "deduction description")
+    df = read_tabular(file, lambda vals: any(t in v for v in vals for t in tokens))
+    if df is None:
+        try:
+            df = pd.read_csv(io.BytesIO(file.getvalue()), header=0, dtype=str)
+        except Exception:
+            df = pd.read_excel(io.BytesIO(file.getvalue()), header=0, dtype=str)
+        df.columns = [norm_col(c) for c in df.columns]
+    return df
+
+
 def clean_money_val(x):
     """Parse money/percentage strings to float. Returns original string if not a number."""
     if pd.isna(x) or x == "":
@@ -36,42 +91,20 @@ def clean_money_val(x):
         return s
 
 def read_uzio_deduction(file):
-    """
-    Read Uzio Deduction Export.
-    Search all sheets for header row containing 'Employee Id' and 'Deduction Name'.
-    """
-    xls = pd.ExcelFile(io.BytesIO(file.getvalue()), engine='openpyxl')
-    
-    for sheet in xls.sheet_names:
-        # Read first 20 rows
-        df_raw = pd.read_excel(xls, sheet_name=sheet, header=None, nrows=20)
-        
-        header_row_idx = None
-        for idx, row in df_raw.iterrows():
-            row_vals = [str(v).strip().lower() for v in row.values if pd.notna(v)]
-            # Strict check: Must have Employee Id AND Deduction Name
-            if any("employee id" in v for v in row_vals) and any("deduction name" in v for v in row_vals):
-                header_row_idx = idx
-                break
-        
-        if header_row_idx is not None:
-             # Found it!
-             df = pd.read_excel(xls, sheet_name=sheet, header=header_row_idx, dtype=str)
-             # Normalize columns
-             df.columns = [norm_col(c) for c in df.columns]
-             return df
+    """Uzio Deduction Export, Excel or CSV.
 
-    # Fallback if strict check fails: Try just Employee Id
-    for sheet in xls.sheet_names:
-        df_raw = pd.read_excel(xls, sheet_name=sheet, header=None, nrows=20)
-        for idx, row in df_raw.iterrows():
-             row_vals = [str(v).strip().lower() for v in row.values if pd.notna(v)]
-             if any("employee id" in v for v in row_vals):
-                  df = pd.read_excel(xls, sheet_name=sheet, header=idx, dtype=str)
-                  df.columns = [norm_col(c) for c in df.columns]
-                  return df
-                  
-    raise ValueError("Could not find 'Employee Id' column in any sheet.")
+    Prefers a header row carrying both 'Employee Id' and 'Deduction Name'; falls
+    back to one carrying 'Employee Id' alone.
+    """
+    df = read_tabular(file, lambda vals: any("employee id" in v for v in vals)
+                      and any("deduction name" in v for v in vals))
+    if df is None:
+        df = read_tabular(file, lambda vals: any("employee id" in v for v in vals))
+    if df is None:
+        raise ValueError("Could not find an 'Employee Id' column in any sheet of the Excel file, "
+                         "or in the first rows of the CSV.")
+    return df
+
 
 def run_audit(file_uzio, file_adp, UI_MAPPING):
     # 1. Load Data
@@ -84,21 +117,7 @@ def run_audit(file_uzio, file_adp, UI_MAPPING):
 
     # ADP Data File
     try:
-        xls_adp = pd.ExcelFile(io.BytesIO(file_adp.getvalue()), engine='openpyxl')
-        
-        # Determine ADP header row
-        adp_sheet = xls_adp.sheet_names[0]
-        # Peek at first few rows to find "EMPLOYEE NAME"
-        peek_df = pd.read_excel(xls_adp, sheet_name=adp_sheet, nrows=20, header=None)
-        
-        header_row_idx = 0
-        for idx, row in peek_df.iterrows():
-            row_str = " ".join([str(val).upper() for val in row.values])
-            if "EMPLOYEE NAME" in row_str or "ASSOCIATE ID" in row_str:
-                header_row_idx = idx
-                break
-                
-        df_adp = pd.read_excel(xls_adp, sheet_name=adp_sheet, header=header_row_idx, dtype=str)
+        df_adp = read_adp_deduction(file_adp)
     except Exception as e:
         return None, f"Error reading ADP Data File: {e}", []
 
@@ -351,21 +370,8 @@ def get_unique_uzio_deductions_from_excel(file):
 def get_unique_adp_deductions_from_excel(file):
     try:
         file.seek(0)
-        xls_adp = pd.ExcelFile(io.BytesIO(file.getvalue()), engine='openpyxl')
-        
-        adp_sheet = xls_adp.sheet_names[0]
-        peek_df = pd.read_excel(xls_adp, sheet_name=adp_sheet, nrows=20, header=None)
-        
-        header_row_idx = 0
-        for idx, row in peek_df.iterrows():
-            row_str = " ".join([str(val).upper() for val in row.values])
-            if "EMPLOYEE NAME" in row_str or "DEDUCTION CODE" in row_str:
-                header_row_idx = idx
-                break
-                
-        df_adp = pd.read_excel(xls_adp, sheet_name=adp_sheet, header=header_row_idx, dtype=str)
-        df_adp.columns = [norm_col(c) for c in df_adp.columns]
-        
+        df_adp = read_adp_deduction(file)
+
         adp_ded_desc_col = next((c for c in df_adp.columns if "deduction description" in c.lower()), None)
         if not adp_ded_desc_col:
             adp_ded_desc_col = next((c for c in df_adp.columns if "deduction code" in c.lower()), None)
@@ -392,17 +398,17 @@ def render_ui():
     st.title("ADP to Uzio Deduction Audit Tool")
     st.markdown("""
     **Instructions**:
-    1. Upload **Uzio Deduction Export** (Excel).
-    2. Upload **ADP Voluntary Deduction Export** (Excel).
+    1. Upload **Uzio Deduction Export** (Excel or CSV).
+    2. Upload **ADP Voluntary Deduction Export** (Excel or CSV).
     3. Upload the **Employee Deduction Mapping** CSV from the ADP Prior Payroll
        Setup Helper (`<Client>_EE_Deductions_mapping.csv`), then click **Run Audit**.
     """)
     
     col1, col2 = st.columns(2)
     with col1:
-        u_file = st.file_uploader("Upload Uzio Deduction File", type=["xlsx", "xls"], key="adp_ded_uzio")
+        u_file = st.file_uploader("Upload Uzio Deduction File", type=["xlsx", "xls", "csv"], key="adp_ded_uzio")
     with col2:
-        a_file = st.file_uploader("Upload ADP Deduction File", type=["xlsx", "xls"], key="adp_ded_adp")
+        a_file = st.file_uploader("Upload ADP Deduction File", type=["xlsx", "xls", "csv"], key="adp_ded_adp")
 
     m_file = st.file_uploader(
         "Upload Employee Deduction Mapping (from the Prior Payroll Setup Helper)",

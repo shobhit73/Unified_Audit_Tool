@@ -221,6 +221,13 @@ DEFAULT_EARNING_RULES = [
     (lambda d: "rest break" in d,                                   "Rest Break Premium"),
     (lambda d: "retro" in d and "overtime" in d and "pay" in d,     "OT Adjustment"),
     (lambda d: "pto" in d and ("balance" in d or "payout" in d),    "PTO Balance Payout"),
+    # UZIO auto-creates "Paid PTO" on every company now, so a plain PTO earning
+    # is a default: never created, still carried into the earnings mapping file,
+    # exactly like Regular Wage and Overtime. Matched on the whole name only —
+    # "PTO/SIC AVAIL" and "PTO Management" are different earnings that must
+    # still be created, and "unpaid time off" contains "paid time off".
+    (lambda d: d in ("pto", "paid time off", "pto hours", "pto earnings",
+                     "paid time off hours", "paid time off earnings"), "Paid PTO"),
     (lambda d: d in ("reimbursements", "reimbursement"),            "Reimbursements"),
     (lambda d: (d == "regular" or d == "regular wage" or d == "regular pay"
                 or d == "regular earnings" or d.startswith("regular "))

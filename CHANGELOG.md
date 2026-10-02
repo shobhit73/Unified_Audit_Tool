@@ -2,6 +2,13 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-10-02] - Paycom Time Off Rejected a Valid .xlsx With an lxml Error
+
+### Fixed
+- **The Paycom Time Off tool failed every upload on Streamlit Cloud with `Error reading Paycom file: Import lxml failed`, including a perfectly good .xlsx.** The reader called `pd.read_html` first — Paycom does export some reports as HTML with an `.xls` name — and only fell back to Excel on `ValueError`. A missing lxml raises `ImportError`, which skipped the fallback and landed in the catch-all that reports a read failure. Cloud has no lxml, so the format of the uploaded file never even got a chance to matter.
+- **`read_report()` in `utils/file_io.py` now chooses the parser from the bytes**: a zip or OLE signature means a workbook, `<table>` / `<html>` in the first 4 KB means HTML, anything else is read as CSV. HTML is attempted only when the content really is HTML, and when lxml is genuinely missing the message says what to do instead of naming a package the user never asked for.
+- **`lxml` added to requirements** so the real HTML-as-`.xls` Paycom exports work on Cloud as well.
+
 ## [2026-10-02] - CSV Uploads Wherever a Tool Reads an Export
 
 ### Added

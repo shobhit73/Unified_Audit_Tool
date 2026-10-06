@@ -2,6 +2,25 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-10-06] - Employee Profile Change Report, Rebuilt From the History Tables
+
+### Added
+- **New Common Utilities tool: Employee Profile Change Report.** It produces the same workbook Uzio exports — sheet `Change History`, one column per version newest-first, the narrow red spacer columns, the blue header block and the green highlight on every row that changed — for one employee or for a list of them (several employees come back as a .zip). It answers "who changed this profile, when, from which IP, and through which channel" without asking anyone for a prod export.
+- **`utils/change_report.py`** — a port of Uzio's own generator, not a lookalike. Labels and field order come from `EmployeeAuditMapping.java`, the sheet layout from `EmployeeAuditPoiReport.java`, and every value format from `EmployeeHistoryCustomConvertorImpl.java`: the `(Effective Date - ...)` suffix set, its fallback to the salary effective date (`--` for ADDRESS), `Version: Version: V2`, `MM/dd/yyyy hh:mm:ss a UTC`, the phone 3/3/rest split, and the Gender / EmploymentType / TerminationType / SOURCE / EmployeeStatus enums.
+- **`utils/neuronops_client.py`** — login plus paginated read-only SELECT against the NeuronOps query endpoint. The user signs in with their own credentials, so every read is audited under their name; nothing is stored on the server and the token lives in the browser session only.
+
+### Verified
+- Regenerated three employees whose real Uzio exports were on hand and diffed them cell by cell: **356/360, 618/622 and 354/358 cells identical**, including the 44-row Emergency Contact section whose odd block order turned out to be a sort by `emergency_contact_identifier`.
+- The only differences are the five fields encrypted at rest (SSN, Hourly Pay Rate, Annual Salary, Bonus, Salary Commissions), which print `(encrypted)` because the query endpoint returns the ciphertext and decryption happens inside the Uzio application. The effective date beside a pay field is real and is still shown.
+- `Original DOH` differs in the two July exports only because the column was populated in prod afterwards; Uzio's report reads the same column, so a report pulled today shows what this tool shows.
+
+### Known gaps, stated in the tool
+- **Work Schedule** and the **Family (dependents)** section need lookups the query endpoint does not expose, so Work Schedule stays blank and the Family section is not written.
+- **Union Classification** is dropped the way Uzio drops it for an Amazon exchange, unless a version actually carries a value — then the row is written so nothing can hide.
+
+### Mirror
+- Mirrored to `implementors_repo` (tool, both utils modules, router entry, `requests` added to its requirements). It carries no Push-to-Uzio code, as before.
+
 ## [2026-10-02] - Paycom Time Off Rejected a Valid .xlsx With an lxml Error
 
 ### Fixed

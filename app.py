@@ -141,6 +141,7 @@ with st.sidebar:
             "Paycom - Selective Census Sync",
             "Paycom - Withholding Audit",
             "Paycom - Payment Audit",
+            "Paycom - Deduction Sanity Check",
             "Paycom - Deduction Audit",
             "Paycom - Prior Payroll Setup Helper",
             "Paycom - Prior Payroll Audit Tool",
@@ -268,6 +269,11 @@ elif tool_option == "Paycom - Deduction Audit":
     from apps.paycom import deduction_audit
     importlib.reload(deduction_audit)
     deduction_audit.render_ui()
+
+elif tool_option == "Paycom - Deduction Sanity Check":
+    from apps.paycom import deduction_sanity as paycom_deduction_sanity
+    importlib.reload(paycom_deduction_sanity)
+    paycom_deduction_sanity.render_ui()
 
 elif tool_option == "Paycom - Prior Payroll Setup Helper":
     from apps.paycom import prior_payroll_setup_helper

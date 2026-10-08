@@ -2,6 +2,35 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-10-08] - Paycom Deduction Sanity Check
+
+### Added
+- **`Paycom - Deduction Sanity Check`** (`apps/paycom/deduction_sanity.py`) cleans the Paycom Employee Scheduled Deductions export before the onboarding API sees it. **On Banda it reproduces the hand-cleaned file exactly: the same 405 rows, and the same Percent on all 162 rows with one.**
+- **Rows removed:**
+  - a Stop Date before the 1st of the current month (00/00/0000 and blank stay);
+  - no non-zero value in either Amount or Percent (0 or blank on both sides);
+  - every description the user ticks. Garnishments (support, garnishment, levy, bankruptcy, wage assignment, lien), reimbursements and TapCheck / ZayZoon / Payactiv / Earned Wage Access start ticked; `LOA … Reimb` (benefits paid back during a leave) does not.
+- **Percent × 100 when the file writes fractions** (`0.04` → `4`). The API passes Percent through unchanged, so 0.04 would have been set up as 0.04%. The format is detected per file:
+  - Chief Delivery and Spelman already export whole percents, and are left alone instead of becoming 500%.
+  - The screen shows what was detected and lets the user override it.
+  - The multiplication is exact decimal arithmetic, and every changed cell is in the Change Log.
+- **Flagged, not changed** (rules from the onboarding API's Paycom validator):
+  - Tax Treatment blank or without its `A -` / `B -` code;
+  - dates not MM/DD/YYYY;
+  - a Stop Date before the Start Date. A blank Start Date counts as today, which catches a current-month Stop Date that has already passed.
+  - a malformed Limit / Limit Accum;
+  - Amount and Percent both filled;
+  - negatives and percents outside 0–100;
+  - extra spaces. Company Match `" []"` would read as a linked contribution.
+  - duplicates.
+- **Outputs:**
+  - the corrected CSV, with every original column and no BOM;
+  - an xlsx report with Removed Rows, Garnishments, Flagged Rows and the Change Log.
+- `scratch/verify_paycom_deduction_sanity.py` runs on 25 real Paycom files.
+
+### Mirror
+- `implementors_repo` mirror pending.
+
 ## [2026-10-08] - ADP Deduction Sanity Check
 
 ### Added

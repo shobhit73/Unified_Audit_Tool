@@ -2,6 +2,39 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-10-08] - Change Report: Who Changed It, and a Blank Cell That Is Uzio's Bug
+
+Diffed against a fresh Uzio export of an 11-version employee (71 rows x 24 columns, CDC
+Logistics `ZJ6DKR7O9`): **1671 of 1704 cells identical**. The 33 that differ are 11
+versions x 3 fields, and all three are accounted for below.
+
+### Fixed
+- **"Who Changed" printed a raw UUID for client logins.** `employee_history.created_by`
+  holds whatever the account signs in with — a CSR's email, or a bare user identifier for
+  a client login. The old code parsed the email, so `1a32456f-f0c0-...` came out as-is
+  where Uzio printed `Tobias Conner (Employer Administrator)`.
+- It is now resolved the way `populateWhoChanged` resolves it: `user_data` by username or
+  user identifier, then `user_profile` for the name, then `USER_ROLE_MAPPING` /
+  `USER_ROLES` for the role names on an employer login, falling back to the user-type
+  short form (EE / ER / BR / CSR). Where a user has several profiles Uzio takes an
+  unordered set's first element; this takes the oldest, which is the one its export
+  showed. If the lookup is refused the login itself is still printed, so the column is
+  never empty.
+
+### Found in Uzio, not in this tool
+- **`Original DOH` is blank in every Uzio Employee Profile Change Report**, for every
+  employee, even when the history row holds a date. `EmployeeHistoryDTO.getOriginalDOHString()`
+  guards on `originalDOHString != null` — the formatted string it is about to write —
+  instead of `originalDOH != null`, the date. Every sibling getter
+  (`getDateOfBirthString`, `getDateOfHireString`, ...) guards on the date. The string
+  starts null, so the body never runs and the cell is always empty. This tool prints the
+  real value and says so in the UI; worth a one-line ticket against the report.
+
+### Still not reproducible
+- `Employee SSN` and `Hourly Pay Rate` (and Annual Salary / Bonus / Commissions when set)
+  are encrypted at rest, so they print `(encrypted)`. The effective date beside a pay
+  field is real and is shown.
+
 ## [2026-10-08] - Change Report: Search by FEIN, and the Search That Never Worked
 
 ### Fixed
@@ -25,7 +58,7 @@ All notable changes to the **Unified HR Audit Platform** will be documented in t
 ### Verified
 - Regenerated three employees whose real Uzio exports were on hand and diffed them cell by cell: **356/360, 618/622 and 354/358 cells identical**, including the 44-row Emergency Contact section whose odd block order turned out to be a sort by `emergency_contact_identifier`.
 - The only differences are the five fields encrypted at rest (SSN, Hourly Pay Rate, Annual Salary, Bonus, Salary Commissions), which print `(encrypted)` because the query endpoint returns the ciphertext and decryption happens inside the Uzio application. The effective date beside a pay field is real and is still shown.
-- `Original DOH` differs in the two July exports only because the column was populated in prod afterwards; Uzio's report reads the same column, so a report pulled today shows what this tool shows.
+- `Original DOH` differs because **Uzio's own report never prints it** — see the 08 Oct entry. (This line first blamed the data's vintage, which was wrong.)
 
 ### Known gaps, stated in the tool
 - **Work Schedule** and the **Family (dependents)** section need lookups the query endpoint does not expose, so Work Schedule stays blank and the Family section is not written.

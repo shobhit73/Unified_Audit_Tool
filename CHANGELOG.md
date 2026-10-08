@@ -2,6 +2,30 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-10-08] - ADP Deduction Sanity Check
+
+### Added
+- **`ADP - Deduction Sanity Check`** (`apps/adp/deduction_sanity.py`) cleans the ADP Voluntary Deduction export before it goes to the onboarding API, replacing the hand-made "cleaned", "final" and "Active EEs" copies. On Moses it keeps exactly the rows the hand-cleaned file kept.
+- **Only rows are removed, and no value is ever changed.**
+  - The Report Totals line is always removed.
+  - A checkbox per description decides the rest. Direct deposit (CHECKING / SAVINGS, but not HSA SAVINGS), garnishments (SUPPORT, GARNISHMENT, TAX LEVY, BANKRUPTCY, SPT/WAGEAGREMNT) and earned-wage / reimbursement lines (Payactiv, ZayZoon, Tapcheck, REIMBURSEMENT, MILEAGE REIMB) start ticked.
+- **Everything the API would reject is flagged with the Associate IDs**, following the rules in the onboarding-service source:
+  - blank code or description;
+  - extra spaces (the mapping is matched on the exact description; Innovdel has 280 such rows);
+  - amount and % both filled or both blank;
+  - `$` or `%` signs;
+  - negative amounts and percents outside 0–100;
+  - SSN-shaped Associate IDs (JM Parcel: 337 rows);
+  - duplicates, which are flagged but never removed.
+- A file with no `ASSOCIATE ID` column (Happy Delivery) is refused instead of producing a file the API cannot use.
+- **Outputs:**
+  - the corrected CSV, with every original column, plain UTF-8 and no BOM;
+  - an xlsx report with Removed Rows, Garnishments (to be set up in UZIO separately), Flagged Rows and the Change Log.
+- `scratch/verify_adp_deduction_sanity.py` runs on 19 real client files.
+
+### Mirror
+- `implementors_repo` mirror pending.
+
 ## [2026-10-08] - Change Report: Who Changed It, and a Blank Cell That Is Uzio's Bug
 
 Diffed against a fresh Uzio export of an 11-version employee (71 rows x 24 columns, CDC

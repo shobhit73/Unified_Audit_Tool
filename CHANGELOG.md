@@ -2,6 +2,19 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-10-08] - Change Report: Search by FEIN, and the Search That Never Worked
+
+### Fixed
+- **Every search in the Employee Profile Change Report failed with `Query failed - invalid column, table, or syntax`.** The employee lookup selected `ein`, a column the `employee` table does not have (the company is reached through `employer_organization_id`). The report generation itself was verified against three real exports, but the search in front of it never was. It now selects the column that exists, and the search path is exercised against prod before shipping.
+
+### Added
+- **Company FEIN is now the first thing the tool asks for.** Employee IDs are not unique across companies - searching `1020` without a FEIN returns 31 different people in 31 companies. The FEIN resolves through `employer_organization` (`fein` -> `company_name`), and with no Employee ID given it lists every employee of that company to pick from.
+- **Every result row carries its company name and FEIN** instead of Uzio's internal company UUID, so a duplicate Employee ID is visible rather than silently chosen.
+- **An Employee ID Uzio has since replaced still finds the employee.** A census carries the ID of its day (Eiskina's `1020` is now `BH0KS5HPZ`); any ID that matches no current code is looked up again in `employee_history` within the same company, and the row says `was 1020`.
+
+### Removed
+- **Search by employee name.** FEIN plus Employee ID is the precise path; the name box invited fuzzy matches across companies.
+
 ## [2026-10-06] - Employee Profile Change Report, Rebuilt From the History Tables
 
 ### Added

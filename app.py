@@ -121,6 +121,7 @@ with st.sidebar:
             "ADP - Payment Audit",
             "ADP - FIT/SIT Sanity Check",
             "ADP - Withholding Audit",
+            "ADP - Deduction Sanity Check",
             "ADP - Deduction Audit",
             "ADP - Prior Payroll Sanity Check",
             "ADP - Prior Payroll Audit Tool",
@@ -165,8 +166,13 @@ with st.sidebar:
 # ---------------------------------------------------------
 if tool_option == "ADP - Deduction Audit":
     from apps.adp import deduction_audit
-    importlib.reload(deduction_audit) 
+    importlib.reload(deduction_audit)
     deduction_audit.render_ui()
+
+elif tool_option == "ADP - Deduction Sanity Check":
+    from apps.adp import deduction_sanity
+    importlib.reload(deduction_sanity)
+    deduction_sanity.render_ui()
 
 elif tool_option == "ADP - Census Audit":
     from apps.adp import census_audit

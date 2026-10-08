@@ -91,6 +91,30 @@ versions x 3 fields, and all three are accounted for below.
 ### Mirror
 - Mirrored to `implementors_repo` (tool, both utils modules, router entry, `requests` added to its requirements). It carries no Push-to-Uzio code, as before.
 
+## [2026-10-06] - Paycom Time Off: Available Balance, Policy Mapping, ADP Parity
+
+### Fixed
+- **The Paycom Time Off tool imported `Net Available` instead of `Available`.** Paycom's Net Available is Available − Future Approved − Future Pending, so every employee with leave already booked got a balance short by that leave. At Banda Logistics 62 of the 103 matched template rows changed. ABEL, JACOB went from −48.55 to 4.98, his real balance, because 53.53 hours were approved for later. The balance column is now matched exactly, so `Net Available` can never be picked instead.
+- **The policy was ignored.** Balances were keyed by employee only, so the last Paycom row was written into every template row the employee had, whatever its `Time Off Policy Name`. This is the same bug the ADP tool had for Moses. Matching is now by employee and UZIO policy.
+- A blank `Future Approved` cell crashed the run, and the name column could resolve to `Employee Code`.
+
+### Changed
+- **The tool now follows the ADP Time Off layout** (`apps/paycom/timeoff_audit.py`, copied from the ADP module and adapted; the ADP file is not touched):
+  - Three mandatory uploads: Paycom TimeOff Summary Report, UZIO template, UZIO census.
+  - A mapping dropdown per Paycom `Time-Off Type` (only PTO is auto-mapped).
+  - **Fill balances for Salaried employees too** (off by default) and **Fill blank Opening Balance for Hourly employees** (on by default).
+  - Two separate downloads: the filled template, untouched apart from Opening Balance, and an audit report with Policy Mapping, Balance vs UZIO Status, Unassigned Policies, Future Time Off and Exception Summary.
+  - The old audit tabs that had to be deleted before importing are gone.
+- **New Future Time Off sheet**: every Paycom row with Future Approved or Future Pending above 0 (108 at Banda), with Available, Net Available and the employee's UZIO status. Future time off is deliberately not repeated in Exception Summary.
+- A screen warning appears when Paycom reports a Time-Off Type in anything other than hours.
+- **New `Possible Census Match` column** on Balance vs UZIO Status, Future Time Off and Exception Summary. When an EECode is not in the UZIO census, the column lists the census employees with the same first and last name. At Banda, 3 of the 11 "not in census" employees were in the census under a different EECode, all of them Terminated rehires. One of them, DROESE (A09S → A09A), carries 11.08 hours.
+
+### Verified
+- `scratch/verify_paycom_timeoff.py` runs on the real Banda files. It compares against the pre-change tool pinned at `ace3c1d`, covers synthetic edge cases (a second type, a blank Hourly row, junk cells, a CSV upload), and runs the screen through AppTest.
+
+### Mirror
+- `implementors_repo` mirror pending.
+
 ## [2026-10-02] - Paycom Time Off Rejected a Valid .xlsx With an lxml Error
 
 ### Fixed

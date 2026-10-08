@@ -2,6 +2,24 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-10-08] - Pasted Employee IDs: Commas, New Lines, or Both
+
+### Fixed
+- **An Excel column of IDs pasted into the Selective Employee Extractor or the Employee Profile Change Report became one ID.** The Extractor split on commas only. The Change Report's help text promised new lines too, but its code replaced the literal text `' + BS + 'n` instead of a line break; that text also showed up in the box's placeholder. On the real Banda census, pasting three IDs as a column matched **1**, and a comma-and-line mixture matched **2**; both now match all **3**.
+
+### Changed
+- **`utils/id_input.py` — `split_ids()`** is used by both tools for the Employee IDs box and the Change Report's FEIN box. It separates IDs by comma, new line, semicolon or tab, in any mix. Each ID appears once, in the order it was pasted.
+- **A space is not a separator.** The Extractor deliberately matches IDs that contain one (`123 456`), so spaces only trim the ends.
+
+### Verified
+- `scratch/verify_id_paste_split.py`:
+  - 12 splitting cases;
+  - the Extractor on the real Banda census, before (pinned at `21d87a9`) and after, for comma, column and mixed pastes;
+  - the Change Report form with its corrected placeholder.
+
+### Mirror
+- `implementors_repo` mirror pending; it carries both tools.
+
 ## [2026-10-08] - Paycom Deduction Sanity Check
 
 ### Added

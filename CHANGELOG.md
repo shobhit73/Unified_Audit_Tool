@@ -9,20 +9,29 @@ All notable changes to the **Unified HR Audit Platform** will be documented in t
   payment, tax or deduction push writes a row to `onboarding_automation_history`, and
   until now the only way to read it was a jumpserver session and a DBeaver window -
   which implementors do not have, so every "why did my run fail" landed on someone
-  else's desk. The tool filters runs by IST date range, vendor, client and who ran them,
-  shows total / ok / fail per run, and opens any run to its per-employee errors
-  **grouped by reason** (one line per reason with a count and sample employee IDs)
-  plus warnings, downloadable as .xlsx or BOM-free .csv.
+  else's desk.
+- **It starts from the client, because that is all anyone knows when they arrive.** A
+  dropdown of all 125 clients on the Amazon exchange (by name - nobody memorises FEINs),
+  then for the one picked: **one line per API saying which implementor ran it last, when,
+  and how it went**, with the total number of runs of that API. Under it, every run
+  newest first; open any one for its per-employee errors **grouped by reason** (a count
+  and sample employee IDs per reason) plus warnings, downloadable as .xlsx or BOM-free
+  .csv. Date / vendor / who-ran-it are answers here, not questions: the tool reports
+  them rather than asking for them.
+- A per-API status is computed from that API's own failures, so a module that went
+  through cleanly is never marked failed because something else in the same run was.
 - **`utils/onboarding_query.py`** - the read-only transport: login, paginated SELECT,
   IST conversion, `summarize()` (counts and status out of `response_body`),
   `issue_rows()` / `group_issues()`. Deliberately separate from `utils/onboarding_core.py`,
   which can also PUSH a census: the implementors build must never carry the push path,
   and a logs reader needs none of it.
-- **Client names.** One sign-in mints two tokens from the same credentials: the
-  onboarding token for the log, and the NeuronOps token purely to turn a FEIN into a
-  company name (`employer_organization`). The onboarding DB has no client-name table of
-  its own, which was checked before adding the second token. If that second login is
-  refused the tool still works and shows FEINs, and says so.
+- **Sign-in asks for a username and a password, nothing else.** The onboarding token
+  does require a FEIN - checked: without one the endpoint answers `token: null` - but the
+  tool has the Amazon client list by then (from NeuronOps, which needs no FEIN) and mints
+  the token against those FEINs itself, trying the next one if the first is refused. A
+  token minted for any one employer reads the log for every client, so this costs
+  nothing. The onboarding DB has no client-name table of its own, which is why the
+  second token exists at all.
 
 ### Changed
 - **The Change Report generates a batch about 40% faster.** Three of the five queries
@@ -36,8 +45,8 @@ All notable changes to the **Unified HR Audit Platform** will be documented in t
   report is about 10 KB, so even 500 is under 5 MB. Time is: roughly 3.7 seconds each.
 
 ### Notes
-- The onboarding token is minted against one FEIN but reads rows for every client, so
-  any FEIN the user has access to is enough.
+- Amazon clients are the ones on exchange `EX-20243277-1b50-4035-821d-d0fcd9b895a9`;
+  every DSP employer checked sits there. 125 of them, 92 live.
 - The runs list never selects `error_messages` / `optional_validations`: one row can
   carry 3 MB of them, and the counts are already in `response_body`. They are read only
   when a single run is opened.

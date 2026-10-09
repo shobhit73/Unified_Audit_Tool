@@ -10,14 +10,19 @@ All notable changes to the **Unified HR Audit Platform** will be documented in t
   until now the only way to read it was a jumpserver session and a DBeaver window -
   which implementors do not have, so every "why did my run fail" landed on someone
   else's desk.
-- **It starts from the client, because that is all anyone knows when they arrive.** A
-  dropdown of all 125 clients on the Amazon exchange (by name - nobody memorises FEINs),
-  then for the one picked: **one line per API saying which implementor ran it last, when,
-  and how it went**, with the total number of runs of that API. Under it, every run
-  newest first; open any one for its per-employee errors **grouped by reason** (a count
-  and sample employee IDs per reason) plus warnings, downloadable as .xlsx or BOM-free
-  .csv. Date / vendor / who-ran-it are answers here, not questions: the tool reports
-  them rather than asking for them.
+- **It starts from the client, because that is all anyone knows when they arrive**, and
+  it answers only the two questions they came with: *did my API go through*, and *if not,
+  what do I have to fix*. A dropdown of all 125 clients on the Amazon exchange (by name -
+  nobody memorises FEINs), then one green or red line per API: "Census - all 13 went
+  through, 30-Sep, by mercedes.hallback1" or "FedTax - 58 of 1618 employees failed". The
+  failing ones sort to the top and carry a **See why** button; that opens the reasons
+  grouped (one line per reason, with how many employees hit it and a few of their IDs)
+  and a single download with every row. Date / vendor / who ran it are answers here, not
+  questions - nothing asks for them. The full run history, the per-employee list and the
+  warnings sit in expanders, out of the way until wanted.
+- Only the **most recent** run of each API decides its colour: an earlier failure that
+  has since been re-run is history, not a problem. A run that never wrote an end time is
+  shown as "never finished" rather than being counted as clean.
 - A per-API status is computed from that API's own failures, so a module that went
   through cleanly is never marked failed because something else in the same run was.
 - **`utils/onboarding_query.py`** - the read-only transport: login, paginated SELECT,

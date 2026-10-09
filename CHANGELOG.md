@@ -2,6 +2,46 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-10-09] - Onboarding API Run Logs, and a Faster Change-Report Batch
+
+### Added
+- **New Common Utilities tool: Onboarding API Run Logs.** Every census, prior payroll,
+  payment, tax or deduction push writes a row to `onboarding_automation_history`, and
+  until now the only way to read it was a jumpserver session and a DBeaver window -
+  which implementors do not have, so every "why did my run fail" landed on someone
+  else's desk. The tool filters runs by IST date range, vendor, client and who ran them,
+  shows total / ok / fail per run, and opens any run to its per-employee errors
+  **grouped by reason** (one line per reason with a count and sample employee IDs)
+  plus warnings, downloadable as .xlsx or BOM-free .csv.
+- **`utils/onboarding_query.py`** - the read-only transport: login, paginated SELECT,
+  IST conversion, `summarize()` (counts and status out of `response_body`),
+  `issue_rows()` / `group_issues()`. Deliberately separate from `utils/onboarding_core.py`,
+  which can also PUSH a census: the implementors build must never carry the push path,
+  and a logs reader needs none of it.
+- **Client names.** One sign-in mints two tokens from the same credentials: the
+  onboarding token for the log, and the NeuronOps token purely to turn a FEIN into a
+  company name (`employer_organization`). The onboarding DB has no client-name table of
+  its own, which was checked before adding the second token. If that second login is
+  refused the tool still works and shows FEINs, and says so.
+
+### Changed
+- **The Change Report generates a batch about 40% faster.** Three of the five queries
+  per employee - the company's pay groups, the managers people report to, the logins
+  that made the changes - asked the same thing for every employee. They are now looked
+  up once per batch through `new_cache()`. Measured on prod against a 1,887-employee
+  company: 6.25s -> 3.67s per employee, with the output verified unchanged (the
+  11-version reference employee still matches Uzio's export in 1671 of 1704 cells).
+- **The tool now says what a batch will cost before you start it** - a per-selection
+  time estimate, a warning above 50, and a stop above 300. Size is never the limit: a
+  report is about 10 KB, so even 500 is under 5 MB. Time is: roughly 3.7 seconds each.
+
+### Notes
+- The onboarding token is minted against one FEIN but reads rows for every client, so
+  any FEIN the user has access to is enough.
+- The runs list never selects `error_messages` / `optional_validations`: one row can
+  carry 3 MB of them, and the counts are already in `response_body`. They are read only
+  when a single run is opened.
+
 ## [2026-10-08] - Pasted Employee IDs: Commas, New Lines, or Both
 
 ### Fixed

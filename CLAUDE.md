@@ -54,9 +54,18 @@ The Paycom side has its own [apps/paycom/prior_payroll_setup_helper.py](apps/pay
 - [apps/adp/prior_payroll_sanity.py](apps/adp/prior_payroll_sanity.py) — cleans an ADP Prior Payroll export (drops `Totals For Associate ID` summary rows, removes the bottom-of-file grand-total row, aggregates per-pay-period exports back to one row per associate, optional NET PAY ⇄ TAKE HOME value swap). ADP money cells store `=ROUND(x, 2.0)` Excel formulas — pandas reads those as null, so this module reads via openpyxl + a small formula evaluator. **The UI now runs `detect_file_shape()` on upload before asking the user anything**: it shows the facts (associates, total rows, max rows/associate, date span, distinct pay dates, period range) plus a recommendation (`full_quarter` for ≥80-day per-pay-period exports, `preserve_pay_periods` for ≤40-day partials, no recommendation when already 1 row/associate or when ambiguous). The Aggregation Strategy radio is pre-selected to the recommendation but always editable — the user must explicitly confirm before the Run button takes effect.
 - [apps/adp/prior_payroll_setup_helper.py](apps/adp/prior_payroll_setup_helper.py) — discovers what to configure in Uzio for a fresh ADP prior payroll migration. Given a sanitized prior payroll file plus the State Tax Code master CSV, emits an Excel workbook + standalone Tax_Mapping CSV with: every distinct earnings code (with $/hours/avg rate), contributions vs deductions (split by name pattern), **pre-tax vs post-tax verdict per deduction** (subset-sum on `TOTAL EARNINGS − FIT_TAXABLE`; one positive proof = pre-tax for everyone), tax mapping in the `Payroll_Mappings_Tax_Mapping_CORRECTED` format (1 row per fed tax, 1 row per state for SIT/SDI/SUTA/FLI), and an FLSA bonus discretionary/non-discretionary verdict. Reuses the `=ROUND()` formula evaluator from `prior_payroll_sanity.py`.
 
-Vendor-agnostic tools live in [apps/common/](apps/common/) (`employee_extractor`, `paycom_combined_audit`, `adp_combined_audit`, `employee_change_report`).
+Vendor-agnostic tools live in [apps/common/](apps/common/) (`employee_extractor`, `paycom_combined_audit`, `adp_combined_audit`, `employee_change_report`, `onboarding_logs`).
 
 [apps/common/employee_change_report.py](apps/common/employee_change_report.py) is the odd one out: it reads nothing from an upload. It signs in with the user's own Uzio credentials and rebuilds Uzio's **Employee Profile Change Report** from `employee_history` / `emergency_contact_history` through the read-only NeuronOps query endpoint ([utils/neuronops_client.py](utils/neuronops_client.py)). The workbook itself is built by [utils/change_report.py](utils/change_report.py), which is a **port of Uzio's own generator** (`EmployeeAuditPoiReport.java`, `EmployeeAuditMapping.java`, `EmployeeHistoryCustomConvertorImpl.java` under the Uzio Code path below) — if a label, an order or a format needs changing, change it there first and re-diff against a real export rather than adjusting the port by eye. Five fields are encrypted at rest and print `(encrypted)`; Work Schedule and the Family section need lookups the query endpoint does not expose.
+
+[apps/common/onboarding_logs.py](apps/common/onboarding_logs.py) reads the onboarding
+API's own run log (`onboarding_automation_history`) through
+[utils/onboarding_query.py](utils/onboarding_query.py) — **not** through
+`utils/onboarding_core.py`. The split is the point: `onboarding_core` can also PUSH a
+census, and nothing that pushes may reach `implementors_repo/`. Keep read-only transport
+in `onboarding_query` and never import `onboarding_core` from a tool that ships to
+implementors. The companion skill `~/.claude/skills/onboarding-logs/oblogs.py` queries
+the same table from the CLI; the query shapes there and here should stay in step.
 
 ### Prior Payroll Audit Tool routing gotcha
 

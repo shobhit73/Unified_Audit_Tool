@@ -15,14 +15,18 @@ All notable changes to the **Unified HR Audit Platform** will be documented in t
   what do I have to fix*. A dropdown of all 125 clients on the Amazon exchange (by name -
   nobody memorises FEINs), then one green or red line per API: "Census - all 13 went
   through, 30-Sep, by mercedes.hallback1" or "FedTax - 58 of 1618 employees failed". The
-  failing ones sort to the top and carry a **See why** button; that opens the reasons
-  grouped (one line per reason, with how many employees hit it and a few of their IDs)
-  and a single download with every row. Date / vendor / who ran it are answers here, not
+  failing ones sort to the top and carry a button that opens **every run of that API** -
+  each attempt with its own counts, and whichever one you pick shows its reasons grouped
+  (one line per reason, with how many employees hit it and a few of their IDs) plus a
+  download with every row. Date / vendor / who ran it are answers here, not
   questions - nothing asks for them. The full run history, the per-employee list and the
   warnings sit in expanders, out of the way until wanted.
-- Only the **most recent** run of each API decides its colour: an earlier failure that
-  has since been re-run is history, not a problem. A run that never wrote an end time is
-  shown as "never finished" rather than being counted as clean.
+- The **most recent** run of each API decides the colour of its line, because that is
+  the state the client is in now - but **every** run of that API is one click away, each
+  with its own counts and its own errors. An API run fifteen times has fifteen stories
+  (what failed, what the next attempt fixed, what was still broken), and none of them is
+  hidden. A run that never wrote an end time is shown as "never finished" rather than
+  being counted as clean.
 - A per-API status is computed from that API's own failures, so a module that went
   through cleanly is never marked failed because something else in the same run was.
 - **`utils/onboarding_query.py`** - the read-only transport: login, paginated SELECT,

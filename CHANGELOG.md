@@ -2,6 +2,45 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-10-13] - Retired and Deceased Employees Reach Uzio Intact
+
+### Fixed
+- **The Census Sanity Check passed `Retired` and `Deceased` through untouched.** It flagged
+  them red as a "Non-standard Status" and left the value alone, so the word went to Uzio as
+  written. What happens next is worse than it looks, and all of it is in the onboarding
+  source:
+  - `EmployeeStatus.mapToEmployeeStatus` turns **"Retired" into TERMINATED**, but
+    `EmployeeCensusMapper` only calls `setEmployeeTerminationModel` when the status text is
+    *literally* `"Terminated"` — so the employee is marked terminated with **no termination
+    date and no reason**. `EmployeeCensusValidator` does not ask for one either, for the same
+    reason: its mandatory-termination-date check is also keyed on the literal word.
+  - **"Deceased" maps to `null`** — the switch has no case for it — even though the ADP
+    validator's allowed-values list accepts the word. It passes validation and arrives with
+    no status at all.
+  - The ADP validator allows `Active, Terminated, Retired, Deceased`; **Paycom's allows
+    `Active, Terminated, Future_Hire, Deceased`**, so a Paycom census carrying "Retired"
+    fails validation outright.
+- **Both are now converted on download, exactly the way Leave / Inactive already were**: a
+  termination date means Terminated, no termination date means Active with a review note
+  asking for the real date or an exclude-from-payroll flag in Uzio. Uzio only stores those
+  two statuses, so nothing else can arrive whole.
+
+### Added
+- A **separate line on screen** for them, not folded into the Leave / Inactive one: green
+  "marked Retired / Deceased and has a termination date — so I set the status to Terminated",
+  amber "no termination date — so I set the status to Active". Each carries its own employee
+  IDs, and both write their own Change Log row naming the reason.
+- `retired_fixes` joins the frames `validate_source_data` returns, and `Retired` / `Deceased`
+  no longer count as a non-standard status in the red box - they are handled, so they do not
+  belong there.
+
+### Tested
+- A seven-row fixture through all three layers: no red flags left, four `retired_fixes` rows
+  split correctly between terminated and active, the written statuses come out
+  `ACTIVE`/`TERMINATED` for every row, and the set of statuses the tool can write is exactly
+  `{ACTIVE, TERMINATED}`. Plus a UI test asserting both lines appear with the right employee
+  IDs on each, and neither appears when no employee is retired.
+
 ## [2026-10-09] - Onboarding API Run Logs, and a Faster Change-Report Batch
 
 ### Added

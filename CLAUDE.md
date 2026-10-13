@@ -95,6 +95,7 @@ The Census Sanity Check has three layers. **Never apply a transformation in one 
 - Blank Job Title → "Driver" for Non-Exempt Hourly employees.
 - Blank Work Email → filled from Personal Email.
 - Status: On Leave / Inactive → Active (no term date) or Terminated (has term date); Intern → Part-Time; blank Employment Type → Full Time.
+- Status: **Retired / Deceased** → same rule (term date → Terminated, else Active + a review note). Uzio stores only Active or Terminated, and the onboarding API handles neither word properly: `EmployeeStatus.mapToEmployeeStatus` turns "Retired" into TERMINATED but `EmployeeCensusMapper` only builds the termination model when the text is literally "Terminated", so the date is never written; "Deceased" passes the ADP validator's allowed-values list and then maps to **null**. Surfaced separately from Leave / Inactive on screen (`retired_fixes`).
 - Zip codes padded / trimmed / cleaned to 5 digits.
 - Emergency-contact relationship starting "Fian" → "Fiancee".
 - Working Hours → 0 for **every** employee (hourly and salaried, blank or filled).

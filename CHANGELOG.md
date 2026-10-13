@@ -41,6 +41,20 @@ All notable changes to the **Unified HR Audit Platform** will be documented in t
   `{ACTIVE, TERMINATED}`. Plus a UI test asserting both lines appear with the right employee
   IDs on each, and neither appears when no employee is retired.
 
+## [2026-10-13] - Paycom Qualified Overtime Wages
+
+### Added
+- **`Paycom - Qualified Overtime Wages`** (`apps/paycom/qualified_overtime.py`) fills the UZIO Qualified Overtime template from Paycom's **Estimated Qualified Premiums** report. Paycom gives one premium per employee for the year with no pay periods, so every row is written **without dates**. Template rule 9 reads a dateless row as the employee's cumulative total for the tax year.
+- **A premium of 0 is not written**, because a dateless 0 clears the employee's imported QOT. Only employees with a premium are written: the template's pre-filled rows are cleared, and rule 11 leaves everyone else unchanged.
+- **Every row counts, whatever its W-2 Box Description.** Two rows for one employee in a report are added into one, and the screen lists them. The same employee in two uploaded reports **blocks** the run instead of being counted twice.
+- **A premium that is not a number blocks the run.** `$1,234.50` and `(12.34)` are read correctly, and `N/A` is no longer turned into a blank and skipped.
+- **Reported, not changed:** employees with a premium but no template row, and employees whose status differs between Paycom and the template.
+- On Banda: 94 rows (96 employees, 2 at 0), and **$6,402.50**, equal to the report's total. The Instructions sheet is kept.
+- `scratch/verify_paycom_qot.py` runs on the real Banda report and the 2026 template, with synthetic edge cases and an AppTest of the screen.
+
+### Mirror
+- `implementors_repo` mirror pending.
+
 ## [2026-10-09] - Onboarding API Run Logs, and a Faster Change-Report Batch
 
 ### Added

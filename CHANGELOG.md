@@ -2,6 +2,24 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-10-14] - ADP Deduction Sanity: Remove Identical Duplicates
+
+### Added
+- **☑ Remove identical duplicates (keep the first row)**: a new checkbox in the ADP Deduction Sanity Check, ticked by default. An employee holding two positions shows the same deduction twice with the same code, description, amount and %. Only the first row is now kept, so the CSV carries one row per deduction.
+- Each removed row is in Removed Rows. Its `Duplicate Of Row` gives the row that was kept, and the Change Log reads `Identical duplicate - row N kept`.
+- **Duplicates that differ are never removed.** The same deduction with a different code or amount stays in the file and stays flagged, because which one is right is the client's call. Example: Veterans Delivery's SN84VK4ZC with 401k% at 4% and 3%.
+- **On Veterans Delivery:** 27 duplicate rows removed, and no identical duplicates left in the red box. CARRIER, JENNIFER (O6A87FGB4) keeps row 79, and row 80 is removed. The 4 differing rows are still flagged. Unticking the box gives back the earlier behaviour.
+
+### Verified
+- `scratch/verify_adp_deduction_sanity.py` (200 checks):
+  - on all 19 real files, every removed duplicate equals the row it kept, and with the box off nothing is removed as a duplicate;
+  - JDW: 74 rows removed from 72 groups, and its 12 differing rows are kept and flagged;
+  - a new Veterans Delivery group reproduces the screenshot case;
+  - an AppTest of the new box.
+
+### Mirror
+- `implementors_repo` mirror pending.
+
 ## [2026-10-14] - Paycom Payment Method Sanity Check, and a Tool That Reset Itself
 
 ### Fixed

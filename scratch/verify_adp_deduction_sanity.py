@@ -98,8 +98,20 @@ def group_real():
         check("%s: Report Totals row removed" % name,
               totals_gone and (removed["Reason"] == ds.CAT_TOTALS).sum() == 1,
               removed["Reason"].value_counts().to_dict())
-        dup_removed = removed["Reason"].str.contains("uplicate").any() if len(removed) else False
-        check("%s: no row removed for being a duplicate" % name, not dup_removed)
+        api = [r["cols"][c] for c in ds.REQUIRED_COLUMNS]
+        by_src = {s: row for s, (_, row) in zip(
+            [r["header_row"] + 1 + i for i in range(len(df))], df.iterrows())}
+        dups = removed[removed["Reason"] == ds.CAT_DUP]
+        same_as_kept = all(
+            int(d[ds.DUP_OF]) not in removed_src
+            and all(str(d[c]).strip() == str(by_src[int(d[ds.DUP_OF])][c]).strip() for c in api)
+            for _, d in dups.iterrows())
+        check("%s: %d identical duplicate(s) removed, each equal to the row it kept"
+              % (name, len(dups)), same_as_kept)
+        off, _ = ds.run_sanity(up(rel), remove_duplicates=False)
+        check("%s: box off -> nothing removed as a duplicate" % name,
+              not (off["removed"]["Reason"] == ds.CAT_DUP).any()
+              and len(off["kept"]) == len(kept) + len(dups))
         xlsx = ds.report_xlsx_bytes(r)
         book = pd.read_excel(io.BytesIO(xlsx), sheet_name=None, dtype=str)
         check("%s: report has the five sheets" % name,
@@ -130,25 +142,33 @@ def group_clients():
         got = ds.default_category(desc)
         check("%-18s -> %s" % (desc, want or "not ticked"), got == want, got)
 
-    print("\n== Innovdel: 280 descriptions with extra spaces are flagged, not trimmed")
-    r, _ = ds.run_sanity(up(r"Innovdel\Voluntary Deduction.xlsx"))
+    print("\n== Innovdel: 280 descriptions with extra spaces are flagged, not trimmed "
+          "(duplicate box off: one of them is also an identical duplicate)")
+    r, _ = ds.run_sanity(up(r"Innovdel\Voluntary Deduction.xlsx"), remove_duplicates=False)
     sp = r["flags"][r["flags"]["Issue"].str.startswith("Extra spaces")]
     check("280 rows flagged", len(sp) == 280, len(sp))
     check("their descriptions still carry the spaces in the CSV",
           (r["kept"]["DEDUCTION DESCRIPTION"] != r["kept"]["DEDUCTION DESCRIPTION"].str.strip())
           .sum() == 280)
 
-    print("\n== JDW: duplicates flagged, none removed")
-    r, _ = ds.run_sanity(up(r"JDW\Voluntary Deduction.xlsx"))
-    dup = r["flags"][r["flags"]["Issue"].str.startswith("Duplicate")]
-    ident = dup[dup["Issue"].str.contains("identical")]
-    check("identical-duplicate rows flagged (%d)" % len(ident), len(ident) > 0)
-    check("different-amount duplicates flagged (%d)" % (len(dup) - len(ident)),
-          len(dup) > len(ident))
-    check("every flagged duplicate is still in the CSV",
-          set(dup["Source Row"]) <= set(range(r["header_row"] + 1,
-                                              r["header_row"] + 1 + len(r["df"])))
-          and not (set(dup["Source Row"]) & set(r["removed"]["Source Row"])))
+    print("\n== JDW: identical duplicates cut to one, differing ones flagged and kept")
+    off, _ = ds.run_sanity(up(r"JDW\Voluntary Deduction.xlsx"), remove_duplicates=False)
+    on, _ = ds.run_sanity(up(r"JDW\Voluntary Deduction.xlsx"))
+    ident_off = off["flags"][off["flags"]["Issue"].str.contains("identical")]
+    diff_off = off["flags"][off["flags"]["Issue"].str.contains("different code or amount")]
+    diff_on = on["flags"][on["flags"]["Issue"].str.contains("different code or amount")]
+    removed_dups = on["removed"][on["removed"]["Reason"] == ds.CAT_DUP]
+    groups = ident_off.groupby(["ASSOCIATE ID", "DEDUCTION DESCRIPTION"]).size()
+    check("box off: %d identical-duplicate rows flagged in %d groups" % (len(ident_off), len(groups)),
+          len(ident_off) > 0)
+    check("box on: removes rows-minus-one per group (%d)" % (len(ident_off) - len(groups)),
+          len(removed_dups) == len(ident_off) - len(groups), len(removed_dups))
+    check("box on: no identical-duplicate flag left",
+          not on["flags"]["Issue"].str.contains("identical").any())
+    check("box on: the %d differing-duplicate rows are still flagged" % len(diff_off),
+          sorted(diff_on["Source Row"]) == sorted(diff_off["Source Row"]))
+    check("box on: none of them was removed",
+          not (set(diff_off["Source Row"]) & set(on["removed"]["Source Row"])))
 
     print("\n== JM Parcel: SSN-shaped Associate IDs")
     r, _ = ds.run_sanity(up(r"JM Parcel\Voluntary Deduction.csv"))
@@ -170,8 +190,10 @@ def group_clients():
 
 # ---------------------------------------------------------------- moses
 def group_moses():
-    print("\n== Moses: tool vs the file cleaned by hand")
-    r, _ = ds.run_sanity(up(r"Moses\Payroll Data\Cleaned\Moses_Solutions_LLC_Deduction_Report.xlsx"))
+    print("\n== Moses: tool vs the file cleaned by hand (duplicate box off - the hand "
+          "cleaning kept them)")
+    r, _ = ds.run_sanity(up(r"Moses\Payroll Data\Cleaned\Moses_Solutions_LLC_Deduction_Report.xlsx"),
+                         remove_duplicates=False)
     man = pd.read_csv(os.path.join(D, r"Moses\Payroll Data\Cleaned"
                                       r"\Moses_Solutions_LLC_Deduction_Report_cleaned.csv"),
                       dtype=str, keep_default_na=False)
@@ -272,7 +294,10 @@ def group_ui():
     os.environ["DS_FILES"] = json.dumps({"adp_ded_sanity_upload": jdw})
     at = AppTest.from_function(script, default_timeout=180).run()
     check("no exception", not at.exception, [e.value for e in at.exception])
-    ck = {c.label.split("**")[1]: c for c in at.checkbox}
+    ck = {c.label.split("**")[1]: c for c in at.checkbox if c.label.startswith("**")}
+    dup_box = [c for c in at.checkbox if "identical duplicates" in c.label]
+    check("'Remove identical duplicates' box present and ticked",
+          len(dup_box) == 1 and dup_box[0].value is True)
     check("CHECKING and SUPPORT start ticked, ADP 401K% does not",
           ck["CHECKING"].value and ck["SUPPORT"].value and not ck["ADP 401K%"].value,
           {k: c.value for k, c in ck.items()})
@@ -283,6 +308,11 @@ def group_ui():
     ck["CHECKING"].uncheck().run()
     after = int(at.metric[0].value)
     check("unticking CHECKING keeps its rows (%d -> %d kept)" % (before, after), after > before)
+    dup_box = [c for c in at.checkbox if "identical duplicates" in c.label]
+    dup_box[0].uncheck().run()
+    after_dup = int(at.metric[0].value)
+    check("unticking the duplicate box keeps the duplicates (%d -> %d kept)"
+          % (after, after_dup), after_dup > after)
 
     os.environ["DS_FILES"] = json.dumps(
         {"adp_ded_sanity_upload": os.path.join(D, NO_ASSOCIATE_ID[0])})
@@ -292,8 +322,48 @@ def group_ui():
           and not at.get("download_button"))
 
 
+# ---------------------------------------------------------------- veteran
+VETERAN = r"Veteran\Veterans_Delivery_Workforce_and_Logistics_LLC_Deduction_Report.xlsx"
+
+
+def group_veteran():
+    print("\n== Veterans Delivery (Rohit's screenshot): remove identical duplicates")
+    r, _ = ds.run_sanity(up(VETERAN))
+    kept, removed, flags = r["kept"], r["removed"], r["flags"]
+
+    def rows(df, aid, desc="401k%"):
+        return df[(df["ASSOCIATE ID"].str.strip() == aid)
+                  & (df["DEDUCTION DESCRIPTION"].str.strip() == desc)]
+
+    check("O6A87FGB4 (CARRIER, JENNIFER): one 401k% row left", len(rows(kept, "O6A87FGB4")) == 1,
+          rows(kept, "O6A87FGB4")[["POSITION ID", "DEDUCTION %"]].values.tolist())
+    rm = rows(removed, "O6A87FGB4")
+    check("the second one (row 80) removed as a duplicate of row 79",
+          len(rm) == 1 and int(rm.iloc[0]["Source Row"]) == 80
+          and int(rm.iloc[0][ds.DUP_OF]) == 79 and rm.iloc[0]["Reason"] == ds.CAT_DUP,
+          rm[["Source Row", "Reason", ds.DUP_OF]].values.tolist())
+    log = ds.change_log(r)
+    check("Change Log says 'Identical duplicate - row 79 kept'",
+          (log[log["Source Row"] == 80]["Reason"] == "Identical duplicate - row 79 kept").all()
+          and (log["Source Row"] == 80).sum() == 1)
+    for aid, pcts in (("SN84VK4ZC", {"4.0000", "3.0000"}), ("RA2GPT2YW", {"3.0000", "6.0000"})):
+        k = rows(kept, aid)
+        check("%s: both rows kept (%s)" % (aid, " / ".join(sorted(pcts))),
+              len(k) == 2 and set(k["DEDUCTION %"].str.strip()) == pcts)
+        check("%s: still flagged as a differing duplicate" % aid,
+              (rows(flags, aid)["Issue"].str.contains("different code or amount")).sum() == 2)
+    check("no identical-duplicate flag left in the red box",
+          not flags["Issue"].str.contains("identical").any())
+    off, _ = ds.run_sanity(up(VETERAN), remove_duplicates=False)
+    n_ident = off["flags"]["Issue"].str.contains("identical").sum()
+    check("box off: back to the screenshot - 54 identical rows flagged, 4 differing",
+          n_ident == 54 and off["flags"]["Issue"].str.contains("different").sum() == 4, n_ident)
+    check("box on removes exactly half of those 54 (pairs) = 27 rows",
+          (removed["Reason"] == ds.CAT_DUP).sum() == 27, (removed["Reason"] == ds.CAT_DUP).sum())
+
+
 GROUPS = {"real": group_real, "clients": group_clients, "moses": group_moses,
-          "synthetic": group_synthetic, "ui": group_ui}
+          "veteran": group_veteran, "synthetic": group_synthetic, "ui": group_ui}
 
 
 def main(argv):

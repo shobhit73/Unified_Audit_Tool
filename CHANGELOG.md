@@ -2,6 +2,46 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-10-14] - Paycom Payment Method Sanity Check, and a Tool That Reset Itself
+
+### Fixed
+- **Typing the FEIN into the Push section wiped the whole Payment Method Sanity tool.**
+  Everything it rendered — results, downloads and the Push block — lived inside
+  `if st.button("Run Sanity Check")`. A Streamlit button is True only on the rerun its own
+  click caused, so the first keystroke in any field below reran the script, the button came
+  back False, and the page emptied. The run now happens on the click, the result is kept in
+  `session_state` against the uploaded file, and everything renders from there. A different
+  upload clears it. Covered by a test that walks the AST and fails if the downloads or the
+  Push section are ever nested inside a button block again, in either repo.
+
+### Added
+- **Paycom Payment Method Sanity Check** (`apps/paycom/payment_method_sanity.py`), which
+  takes the **census** — Paycom keeps the bank columns inside it, which is also why the
+  onboarding API wants `employee_census_adv_file` from Paycom where ADP sends a separate
+  direct deposit export. It can push straight to production like the ADP one.
+- Every rule is the API's own, taken from the default methods on `PaymentMethodValidator`
+  (Paycom's validator class is an empty stub, so it inherits all of them): `Has_D._Deposit`
+  is the gate; the net account's code, routing and type are required when it is on; each of
+  the four `Dist_1..4` groups needs all of deposit method, type, account and routing as soon
+  as any one of them is filled; routing numbers are padded to nine digits and must pass the
+  ABA checksum; account numbers must be digits and not all zeros; account types must be
+  Savings, Checking, rapid! PayCard or Vault; and percentage splits may not exceed 100.
+- Two corrections are applied, because the API applies exactly the same two before storing:
+  padding a short routing number, and stripping non-digits out of an account number. Both
+  are recorded in the Change Log. Nothing else is guessed at — a wrong bank account is worse
+  than a blocked upload.
+- A row whose `Has_D._Deposit` is off but which still carries bank details is flagged rather
+  than corrected: the API will pay that employee by cheque and ignore the accounts, which is
+  worth knowing before the push, not after.
+
+### Tested
+- A nine-row fixture covering each rule once: a clean row stays silent, a short routing and
+  a punctuated account are corrected to what the API would store, a checksum failure, an
+  all-zero account, an unknown account type, a missing net account, a half-filled
+  distribution group, a 115% split and the flag-off-with-details case each raise exactly
+  their own finding and nothing else — and the corrected frame keeps all 25 census columns,
+  which is what the push needs.
+
 ## [2026-10-14] - Push Payment Methods to Uzio, and the Push Reaches Implementors
 
 ### Added

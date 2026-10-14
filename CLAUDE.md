@@ -46,7 +46,7 @@ Each router branch does `importlib.reload(module)` before calling the render fun
 
 ### Parallel vendor tree
 
-[apps/adp/](apps/adp/) and [apps/paycom/](apps/paycom/) mirror each other by design. Each has its own `census_audit`, `census_generator`, `deduction_audit`, `payment_audit`, `withholding_audit`, `emergency_audit`, `timeoff_audit`, `prior_payroll_generator`, `prior_payroll_setup_helper`, and `total_comparison` module. When fixing a bug that applies to both vendors, check both trees — they diverge in field maps and vendor-specific quirks but share logic shape.
+[apps/adp/](apps/adp/) and [apps/paycom/](apps/paycom/) mirror each other by design. Each has its own `census_audit`, `census_generator`, `deduction_audit`, `payment_audit`, `payment_method_sanity`, `withholding_audit`, `emergency_audit`, `timeoff_audit`, `prior_payroll_generator`, `prior_payroll_setup_helper`, and `total_comparison` module. When fixing a bug that applies to both vendors, check both trees — they diverge in field maps and vendor-specific quirks but share logic shape.
 
 The Paycom side has its own [apps/paycom/prior_payroll_setup_helper.py](apps/paycom/prior_payroll_setup_helper.py) (replaces the deleted `deduction_analyzer.py`). It mirrors the ADP setup helper but takes both a Paycom Prior Payroll Register AND a Paycom Scheduled Deductions Report. Pre-tax vs post-tax classification is read straight from the Scheduled Deductions `Tax Treatment` column (`B` = Section 125 pre-tax, `H` = 401k traditional pre-tax, `A` = post-tax) — no empirical algorithm needed since Paycom labels each deduction directly. Bonus FLSA test uses Strategy A+C: when both `OT` (plain) and `WOT` (Paycom's Weighted Overtime) lines exist for the same employee+period, compare them; WOT > OT means the bonus was rolled in => non-discretionary. Otherwise indeterminate.
 
@@ -85,7 +85,22 @@ Two pushes exist, both in `onboarding_core`:
   declares both parts optional and then picks per vendor
   (`MasterRequestDTO.validateInputFilesForProcess`, `PAYMENT_METHOD_SETUP`): **ADP must
   send `direct_deposit_file`**, **Paycom must send `employee_census_adv_file`** because
-  Paycom keeps the bank columns inside the census. Wired into ADP Payment Method Sanity.
+  Paycom keeps the bank columns inside the census. Wired into both vendors' Payment
+  Method Sanity tools.
+
+`apps/paycom/payment_method_sanity.py` therefore takes the **census**, not a separate
+export: its payment columns are `Has_D._Deposit` (the gate), `Net_Acct_Code` /
+`Net_Rout_Code` / `Net_Type_Code` (the remainder account) and four distribution groups
+`Dist_1..4_{Deposit_Method,Type_Code,Acct_Code,Rout_Code,Amount}`. Paycom's own
+`PayComPaymentMethodValidator` is an **empty stub**, so every rule comes from the default
+methods on `PaymentMethodValidator` — read them there, not from ADP's overriding class,
+whose five group rules are ADP-only.
+
+**A Streamlit button is True only on the rerun its own click caused.** Anything rendered
+inside `if st.button(...)` disappears the moment any other widget is touched — which is
+exactly what happened when a user typed a FEIN into a Push section that lived inside a
+"Run" button's block: the whole tool reset. Compute on the click, stash the result in
+`session_state` keyed on the uploaded file, and render from the stash.
 
 The ADP direct deposit file is parsed with the **same `EmployeeMasterADP` bindings as the
 census** — `Routing Number`, `Account Number`, `Deposit Type`, `Deposit Amount`,

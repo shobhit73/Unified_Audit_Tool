@@ -49,6 +49,16 @@ The ADP Voluntary Deduction export goes to the onboarding API as-is. The API rej
 
 BANKRUPTCY, SPT/WAGEAGREMNT and MILEAGE REIMB were added after reviewing the real files: they are the same kinds Rohit listed, and MILEAGE REIMB carries negative amounts the API rejects.
 
+### Identical duplicates (added 2026-10-14, Rohit)
+- ☑ **Remove identical duplicates (keep the first row)**, ticked by default.
+- **What counts as identical.** Every row of an employee + description group carries the same Associate ID, code, description, amount and % (spaces ignored). Typically this is one employee holding two positions.
+- **What happens.**
+  - The first row is kept and the rest are removed. Each removed row's Reason is `Identical duplicate`, its `Duplicate Of Row` gives the kept row's number, and the Change Log reads `Identical duplicate - row N kept`.
+  - A group with any difference in code or amount is **never** removed and stays flagged. Example: Veterans Delivery's SN84VK4ZC with 401k% at 4% and 3%, where which one is right is the client's call.
+- **On Veterans Delivery:**
+  - Box off: 54 identical rows and 4 differing rows flagged.
+  - Box on: 27 removed, and 0 identical rows flagged. CARRIER, JENNIFER (O6A87FGB4) keeps row 79, and row 80 is removed.
+
 ### Flagged (nothing changed)
 Flags apply to rows that stay. Each flag carries the Associate IDs:
 - Deduction code blank; description blank

@@ -2,6 +2,43 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-10-14] - Push Payment Methods to Uzio, and the Push Reaches Implementors
+
+### Added
+- **Push Payment Methods to Uzio**, under the ADP Payment Method Sanity Check — the same
+  flow as the census push: FEIN + credentials, an explicit PRODUCTION confirmation, then
+  the run is read back out of `onboarding_automation_history` and its per-employee errors
+  are shown grouped by reason.
+- **`push_payment_method()`** in `utils/onboarding_core.py` →
+  `/app/onboarding/api/employee/payment-method`. The endpoint declares both file parts
+  optional and decides per vendor which is mandatory
+  (`MasterRequestDTO.validateInputFilesForProcess`, `PAYMENT_METHOD_SETUP`): **ADP sends
+  `direct_deposit_file`**, **Paycom sends `employee_census_adv_file`**, because Paycom
+  keeps the bank columns inside the census itself.
+- Nothing had to be re-mapped for ADP: the API parses that file with the **same
+  `EmployeeMasterADP` bindings as the census** (`Routing Number`, `Account Number`,
+  `Deposit Type`, `Deposit Amount`, `Deposit Percent`), and the sanity tool already works
+  on exactly those columns and writes them straight back out. Its existing Corrected
+  Source CSV *is* the file the API wants.
+
+### Changed
+- **The Push to Uzio code now ships to `implementors_repo/`.** It was deliberately
+  root-only, and copying `census_generator.py` across without stripping the push block
+  used to break that deploy with a ModuleNotFoundError. Implementors now carries
+  `utils/onboarding_core.py`, `utils/onboarding_api_client.py` and both push buttons on
+  purpose, so implementors can run a migration themselves instead of handing it over.
+  CLAUDE.md's mirror rule and the old "never mirror the push" warning were rewritten to
+  match — mirror those files like any other now.
+
+### Tested
+- The request shape, with the HTTP call intercepted rather than sent: ADP goes to the
+  payment-method URL with a single `direct_deposit_file` part, Paycom with
+  `employee_census_adv_file`, the census push is untouched (`census` URL, its two parts),
+  the auth header is the onboarding one, the run id is read back from the response, and a
+  network failure surfaces as an error instead of being swallowed.
+- Every push module and both sanity tools import cleanly **from the implementors tree**,
+  loaded from that repo's own path, with both push sections actually called.
+
 ## [2026-10-13] - Retired and Deceased Employees Reach Uzio Intact
 
 ### Fixed

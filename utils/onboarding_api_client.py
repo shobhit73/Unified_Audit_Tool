@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 
 from utils.onboarding_core import (  # noqa: F401  (re-exported for existing callers)
+    push_payment_method,
     DEFAULT_PROD_HOST, OnboardingAPIError, attach_run_log, automation_id,
     fetch_run_log, find_run_since, group_issues, ist, lost_answer, login,
     needs_recheck, new_result, parse_ts, push_employee_census, run_issues,
@@ -204,6 +205,96 @@ def render_push_to_uzio_section(vendor: str, data_key: str, jt_key_prefix: str, 
     render_push_result(result, key_prefix)
 
     if needs_recheck(result) and st.button("🔄 Check the run log again", key=f"{key_prefix}_recheck"):
+        try:
+            token = login(username.strip(), password, fein.strip(), vendor)
+        except OnboardingAPIError as e:
+            result["run_error"] = str(e)
+        else:
+            attach_run_log(result, token)
+        st.session_state[result_key] = result
+        st.rerun()
+
+
+def render_push_payment_method_section(vendor: str, data_key: str, key_prefix: str):
+    """Renders the 'Push Payment Methods to Uzio (Production)' section.
+
+    vendor: "ADP" or "PAYCOM" — sent to the login endpoint, and it also decides which
+        file part the API expects (see push_payment_method).
+    data_key: session_state key holding the corrected payment file bytes, set by the
+        Payment Method Sanity tool's download block as {"csv": ..., "filename": ...}.
+
+    Deliberately asks for nothing the census push asks for beyond the credentials:
+    this endpoint takes one file, no job title mapping.
+    """
+    st.markdown("---")
+    st.markdown("### \U0001F680 Push Payment Methods to Uzio (Production)")
+    st.warning(
+        "This sends the corrected direct deposit file straight to the **live Uzio "
+        "onboarding API** and sets real payment methods for the employer below. "
+        "Double-check the FEIN and the file before submitting."
+    )
+
+    cached = st.session_state.get(data_key, {})
+    payment_bytes = cached.get("csv")
+    if not payment_bytes:
+        st.info("Run the sanity check above first — the corrected file isn't ready yet.")
+        return
+
+    fein = st.text_input(
+        "Employer FEIN", key=f"{key_prefix}_fein",
+        help="Same FEIN used to log into Uzio for this employer.",
+    )
+    col_u, col_p = st.columns(2)
+    with col_u:
+        username = st.text_input("Uzio Username", key=f"{key_prefix}_user")
+    with col_p:
+        password = st.text_input(
+            "Uzio Password", type="password", key=f"{key_prefix}_pass",
+            help="Never stored — used only for this request.",
+        )
+
+    confirm = st.checkbox(
+        f"I confirm this pushes to **PRODUCTION** for FEIN `{fein or '____'}` and I've "
+        "reviewed the file.", key=f"{key_prefix}_confirm",
+    )
+
+    result_key = f"{key_prefix}_last_push"
+    if st.button("\U0001F680 Push Payment Methods", key=f"{key_prefix}_btn",
+                 disabled=not confirm):
+        if not (fein.strip() and username.strip() and password):
+            st.error("FEIN, Username, and Password are all required.")
+            return
+        try:
+            with st.spinner("Logging in to Uzio..."):
+                token = login(username.strip(), password, fein.strip(), vendor)
+        except OnboardingAPIError as e:
+            st.session_state.pop(result_key, None)
+            st.error(f"❌ {e}")
+            return
+
+        result = new_result(fein, username)
+        try:
+            with st.spinner("Uploading payment methods..."):
+                resp = push_payment_method(
+                    token, vendor, payment_bytes,
+                    cached.get("filename") or f"{vendor}_Payment_Methods.csv",
+                )
+            result.update(ok=resp.ok, status=resp.status_code, text=resp.text[:3000],
+                          run_id=automation_id(resp))
+        except OnboardingAPIError as e:
+            result["push_error"] = str(e)
+        if result["run_id"] is not None or lost_answer(result):
+            with st.spinner("Reading the API's log for this run..."):
+                attach_run_log(result, token)
+        st.session_state[result_key] = result
+
+    result = st.session_state.get(result_key)
+    if not result:
+        return
+    render_push_result(result, key_prefix)
+
+    if needs_recheck(result) and st.button("🔄 Check the run log again",
+                                           key=f"{key_prefix}_recheck"):
         try:
             token = login(username.strip(), password, fein.strip(), vendor)
         except OnboardingAPIError as e:

@@ -8,6 +8,7 @@ UI layer, anything that talks to Uzio or shapes its answer belongs here.
 What this does:
   * login()                -> JWT, from username + password + FEIN
   * push_employee_census() -> multipart upload of the corrected census
+  * push_payment_method()  -> multipart upload of the corrected direct deposit file
   * fetch_run_log() / find_run_since() -> read that run's row back through the
     read-only /app/onboarding/query endpoint (PHIX-98714)
 
@@ -105,6 +106,35 @@ def push_employee_census(jwt_token: str,
         files["license_and_emergency_contact_file"] = (license_ec_filename, license_ec_bytes)
     try:
         return requests.post(url, headers=headers, files=files, timeout=timeout)
+    except requests.RequestException as e:
+        raise OnboardingAPIError(f"Could not reach {url}: {e}") from e
+
+
+def push_payment_method(jwt_token: str, vendor: str,
+                       payment_bytes: bytes, payment_filename: str,
+                       prod_host: str = DEFAULT_PROD_HOST, timeout: int = 120):
+    """POST {prod_host}/app/onboarding/api/employee/payment-method (multipart).
+
+    The endpoint declares both file parts optional and then decides per vendor which
+    one is mandatory (MasterRequestDTO.validateInputFilesForProcess, PAYMENT_METHOD_SETUP):
+
+      * ADP sends `direct_deposit_file` — its Direct Deposit export, which the API
+        parses with the SAME EmployeeMasterADP bindings as the census, reading
+        `Routing Number`, `Account Number`, `Deposit Type`, `Deposit Amount` and
+        `Deposit Percent`. The Payment Method Sanity tool's Corrected Source carries
+        exactly those columns, so it is the file to send.
+      * PAYCOM sends `employee_census_adv_file`, because Paycom keeps the bank columns
+        inside the census itself and the API reads the payment data from there.
+
+    Returns the raw requests.Response so the caller can inspect status/body.
+    """
+    url = f"{prod_host.rstrip('/')}/app/onboarding/api/employee/payment-method"
+    headers = {"Accept": "application/json", "AuthorizationHeader": jwt_token}
+    field = "direct_deposit_file" if str(vendor).upper() == "ADP" else "employee_census_adv_file"
+    try:
+        return requests.post(url, headers=headers,
+                             files={field: (payment_filename, payment_bytes)},
+                             timeout=timeout)
     except requests.RequestException as e:
         raise OnboardingAPIError(f"Could not reach {url}: {e}") from e
 

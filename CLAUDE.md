@@ -31,7 +31,7 @@ This working directory contains **three independent git repositories** as plain 
 **Pushing only the root is a silent production failure** — the implementors Streamlit Cloud app keeps serving stale code while the root repo looks correct. This already caused one missed deploy (the census-sanity plain-English UI redesign, May 2026: pushed to root only, the deployed implementors app still showed the old 3-column "Action Center").
 
 Mirror matrix:
-- Root **UI / app-logic** change (`apps/**`, `utils/ui_components.py`, `app.py`) → also mirror into `implementors_repo/`.
+- Root **UI / app-logic** change (`apps/**`, `utils/ui_components.py`, `app.py`) → also mirror into `implementors_repo/`. This now includes the **Push to Uzio** code (`utils/onboarding_core.py`, `utils/onboarding_api_client.py` and the push blocks inside the sanity tools) — see "Push to Uzio ships to implementors too" below.
 - Root **`utils/audit_utils.py`** change → also `implementors_repo/utils/audit_utils.py` **and** `audit_fast_api/` (the latter has its own slimmed `core/` port — apply the equivalent fix, don't blind-copy). See "MCP Sync" below.
 
 All three remotes use **SSH**. Corporate TLS inspection kills HTTPS git operations on this machine — never re-point a remote to HTTPS.
@@ -61,11 +61,41 @@ Vendor-agnostic tools live in [apps/common/](apps/common/) (`employee_extractor`
 [apps/common/onboarding_logs.py](apps/common/onboarding_logs.py) reads the onboarding
 API's own run log (`onboarding_automation_history`) through
 [utils/onboarding_query.py](utils/onboarding_query.py) — **not** through
-`utils/onboarding_core.py`. The split is the point: `onboarding_core` can also PUSH a
-census, and nothing that pushes may reach `implementors_repo/`. Keep read-only transport
-in `onboarding_query` and never import `onboarding_core` from a tool that ships to
-implementors. The companion skill `~/.claude/skills/onboarding-logs/oblogs.py` queries
-the same table from the CLI; the query shapes there and here should stay in step.
+`utils/onboarding_core.py`. The two are still kept apart, but for a plainer reason now:
+`onboarding_query` is read-only transport, `onboarding_core` can WRITE to production. A
+tool that only reads logs has no business importing the one that can push. The companion
+skill `~/.claude/skills/onboarding-logs/oblogs.py` queries the same table from the CLI;
+the query shapes there and here should stay in step.
+
+### Push to Uzio ships to implementors too (changed Oct 2026)
+
+`utils/onboarding_core.py` + `utils/onboarding_api_client.py` used to be root-only, and
+mirroring `census_generator.py` across without stripping its Push block broke the
+implementors deploy with a ModuleNotFoundError. **That is over**: implementors now carries
+both modules and both push buttons on purpose, so implementors can run the migration
+themselves. Mirror those files like any other — do not strip anything.
+
+Two pushes exist, both in `onboarding_core`:
+
+- `push_employee_census()` → `/app/onboarding/api/employee/census`, needs
+  `employee_census_adv_file` + `job_title_mapping_file` (the mapping is mandatory), with
+  `license_and_emergency_contact_file` optional. Wired into the Census Sanity Check for
+  both vendors.
+- `push_payment_method()` → `/app/onboarding/api/employee/payment-method`. The endpoint
+  declares both parts optional and then picks per vendor
+  (`MasterRequestDTO.validateInputFilesForProcess`, `PAYMENT_METHOD_SETUP`): **ADP must
+  send `direct_deposit_file`**, **Paycom must send `employee_census_adv_file`** because
+  Paycom keeps the bank columns inside the census. Wired into ADP Payment Method Sanity.
+
+The ADP direct deposit file is parsed with the **same `EmployeeMasterADP` bindings as the
+census** — `Routing Number`, `Account Number`, `Deposit Type`, `Deposit Amount`,
+`Deposit Percent` — which is why the Payment Method Sanity tool's Corrected Source CSV
+can be sent as-is. Keep those column names intact in that tool's output.
+
+Every push asks for the FEIN, username, password and an explicit PRODUCTION confirmation
+checkbox before the button does anything, reads the run back out of
+`onboarding_automation_history`, and shows the per-employee errors grouped. Keep that
+shape for any new push.
 
 ### Prior Payroll Audit Tool routing gotcha
 

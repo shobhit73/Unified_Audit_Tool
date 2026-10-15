@@ -2,6 +2,40 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-10-15] - ADP Prior Payroll Sanity: Same-Day Rows Are Added, Not Max'd
+
+### Fixed
+- **Preserve Pay Periods dropped the smaller of two rows paid on the same day.** When an employee had two rows for one pay date, the merge kept the **larger value of each column** instead of adding them. This happens with two position lines on one check, two checks paid that day, or a skeleton plus a detail row.
+- The losses on real ADP exports, in GROSS PAY and Federal Income Tax:
+
+  | File | GROSS PAY lost | Federal Income Tax lost |
+  |---|---|---|
+  | Payroll History (3) | **13,614.42** | **850.13** |
+  | Payroll History (1) | 9,955.01 | 643.30 |
+  | 55th and 3rd | 44.00 | — |
+
+  This is the mode the tool itself recommends for partial-quarter files.
+- Examples:
+  - F5Y5UBOMB's check `00150015` carried GROSS 615.17 and 1,684.08 on two lines. Only 1,684.08 survived; it is now 2,299.25.
+  - RZU4K8KU4's two checks of 44.00 and 145.20 are now 189.20.
+- **Where it came from.** The largest-value rule dates from the tool's first commit (`ec2cd37`, 2 May 2026), written on the assumption that one of the two rows is always an empty skeleton. Later that day `8518ed6` switched Full Quarter to SUM, with the note that same-day rows each carry real values. Then `b007d3a` brought the old function back for the new Preserve option without that change.
+
+### Changed
+- `merge_duplicate_pay_periods` now **adds** money, hours and tax columns, the same rule Full Quarter uses. A skeleton row still merges correctly, since 0 + x = x.
+- Rows identical in every column are a repeated export, so they are counted once and the merge event says how many copies were dropped.
+- Name, IDs, status, state and dates keep the first filled value. The check/voucher number keeps the first real one, skipping ADP's `00000000` voucher line; the onboarding API does not read that column.
+- `_smart_merge_value` is removed.
+
+### Verified
+- `scratch/verify_pps_preserve_sum.py`, on four real ADP Payroll History files against the tool pinned at `c125408`:
+  - the same groups are merged and the row counts are unchanged;
+  - all 45–64 money, hours and tax columns keep their source totals and equal Full Quarter's;
+  - every row outside a merged group is identical to before;
+  - the three examples above, plus unit cases (repeated row counted once, skeleton + detail, check number, dash columns).
+
+### Mirror
+- `implementors_repo` mirror pending.
+
 ## [2026-10-14] - ADP Deduction Sanity: Remove Identical Duplicates
 
 ### Added

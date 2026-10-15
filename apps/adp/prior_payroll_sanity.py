@@ -8,9 +8,11 @@ Three independent cleanups are applied as needed:
      rows for an Associate ID are aggregated into a single row -- money
      and hours columns are SUMmed, period dates are MIN/MAX'd, identity
      columns kept as-is.
-  2. Duplicate row merge: when two rows share the same Employee + Pay Date
-     (typically a skeleton + detail pair within one pay period), they are
-     smart-merged into one row without double-counting.
+  2. Duplicate row merge (Preserve Pay Periods): when two rows share the same
+     Employee + Pay Date (two position lines of one check, two checks paid
+     that day, or a skeleton + detail pair), they are merged into one row with
+     money / hours / tax ADDED - the same rule Full Quarter applies. Rows
+     identical in every column are a repeated export and counted once.
   3. Grand-total row removal: the last row of the file, where the last
      employee's ID got bled into the totals row, is detected and dropped.
   4. 401k / Roth memo split: when the file has 401k and/or Roth deferral
@@ -713,45 +715,60 @@ def detect_grand_total_row(df):
     }
 
 
-def _smart_merge_value(values):
-    """Pick the best value across duplicate rows for a single column.
+def _is_blank(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return True
+    return str(v).strip() in ("", "-", "nan", "NaT")
 
-    Rules:
-      - Drop NaN / empty / dash placeholders
-      - Among numeric candidates, take the one with the largest absolute value
-        (avoids double-counting when one row is the skeleton 0 / dash row)
-      - For non-numeric, take the first non-empty value
-      - Fall back to the first raw value if everything is empty
+
+def _first_filled(values):
+    """First value that is not blank / dash; the first raw value if all are."""
+    return next((v for v in values if not _is_blank(v)), values[0] if values else None)
+
+
+def _first_real_check_number(values):
+    """First check/voucher number that is not blank or all zeros (ADP writes
+    00000000 on a direct-deposit voucher line). The onboarding API never reads
+    this column, so it is kept only for the reader."""
+    real = [v for v in values if not _is_blank(v) and str(v).strip().strip("0") != ""]
+    return real[0] if real else _first_filled(values)
+
+
+def _sum_merge_value(values):
+    """Merge one money / hours / tax column across rows of the SAME pay date: SUM.
+
+    Two rows on one pay date are either two position lines of one check, two
+    separate checks paid that day, or a skeleton (0 / dash) row plus the real
+    one. Adding is right in all three: 0 + x = x for the skeleton. Taking the
+    larger value - what this used to do - dropped the smaller check: 13,614.42
+    of GROSS PAY on one real ADP file. It is the same rule Full Quarter applies.
+
+    Text values (not numbers) keep the first one. A column that is blank or 0
+    on every row keeps its first value as it was.
     """
-    cleaned = []
+    nums, text = [], []
     for v in values:
-        if pd.isna(v):
-            continue
-        sv = str(v).strip()
-        if sv in ("", "-", "nan", "NaT"):
-            continue
-        cleaned.append(v)
-    if not cleaned:
-        return values[0] if len(values) > 0 else None
-
-    best_num = None
-    best_num_val = None
-    for v in cleaned:
-        try:
-            num = clean_money_val(v)
-            if best_num is None or abs(num) > abs(best_num_val):
-                best_num = v
-                best_num_val = num
-        except Exception:
-            continue
-    if best_num is not None and best_num_val is not None and best_num_val != 0:
-        return best_num
-    return cleaned[0]
+        f = _to_float(v)
+        if f is not None:
+            nums.append(f)
+        elif not _is_blank(v):
+            text.append(v)
+    if text:
+        return text[0]
+    if nums and any(n != 0 for n in nums):
+        return round(sum(nums), 2)
+    return _first_filled(values)
 
 
 def merge_duplicate_pay_periods(df):
     """Fold duplicate (Employee ID, Pay Date [, Period Start, Period End]) rows
-    into one row using smart merge.
+    into one row per pay date. Money / hours / tax columns are ADDED.
+
+    - Rows identical in every column are one row exported twice: one is kept,
+      the rest dropped, so the copy is not added in.
+    - Identity columns (name, file number, position, status, tax ID, state)
+      and dates keep the first filled value; the check/voucher number keeps the
+      first real one.
 
     Returns (cleaned_df, list_of_merge_events).
     """
@@ -768,6 +785,12 @@ def merge_duplicate_pay_periods(df):
         keys.append(start_col)
     if end_col and end_col not in keys:
         keys.append(end_col)
+
+    check_col = _find_col(df, ["Check/Voucher Number", "Check Number", "Voucher Number"])
+    keep_first = ({_find_col(df, [n]) for n in
+                   ["Name", "File Number", "Position ID", "Status", "Tax ID", "Dist #",
+                    "Worked In State", "Period Beginning Date", "Period Begin Date",
+                    "Termination Date"]} | set(keys)) - {None}
 
     work = df.copy()
     work["_orig_idx"] = range(len(work))
@@ -789,9 +812,20 @@ def merge_duplicate_pay_periods(df):
             continue
 
         first_idx = int(group["_orig_idx"].iloc[0])
+        rows = group[list(df.columns)]
+        signature = rows.astype(str).apply(lambda r: "\x1f".join(s.strip() for s in r), axis=1)
+        copies = int(signature.duplicated().sum())
+        rows = rows[~signature.duplicated()]
+
         merged = {}
         for col in df.columns:
-            merged[col] = _smart_merge_value(group[col].tolist())
+            vals = rows[col].tolist()
+            if col == check_col:
+                merged[col] = _first_real_check_number(vals)
+            elif col in keep_first:
+                merged[col] = _first_filled(vals)
+            else:
+                merged[col] = _sum_merge_value(vals)
 
         merged_records.append((first_idx, merged))
         drop_indices.update(int(i) for i in group["_orig_idx"].tolist())
@@ -800,6 +834,7 @@ def merge_duplicate_pay_periods(df):
             "Employee ID": str(key_vals[0]),
             "Pay Date": str(key_vals[1]),
             "Rows merged": int(len(group)),
+            "Exact copies dropped": copies,
             "Kept canonical row at original index": first_idx,
         })
 
@@ -1073,7 +1108,8 @@ def render_ui():
            pay period per employee, all rows for an Associate ID are folded into one
            (money/hours **summed**, period dates **min/max**'d, identity columns kept).
         2. **Duplicate row merge** -- two rows sharing the same Employee + Pay Date are
-           smart-merged into one without double-counting.
+           merged into one, with money, hours and taxes **added** (a row repeated
+           exactly is counted once).
         3. **Grand-total row removal** -- the bottom-of-file totals row where the
            previous employee's ID leaked is dropped.
         4. **401k / Roth memo split** -- when 401k / Roth deferrals exist (loans never

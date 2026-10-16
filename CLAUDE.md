@@ -75,7 +75,7 @@ implementors deploy with a ModuleNotFoundError. **That is over**: implementors n
 both modules and both push buttons on purpose, so implementors can run the migration
 themselves. Mirror those files like any other — do not strip anything.
 
-Two pushes exist, both in `onboarding_core`:
+Three pushes exist, all in `onboarding_core`:
 
 - `push_employee_census()` → `/app/onboarding/api/employee/census`, needs
   `employee_census_adv_file` + `job_title_mapping_file` (the mapping is mandatory), with
@@ -87,6 +87,13 @@ Two pushes exist, both in `onboarding_core`:
   send `direct_deposit_file`**, **Paycom must send `employee_census_adv_file`** because
   Paycom keeps the bank columns inside the census. Wired into both vendors' Payment
   Method Sanity tools.
+- `push_employee_deductions()` → `/app/onboarding/api/employee/deductions`. **Both**
+  `employee_deduction_file` and `deduction_mapping_file` are mandatory, for both vendors —
+  no vendor branch in `validateInputFilesForProcess`. The mapping is uploaded in the push
+  section itself, because the Deduction Sanity Check never handles one (that is the
+  Deduction Audit's job), and the API matches it to the deduction file **by description,
+  exactly** — an unmapped description takes its employees with it. Wired into both
+  vendors' Deduction Sanity Checks.
 
 `apps/paycom/payment_method_sanity.py` therefore takes the **census**, not a separate
 export: its payment columns are `Has_D._Deposit` (the gate), `Net_Acct_Code` /

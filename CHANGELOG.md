@@ -2,6 +2,37 @@
 
 All notable changes to the **Unified HR Audit Platform** will be documented in this file.
 
+## [2026-10-16] - Push Deductions to Uzio
+
+### Added
+- **Push Deductions to Uzio**, under both vendors' Deduction Sanity Checks, completing the
+  set: census, payment methods and now deductions all go from the tool that cleans the file
+  to production, each reading its run back out of `onboarding_automation_history` and
+  showing the per-employee errors grouped.
+- **`push_employee_deductions()`** → `/app/onboarding/api/employee/deductions`. **Both**
+  parts are mandatory for **both** vendors — `employee_deduction_file` and
+  `deduction_mapping_file`, with no vendor branch in
+  `MasterRequestDTO.validateInputFilesForProcess(EMPLOYEE_DEDUCTIONS)`.
+- The **mapping file is uploaded in the push section itself**, not carried over: the
+  Deduction Sanity Check never handles one (the Deduction Audit does), and the API will not
+  accept the upload without it. The section says so rather than letting someone click a
+  button that cannot work.
+
+### Notes
+- The API matches the mapping to the deduction file **by deduction description, exactly** —
+  the same literal-lookup trap as job titles. An unmapped description takes its employees
+  with it, which is why the sanity tool flags unknown descriptions before any of this.
+
+### Tested
+- With the HTTP call intercepted rather than sent: the deductions URL, both file parts under
+  their exact API names, both filenames carried through, the onboarding auth header, and the
+  run id read back from the response. The census and both payment-method shapes are asserted
+  unchanged in the same run, and a network failure surfaces as an error instead of being
+  swallowed.
+- An AST check that both Deduction Sanity Checks really call the section, and that neither
+  call sits inside an `if st.button(...)` block — the trap that made the Payment Method tool
+  reset itself.
+
 ## [2026-10-14] - ADP Deduction Sanity: Remove Identical Duplicates
 
 ### Added

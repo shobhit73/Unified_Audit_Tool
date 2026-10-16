@@ -597,6 +597,15 @@ def render_ui():
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                            key="pded_dl_xlsx")
 
+    # Keep the corrected file for the Push to Uzio section below.
+    st.session_state["pc_ded_cached"] = {"csv": corrected_csv_bytes(result["kept"]),
+                                  "filename": f"{client_name}_Paycom_Deduction_Corrected.csv"}
+
+    # --- Push to Uzio (Production) Section ---
+    from utils.onboarding_api_client import render_push_deductions_section
+    render_push_deductions_section(vendor="PAYCOM", data_key="pc_ded_cached",
+                                   key_prefix="pc_ded_push2uzio")
+
 
 if __name__ == "__main__":
     render_ui()

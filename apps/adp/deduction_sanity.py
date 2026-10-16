@@ -497,6 +497,15 @@ def render_ui():
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                            key="ded_sanity_dl_xlsx")
 
+    # Keep the corrected file for the Push to Uzio section below.
+    st.session_state["adp_ded_cached"] = {"csv": corrected_csv_bytes(result["kept"]),
+                                  "filename": f"{client_name}_ADP_Deduction_Corrected.csv"}
+
+    # --- Push to Uzio (Production) Section ---
+    from utils.onboarding_api_client import render_push_deductions_section
+    render_push_deductions_section(vendor="ADP", data_key="adp_ded_cached",
+                                   key_prefix="adp_ded_push2uzio")
+
 
 if __name__ == "__main__":
     render_ui()
